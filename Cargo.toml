@@ -4,6 +4,7 @@ members = [
     "crates/stcode-app",
     "crates/stcode-codex",
     "crates/stcode-vibe",
+    "crates/stcode-vllm-proxy",
 ]
 
 [workspace.package]

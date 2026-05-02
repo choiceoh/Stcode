@@ -58,8 +58,16 @@ async fn main() -> anyhow::Result<()> {
     // role을 받아야 한다. qwen3.6-35b-a3b의 chat template이 `developer`를 모르면
     // 서버에서 chat template 패치 필요 (Stcode 측에선 우회 불가).
     let mut spawn_opts = SpawnOptions::with_provider_model(&provider, &model);
-    if provider == "local-vllm" && env::var_os("VLLM_API_KEY").is_none() {
-        spawn_opts = spawn_opts.with_env("VLLM_API_KEY", "dummy");
+    if provider == "local-vllm" {
+        // stcode-vllm-proxy(8011)를 통해 보낸다 — codex 풀 input 형식을
+        // vLLM이 받는 단순 형식으로 변환. 사용자가 별도 터미널에서
+        // `cargo run -p stcode-vllm-proxy`로 띄워둬야 함.
+        let proxy = env::var("STCODE_PROXY_URL")
+            .unwrap_or_else(|_| "http://localhost:8011/v1".into());
+        spawn_opts = spawn_opts.push("model_providers.local-vllm.base_url", proxy);
+        if env::var_os("VLLM_API_KEY").is_none() {
+            spawn_opts = spawn_opts.with_env("VLLM_API_KEY", "dummy");
+        }
     }
 
     let mut session = ThreadSession::start_with(

@@ -277,10 +277,20 @@ impl gpui::Element for TextElement {
         cx: &mut App,
     ) -> Self::PrepaintState {
         let entity = self.entity.read(cx);
-        let content = entity.content.clone();
+        let raw_content = entity.content.clone();
         let selected = entity.selected_range.clone();
         let color = entity.text_color;
-        drop(entity);
+        let _ = entity;
+
+        // shape_line은 multi-line 거절 → \n을 ↵+space로 치환해 단일 라인화.
+        // 빈 문자열은 placeholder(공백 1자)로 대체해 layout 0 폭 방지.
+        let content: SharedString = if raw_content.is_empty() {
+            " ".into()
+        } else if raw_content.contains('\n') {
+            raw_content.replace('\n', " ↵ ").into()
+        } else {
+            raw_content
+        };
 
         let style = window.text_style();
         let run = TextRun {

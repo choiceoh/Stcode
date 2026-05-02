@@ -136,6 +136,15 @@ async fn pump_turn(s: &mut ThreadSession, evt_tx: &mpsc::UnboundedSender<UiEvent
 
 async fn start_session(path: &PathBuf) -> anyhow::Result<ThreadSession> {
     let mut opts = SpawnOptions::with_provider_model("local-vllm", "qwen3.6-35b-a3b");
+    // stcode-vllm-proxy 경유 — codex 풀 input 형식을 vLLM이 받는 단순 형식으로 변환.
+    // 사용자가 별도 터미널에서 `cargo run -p stcode-vllm-proxy` 띄워둬야 함.
+    let proxy = std::env::var("STCODE_PROXY_URL")
+        .unwrap_or_else(|_| "http://localhost:8011/v1".into());
+    opts = opts
+        .push("model_providers.local-vllm.base_url", proxy)
+        // 사용자 config.toml은 xhigh — reasoning model이 무한 사고만 하고 message
+        // 안 출력하는 케이스를 막는다. 이번 세션만 minimal로 override.
+        .push("model_reasoning_effort", "minimal");
     if std::env::var_os("VLLM_API_KEY").is_none() {
         opts = opts.with_env("VLLM_API_KEY", "dummy");
     }
