@@ -6,13 +6,13 @@ use gpui::{
 };
 use gpui_platform::application;
 
-mod bridge;
+mod chat_input;
 mod selectable_text;
 mod theme;
 
-use bridge::{Bridge, UiCommand, UiEvent};
 use chat_input::ChatInput;
 use selectable_text::SelectableText;
+use stcode_codex::bridge::{Bridge, UiCommand, UiEvent};
 
 enum Screen {
     Welcome,
@@ -428,4 +428,3 @@ fn main() {
         .detach();
     });
 }
-mod chat_input;
