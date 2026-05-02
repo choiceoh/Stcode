@@ -7,7 +7,7 @@
 
 use std::path::PathBuf;
 
-use stcode_codex::{
+use crate::{
     ApprovalPolicy, ClientInfo, SandboxMode, SpawnOptions, ThreadEvent, ThreadSession,
     ThreadStartParams, TurnStatus,
 };

@@ -5,6 +5,7 @@
 //! - [`protocol`] — codex 프로토콜의 minimal serde 타입 (자체 정의)
 //! - [`session`] — 타입 안전 thread/turn 추상화 ([`ThreadSession`])
 
+pub mod bridge;
 pub mod protocol;
 mod rpc;
 pub mod session;
