@@ -11,9 +11,9 @@ use serde::{Deserialize, Serialize};
 
 // ─── 공통 enum ────────────────────────────────────────────────
 
-/// `untrusted | onFailure | onRequest | never` (camelCase wire).
+/// `untrusted | on-failure | on-request | never` (kebab-case wire).
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "kebab-case")]
 pub enum ApprovalPolicy {
     Untrusted,
     OnFailure,
