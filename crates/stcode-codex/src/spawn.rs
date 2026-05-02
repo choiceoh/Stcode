@@ -53,8 +53,30 @@ impl SpawnOptions {
     }
 }
 
-/// PATH에서 `codex`를 찾는다. macOS Homebrew 일반 경로도 보조 탐색.
+/// `codex` 바이너리 탐색. 우선순위:
+/// 1. `STCODE_CODEX_BIN` 환경변수 (fork 바이너리 절대 경로)
+/// 2. fork 기본 위치 `~/Documents/GitHub/codex-fork/codex-rs/target/release/codex`
+/// 3. PATH의 `codex` (Homebrew 등)
+/// 4. macOS 표준 prefix 보조 경로
 pub fn find_codex_binary() -> Result<CodexBinary, SpawnError> {
+    if let Ok(p) = std::env::var("STCODE_CODEX_BIN") {
+        let path = PathBuf::from(p);
+        if path.is_file() {
+            return Ok(CodexBinary { path });
+        }
+    }
+    if let Some(home) = std::env::var_os("HOME") {
+        // dev: debug 빌드를 우선 (release보다 빠름). release도 fallback.
+        for sub in [
+            "Documents/GitHub/codex-fork/codex-rs/target/debug/codex",
+            "Documents/GitHub/codex-fork/codex-rs/target/release/codex",
+        ] {
+            let p = PathBuf::from(&home).join(sub);
+            if p.is_file() {
+                return Ok(CodexBinary { path: p });
+            }
+        }
+    }
     if let Some(p) = which("codex") {
         return Ok(CodexBinary { path: p });
     }

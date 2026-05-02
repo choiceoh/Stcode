@@ -136,15 +136,19 @@ async fn pump_turn(s: &mut ThreadSession, evt_tx: &mpsc::UnboundedSender<UiEvent
 
 async fn start_session(path: &PathBuf) -> anyhow::Result<ThreadSession> {
     let mut opts = SpawnOptions::with_provider_model("local-vllm", "qwen3.6-35b-a3b");
-    // stcode-vllm-proxy 경유 — codex 풀 input 형식을 vLLM이 받는 단순 형식으로 변환.
-    // 사용자가 별도 터미널에서 `cargo run -p stcode-vllm-proxy` 띄워둬야 함.
-    let proxy = std::env::var("STCODE_PROXY_URL")
-        .unwrap_or_else(|_| "http://localhost:8011/v1".into());
+    // codex fork(STCODE_VLLM_COMPAT=1)가 outbound input 평탄화 + reasoning→
+    // OutputTextDelta를 직접 처리. proxy 불필요. base_url은 사용자 config.toml의
+    // local-vllm 그대로 사용 (100.105.145.6:8000).
     opts = opts
-        .push("model_providers.local-vllm.base_url", proxy)
+        .with_env("STCODE_VLLM_COMPAT", "1")
         // 사용자 config.toml은 xhigh — reasoning model이 무한 사고만 하고 message
-        // 안 출력하는 케이스를 막는다. 이번 세션만 minimal로 override.
-        .push("model_reasoning_effort", "minimal");
+        // 안 출력하는 케이스를 막는다. fork 패치로 reasoning이 message로 노출되니
+        // 더 이상 필수는 아니지만, 토큰 절약 위해 유지.
+        .push("model_reasoning_effort", "minimal")
+        // codex는 wire_api=Responses 시 WebSocket을 우선 시도하지만 vLLM은 ws 미지원.
+        // 또 우리 fork 패치는 HTTP path(endpoint/responses.rs)에만 있어 ws path는
+        // 변환 안 됨. provider config에서 ws 비활성화 필요.
+        .push("model_providers.local-vllm.supports_websockets", "false");
     if std::env::var_os("VLLM_API_KEY").is_none() {
         opts = opts.with_env("VLLM_API_KEY", "dummy");
     }
