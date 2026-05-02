@@ -23,7 +23,17 @@ enum Screen {
         thread_started: bool,
         turn_in_flight: bool,
         input: Entity<ChatInput>,
+        /// 직전 turn이 commit을 만들었으면 Some — 헤더의 "되돌리기" 버튼 활성화.
+        last_commit: Option<LastCommit>,
     },
+}
+
+#[derive(Clone)]
+struct LastCommit {
+    /// commit 메시지 첫 줄 (사용자에게 보여줌).
+    summary: String,
+    /// 되돌릴 수 있는지(첫 commit이 아닌지).
+    revertible: bool,
 }
 
 /// 채팅 영역의 한 항목. Message(사용자/agent/system) / Tool 카드 두 종류.
@@ -129,6 +139,18 @@ impl MainView {
         cx.notify();
     }
 
+    fn revert_last(&mut self, cx: &mut Context<Self>) {
+        // 광클 방지: 보낸 즉시 버튼 비활성화. 결과는 UiEvent::Reverted 에서 메시지로 알림.
+        if let Screen::Chat { last_commit, .. } = &mut self.screen {
+            if !last_commit.as_ref().is_some_and(|c| c.revertible) {
+                return;
+            }
+            *last_commit = None;
+        }
+        let _ = self.cmd_tx.send(UiCommand::RevertLastTurn);
+        cx.notify();
+    }
+
     fn open_folder(&mut self, cx: &mut Context<Self>) {
         // 중요: GPUI listener 안에서 sync rfd::pick_folder를 호출하면 macOS modal이
         // 키보드 레이아웃 등 시스템 알림을 발생시켜 GPUI App을 재진입(borrow_mut) 하면서
@@ -153,6 +175,7 @@ impl MainView {
                     thread_started: false,
                     turn_in_flight: false,
                     input,
+                    last_commit: None,
                 };
                 cx.notify();
             });
@@ -332,6 +355,44 @@ impl MainView {
                     }
                 }
             }
+            UiEvent::TurnCommitted {
+                commit_oid,
+                summary,
+                revert_to,
+            } => {
+                let short = commit_oid.chars().take(7).collect::<String>();
+                let m = ChatItem::message(
+                    Speaker::System,
+                    format!("💾 변경 저장됨 ({short}) — {summary}"),
+                    cx,
+                );
+                if let Screen::Chat {
+                    messages,
+                    last_commit,
+                    ..
+                } = &mut self.screen
+                {
+                    messages.push(m);
+                    *last_commit = Some(LastCommit {
+                        summary,
+                        revertible: revert_to.is_some(),
+                    });
+                }
+            }
+            UiEvent::Reverted { ok, error_text } => {
+                let m = if ok {
+                    ChatItem::message(Speaker::System, "↶ 마지막 변경을 되돌렸어요", cx)
+                } else {
+                    ChatItem::message(
+                        Speaker::System,
+                        format!("⚠ 되돌리기 실패: {}", error_text.unwrap_or_default()),
+                        cx,
+                    )
+                };
+                if let Screen::Chat { messages, .. } = &mut self.screen {
+                    messages.push(m);
+                }
+            }
             UiEvent::Error(text) => {
                 let m = ChatItem::message(Speaker::System, format!("⚠ {text}"), cx);
                 if let Screen::Chat {
@@ -362,6 +423,7 @@ impl Render for MainView {
                 thread_started,
                 turn_in_flight,
                 input,
+                last_commit,
             } => render_chat(
                 t,
                 project,
@@ -370,6 +432,7 @@ impl Render for MainView {
                 *turn_in_flight,
                 input.clone(),
                 self.messages_scroll.clone(),
+                last_commit.clone(),
                 cx,
             ),
         };
@@ -548,6 +611,7 @@ fn render_chat(
     turn_in_flight: bool,
     input: Entity<ChatInput>,
     scroll: ScrollHandle,
+    last_commit: Option<LastCommit>,
     cx: &mut Context<MainView>,
 ) -> gpui::Div {
     let project_label = project
@@ -559,6 +623,23 @@ fn render_chat(
     let send_label = if turn_in_flight { "⏳ 응답 중…" } else { "↵ 보내기" };
     let send_color = if send_enabled { t.accent } else { 0x555566 };
 
+    let revert_btn = last_commit.as_ref().filter(|c| c.revertible).map(|c| {
+        let tooltip = format!("↶ 되돌리기 — {}", c.summary);
+        div()
+            .px_3()
+            .py_1()
+            .bg(rgb(0x2a2030))
+            .text_color(rgb(0xe0c0d0))
+            .text_xs()
+            .rounded_md()
+            .cursor_pointer()
+            .child(tooltip)
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, _, _, cx| this.revert_last(cx)),
+            )
+    });
+
     div()
         .flex()
         .flex_col()
@@ -569,10 +650,17 @@ fn render_chat(
                 .h_10()
                 .px_4()
                 .items_center()
+                .gap_3()
                 .bg(rgb(t.surface))
                 .border_b_1()
                 .border_color(rgb(0x383848))
-                .child(div().text_sm().child(format!("📁 {project_label}"))),
+                .child(
+                    div()
+                        .flex_1()
+                        .text_sm()
+                        .child(format!("📁 {project_label}")),
+                )
+                .when_some(revert_btn, |d, b| d.child(b)),
         )
         .child(
             div()
