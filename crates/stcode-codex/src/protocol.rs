@@ -129,6 +129,22 @@ pub struct AgentMessageDelta {
     pub delta: String,
 }
 
+/// `item/reasoning/textDelta` params.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReasoningTextDelta {
+    pub item_id: String,
+    pub delta: String,
+}
+
+/// `item/started` 또는 `item/completed` params 의 `item` 필드 일부 — type 분기용.
+/// 우리는 commandExecution / fileChange / agentMessage / reasoning 만 신경 씀.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ItemLifecycle {
+    pub item: serde_json::Value,
+}
+
 /// `item/commandExecution/outputDelta` params.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -179,7 +195,11 @@ pub mod method {
     pub const NOTIF_TURN_STARTED: &str = "turn/started";
     pub const NOTIF_TURN_COMPLETED: &str = "turn/completed";
     pub const NOTIF_AGENT_MESSAGE_DELTA: &str = "item/agentMessage/delta";
+    pub const NOTIF_REASONING_TEXT_DELTA: &str = "item/reasoning/textDelta";
+    pub const NOTIF_REASONING_SUMMARY_TEXT_DELTA: &str = "item/reasoning/summaryTextDelta";
     pub const NOTIF_COMMAND_OUTPUT_DELTA: &str = "item/commandExecution/outputDelta";
+    pub const NOTIF_ITEM_STARTED: &str = "item/started";
+    pub const NOTIF_ITEM_COMPLETED: &str = "item/completed";
     pub const NOTIF_REMOTE_CONTROL_STATUS: &str = "remoteControl/status/changed";
 
     // 서버→클라이언트 리퀘스트 (승인)

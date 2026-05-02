@@ -8,8 +8,9 @@ use serde::Deserialize;
 use tokio::sync::mpsc;
 
 use crate::protocol::{
-    method, AgentMessageDelta, CommandOutputDelta, ThreadStartParams, ThreadStartResponse,
-    TurnCompletedParams, TurnInfo, TurnStartParams, TurnStartResponse, UserInput,
+    method, AgentMessageDelta, CommandOutputDelta, ReasoningTextDelta, ThreadStartParams,
+    ThreadStartResponse, TurnCompletedParams, TurnInfo, TurnStartParams, TurnStartResponse,
+    UserInput,
 };
 use crate::rpc::{InboundMessage, RpcClient};
 use crate::spawn::{find_codex_binary, CodexBinary, SpawnOptions};
@@ -27,7 +28,20 @@ pub enum ThreadEvent {
         turn: TurnInfo,
     },
     AgentMessageDelta(AgentMessageDelta),
+    ReasoningDelta(ReasoningTextDelta),
     CommandOutputDelta(CommandOutputDelta),
+    /// `item/started` — type별로 start signal (commandExecution, fileChange 등).
+    ItemStarted {
+        item_id: String,
+        item_type: String,
+        params: serde_json::Value,
+    },
+    /// `item/completed` — type별 종료. exit_code/diff 같은 final state는 params에.
+    ItemCompleted {
+        item_id: String,
+        item_type: String,
+        params: serde_json::Value,
+    },
     /// 아직 타입화하지 않은 노티. method/params 그대로 노출.
     Other {
         method: String,
@@ -175,8 +189,14 @@ fn parse_notification(method: String, params: serde_json::Value) -> ThreadEvent 
         method::NOTIF_AGENT_MESSAGE_DELTA => {
             AgentMessageDelta::deserialize(&params).map(ThreadEvent::AgentMessageDelta)
         }
+        method::NOTIF_REASONING_TEXT_DELTA | method::NOTIF_REASONING_SUMMARY_TEXT_DELTA => {
+            ReasoningTextDelta::deserialize(&params).map(ThreadEvent::ReasoningDelta)
+        }
         method::NOTIF_COMMAND_OUTPUT_DELTA => {
             CommandOutputDelta::deserialize(&params).map(ThreadEvent::CommandOutputDelta)
+        }
+        method::NOTIF_ITEM_STARTED | method::NOTIF_ITEM_COMPLETED => {
+            return parse_item_lifecycle(method, params);
         }
         _ => return ThreadEvent::Other { method, params },
     };
@@ -186,6 +206,37 @@ fn parse_notification(method: String, params: serde_json::Value) -> ThreadEvent 
         Err(e) => {
             tracing::warn!("노티 파싱 실패 ({method}): {e}");
             ThreadEvent::Other { method, params }
+        }
+    }
+}
+
+/// `item/started` / `item/completed` 의 `item.id` + `item.type`만 뽑아 lifecycle 이벤트 만든다.
+fn parse_item_lifecycle(method: String, params: serde_json::Value) -> ThreadEvent {
+    let item = match params.get("item") {
+        Some(it) => it.clone(),
+        None => return ThreadEvent::Other { method, params },
+    };
+    let item_id = item
+        .get("id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let item_type = item
+        .get("type")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    if method == method::NOTIF_ITEM_STARTED {
+        ThreadEvent::ItemStarted {
+            item_id,
+            item_type,
+            params,
+        }
+    } else {
+        ThreadEvent::ItemCompleted {
+            item_id,
+            item_type,
+            params,
         }
     }
 }

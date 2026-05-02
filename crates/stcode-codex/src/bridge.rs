@@ -29,6 +29,25 @@ pub enum UiEvent {
     Started { thread_id: String },
     /// agentMessage delta — 본문에 한 글자~여러 글자.
     AgentDelta(String),
+    /// reasoning text delta (qwen 등 reasoning model의 thinking).
+    ReasoningDelta(String),
+    /// 도구 카드 시작 — commandExecution / fileChange 등.
+    ToolStarted {
+        item_id: String,
+        kind: ToolKind,
+        title: String,
+    },
+    /// 도구 출력 incremental — commandExecution stdout/stderr.
+    ToolOutput {
+        item_id: String,
+        delta: String,
+    },
+    /// 도구 종료 — exit code 또는 success/fail.
+    ToolCompleted {
+        item_id: String,
+        ok: bool,
+        summary: Option<String>,
+    },
     /// turn 종료. ok=true면 정상 완료, false면 실패 + error_text.
     TurnDone {
         ok: bool,
@@ -36,6 +55,36 @@ pub enum UiEvent {
     },
     /// 일반 에러 (세션 시작 실패 등).
     Error(String),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ToolKind {
+    CommandExecution,
+    FileChange,
+    McpToolCall,
+    WebSearch,
+    Other,
+}
+
+impl ToolKind {
+    pub fn from_item_type(t: &str) -> Self {
+        match t {
+            "commandExecution" => Self::CommandExecution,
+            "fileChange" => Self::FileChange,
+            "mcpToolCall" => Self::McpToolCall,
+            "webSearch" => Self::WebSearch,
+            _ => Self::Other,
+        }
+    }
+    pub fn icon(self) -> &'static str {
+        match self {
+            Self::CommandExecution => "⚙",
+            Self::FileChange => "📄",
+            Self::McpToolCall => "🔌",
+            Self::WebSearch => "🌐",
+            Self::Other => "•",
+        }
+    }
 }
 
 /// 브리지 핸들. cmd_tx로 명령 보내고 evt_rx로 이벤트 받는다.
@@ -119,6 +168,51 @@ async fn pump_turn(s: &mut ThreadSession, evt_tx: &mpsc::UnboundedSender<UiEvent
             ThreadEvent::AgentMessageDelta(d) => {
                 let _ = evt_tx.send(UiEvent::AgentDelta(d.delta));
             }
+            ThreadEvent::ReasoningDelta(d) => {
+                let _ = evt_tx.send(UiEvent::ReasoningDelta(d.delta));
+            }
+            ThreadEvent::CommandOutputDelta(d) => {
+                let _ = evt_tx.send(UiEvent::ToolOutput {
+                    item_id: d.item_id,
+                    delta: d.delta,
+                });
+            }
+            ThreadEvent::ItemStarted {
+                item_id,
+                item_type,
+                params,
+            } => {
+                let kind = ToolKind::from_item_type(&item_type);
+                if matches!(kind, ToolKind::Other)
+                    && item_type != "commandExecution"
+                    && item_type != "fileChange"
+                {
+                    // userMessage / agentMessage / reasoning 등은 무시
+                    continue;
+                }
+                let title = item_card_title(&kind, &params);
+                let _ = evt_tx.send(UiEvent::ToolStarted {
+                    item_id,
+                    kind,
+                    title,
+                });
+            }
+            ThreadEvent::ItemCompleted {
+                item_id,
+                item_type,
+                params,
+            } => {
+                let kind = ToolKind::from_item_type(&item_type);
+                if matches!(kind, ToolKind::Other) {
+                    continue;
+                }
+                let (ok, summary) = item_card_completion(&kind, &params);
+                let _ = evt_tx.send(UiEvent::ToolCompleted {
+                    item_id,
+                    ok,
+                    summary,
+                });
+            }
             ThreadEvent::TurnCompleted { turn } => {
                 let ok = matches!(turn.status, Some(TurnStatus::Completed));
                 let error_text = turn.error.map(|e| e.to_string());
@@ -132,6 +226,64 @@ async fn pump_turn(s: &mut ThreadSession, evt_tx: &mpsc::UnboundedSender<UiEvent
         }
     }
     let _ = evt_tx.send(UiEvent::Error("codex 연결 끊김".into()));
+}
+
+fn item_card_title(kind: &ToolKind, params: &serde_json::Value) -> String {
+    let item = params.get("item");
+    match kind {
+        ToolKind::CommandExecution => item
+            .and_then(|i| i.get("command"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("(command)")
+            .to_string(),
+        ToolKind::FileChange => item
+            .and_then(|i| i.get("path"))
+            .or_else(|| item.and_then(|i| i.get("filePath")))
+            .and_then(|v| v.as_str())
+            .unwrap_or("(file)")
+            .to_string(),
+        ToolKind::McpToolCall => item
+            .and_then(|i| i.get("name"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("(tool)")
+            .to_string(),
+        ToolKind::WebSearch => item
+            .and_then(|i| i.get("query"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("(search)")
+            .to_string(),
+        ToolKind::Other => "—".into(),
+    }
+}
+
+fn item_card_completion(kind: &ToolKind, params: &serde_json::Value) -> (bool, Option<String>) {
+    let item = match params.get("item") {
+        Some(it) => it,
+        None => return (true, None),
+    };
+    match kind {
+        ToolKind::CommandExecution => {
+            let exit = item
+                .get("exitCode")
+                .or_else(|| item.get("exit_code"))
+                .and_then(|v| v.as_i64());
+            let ok = exit.map(|c| c == 0).unwrap_or(true);
+            let summary = item
+                .get("aggregatedOutput")
+                .and_then(|v| v.as_str())
+                .map(|s| s.chars().take(400).collect::<String>())
+                .or_else(|| exit.map(|c| format!("exit {c}")));
+            (ok, summary)
+        }
+        ToolKind::FileChange => {
+            let summary = item
+                .get("summary")
+                .and_then(|v| v.as_str())
+                .map(String::from);
+            (true, summary)
+        }
+        _ => (true, None),
+    }
 }
 
 async fn start_session(path: &PathBuf) -> anyhow::Result<ThreadSession> {
