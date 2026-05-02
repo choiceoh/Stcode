@@ -19,11 +19,13 @@ pub enum UiCommand {
     StartProject { path: PathBuf },
     /// 사용자 텍스트를 turn으로 보냄.
     SendText(String),
-    /// 승인 요청에 응답.
+    /// 승인 요청에 응답. (자동 모드에선 bridge가 자체 처리하므로 거의 호출되지 않음)
     ApprovalDecision {
         request_id: i64,
         decision: ApprovalDecision,
     },
+    /// 마지막 turn 변경을 hard reset으로 되돌린다.
+    RevertLastTurn,
     /// 정리 후 tokio 스레드 종료.
     Shutdown,
 }
@@ -81,6 +83,18 @@ pub enum UiEvent {
     },
     /// turn 종료. ok=true면 정상 완료, false면 실패 + error_text.
     TurnDone {
+        ok: bool,
+        error_text: Option<String>,
+    },
+    /// turn이 working tree에 변경을 만들어 자동 커밋됨.
+    TurnCommitted {
+        commit_oid: String,
+        summary: String,
+        /// 되돌리기 시 reset 대상. None이면 첫 commit (되돌리기 불가).
+        revert_to: Option<String>,
+    },
+    /// 되돌리기 결과.
+    Reverted {
         ok: bool,
         error_text: Option<String>,
     },
@@ -148,15 +162,27 @@ impl Bridge {
     }
 }
 
+/// handler_loop 가 들고 있는 project 단위 상태.
+struct ProjectState {
+    path: PathBuf,
+    /// 가장 최근 SendText 시점의 prompt — turn 종료 후 commit 메시지로 사용.
+    pending_prompt: Option<String>,
+    /// pending_prompt 와 짝. turn 시작 직전 HEAD oid (revert 대상).
+    pending_snapshot: Option<Option<String>>,
+    /// 가장 최근 commit의 revert_to oid — RevertLastTurn 의 타깃.
+    last_revert_to: Option<String>,
+}
+
 async fn handler_loop(
     mut cmd_rx: mpsc::UnboundedReceiver<UiCommand>,
     evt_tx: mpsc::UnboundedSender<UiEvent>,
 ) {
     let mut session: Option<ThreadSession> = None;
+    let mut project: Option<ProjectState> = None;
 
     loop {
         // 두 갈래를 동시에 await. 세션이 없으면 next_event 쪽은 영구 pending.
-        // 이렇게 해야 turn 진행 중에도 ApprovalDecision 명령이 막히지 않는다.
+        // 이렇게 해야 turn 진행 중에도 ApprovalDecision/RevertLastTurn 명령이 막히지 않는다.
         tokio::select! {
             biased;
             cmd_opt = cmd_rx.recv() => {
@@ -166,15 +192,27 @@ async fn handler_loop(
                         if let Some(prev) = session.take() {
                             prev.shutdown().await;
                         }
+                        // git repo 자동 init (이미 있으면 no-op).
+                        if let Err(e) = stcode_vibe::ensure_repo(&path) {
+                            tracing::warn!("git 초기화 실패: {e}");
+                            // 치명적이지 않음 — codex는 그래도 돌아간다.
+                        }
                         match start_session(&path).await {
                             Ok(s) => {
                                 let _ = evt_tx.send(UiEvent::Started {
                                     thread_id: s.thread_id.clone(),
                                 });
                                 session = Some(s);
+                                project = Some(ProjectState {
+                                    path,
+                                    pending_prompt: None,
+                                    pending_snapshot: None,
+                                    last_revert_to: None,
+                                });
                             }
                             Err(e) => {
                                 let _ = evt_tx.send(UiEvent::Error(format!("세션 시작 실패: {e}")));
+                                project = None;
                             }
                         }
                     }
@@ -183,6 +221,15 @@ async fn handler_loop(
                             let _ = evt_tx.send(UiEvent::Error("세션이 시작되지 않았어요".into()));
                             continue;
                         };
+                        // turn 시작 직전 HEAD를 snapshot. 이게 RevertLastTurn 의 타깃.
+                        if let Some(p) = project.as_mut() {
+                            let snapshot = stcode_vibe::current_head(&p.path)
+                                .map_err(|e| tracing::warn!("HEAD snapshot 실패: {e}"))
+                                .ok()
+                                .flatten();
+                            p.pending_snapshot = Some(snapshot);
+                            p.pending_prompt = Some(text.clone());
+                        }
                         if let Err(e) = s.send_user_text(text).await {
                             tracing::warn!("turn 시작 실패: {e}");
                             let _ = evt_tx.send(UiEvent::Error(format!("turn 시작 실패: {e}")));
@@ -196,16 +243,41 @@ async fn handler_loop(
                             let _ = evt_tx.send(UiEvent::Error(format!("승인 응답 실패: {e}")));
                         }
                     }
+                    UiCommand::RevertLastTurn => {
+                        let Some(p) = project.as_mut() else {
+                            let _ = evt_tx.send(UiEvent::Reverted {
+                                ok: false,
+                                error_text: Some("세션이 없어요".into()),
+                            });
+                            continue;
+                        };
+                        let target = p.last_revert_to.clone();
+                        match stcode_vibe::revert_to(&p.path, target.as_deref()) {
+                            Ok(()) => {
+                                p.last_revert_to = None;
+                                let _ = evt_tx.send(UiEvent::Reverted { ok: true, error_text: None });
+                            }
+                            Err(e) => {
+                                let _ = evt_tx.send(UiEvent::Reverted {
+                                    ok: false,
+                                    error_text: Some(e.to_string()),
+                                });
+                            }
+                        }
+                    }
                     UiCommand::Shutdown => break,
                 }
             }
             ev_opt = next_event_or_pending(&mut session) => {
                 match ev_opt {
-                    Some(ev) => handle_thread_event(ev, &evt_tx),
+                    Some(ev) => {
+                        handle_thread_event(ev, &evt_tx, session.as_ref(), project.as_mut()).await;
+                    }
                     None => {
                         // session 끝남 (codex 종료)
                         let _ = evt_tx.send(UiEvent::Error("codex 연결 끊김".into()));
                         session = None;
+                        project = None;
                     }
                 }
             }
@@ -225,7 +297,14 @@ async fn next_event_or_pending(session: &mut Option<ThreadSession>) -> Option<Th
     }
 }
 
-fn handle_thread_event(ev: ThreadEvent, evt_tx: &mpsc::UnboundedSender<UiEvent>) {
+/// 자동 모드: 모든 inbound 승인 요청은 즉시 Accept로 응답. UiEvent로 끌어올리지 않음.
+/// 자동 commit은 session/project 둘 다 살아있을 때만.
+async fn handle_thread_event(
+    ev: ThreadEvent,
+    evt_tx: &mpsc::UnboundedSender<UiEvent>,
+    session: Option<&ThreadSession>,
+    project: Option<&mut ProjectState>,
+) {
     match ev {
         ThreadEvent::AgentMessageDelta(d) => {
             let _ = evt_tx.send(UiEvent::AgentDelta(d.delta));
@@ -278,25 +357,50 @@ fn handle_thread_event(ev: ThreadEvent, evt_tx: &mpsc::UnboundedSender<UiEvent>)
             if !ok {
                 tracing::warn!("turn 실패: {:?}", error_text);
             }
+            // turn 종료 후 변경된 게 있으면 자동 commit. 실패해도 turn 자체는 끝났으니 흐름 유지.
+            if ok {
+                if let Some(p) = project {
+                    let prompt = p.pending_prompt.take().unwrap_or_default();
+                    let snapshot = p.pending_snapshot.take().flatten();
+                    match stcode_vibe::auto_commit_turn(&p.path, &prompt, snapshot.as_deref()) {
+                        Ok(Some(c)) => {
+                            p.last_revert_to = c.revert_to.clone();
+                            let _ = evt_tx.send(UiEvent::TurnCommitted {
+                                commit_oid: c.commit_oid,
+                                summary: c.summary,
+                                revert_to: c.revert_to,
+                            });
+                        }
+                        Ok(None) => {
+                            // 변경 없음 — 조용히 skip.
+                        }
+                        Err(e) => {
+                            tracing::warn!("자동 commit 실패: {e}");
+                            let _ = evt_tx.send(UiEvent::Error(format!(
+                                "자동 저장 실패: {e}"
+                            )));
+                        }
+                    }
+                }
+            }
             let _ = evt_tx.send(UiEvent::TurnDone { ok, error_text });
         }
-        ThreadEvent::InboundRequest { id, method, params } => {
-            // 승인 요청만 우리가 처리. 나머지는 무시 + 기본 응답 없음(요구되면 추가).
-            let kind = if method == method::REQ_COMMAND_APPROVAL {
-                ToolKind::CommandExecution
-            } else if method == method::REQ_FILE_CHANGE_APPROVAL {
-                ToolKind::FileChange
+        ThreadEvent::InboundRequest { id, method, params: _ } => {
+            // 자동 모드: 모든 승인 요청 자동 Accept. UiEvent::ApprovalRequested 로
+            // 끌어올리지 않음 — 모달은 더 이상 안 뜬다.
+            if method == method::REQ_COMMAND_APPROVAL || method == method::REQ_FILE_CHANGE_APPROVAL
+            {
+                let payload = serde_json::json!({
+                    "decision": ApprovalDecision::AcceptForSession.as_wire(),
+                });
+                if let Some(s) = session {
+                    if let Err(e) = s.respond_request(id, &payload).await {
+                        tracing::warn!("자동 승인 실패: {e}");
+                    }
+                }
             } else {
                 tracing::warn!("미처리 inbound request: {method}");
-                return;
-            };
-            let (friendly_title, raw_detail) = approval_text(&kind, &params);
-            let _ = evt_tx.send(UiEvent::ApprovalRequested {
-                request_id: id,
-                kind,
-                friendly_title,
-                raw_detail,
-            });
+            }
         }
         _ => {}
     }
@@ -304,7 +408,9 @@ fn handle_thread_event(ev: ThreadEvent, evt_tx: &mpsc::UnboundedSender<UiEvent>)
 
 /// 승인 요청 params에서 사용자에게 보여줄 친화적 제목 + raw 디테일을 뽑는다.
 /// codex `CommandExecutionRequestApprovalParams` / `FileChangeRequestApprovalParams`는
-/// 평탄한 구조 (item wrapper 없음).
+/// 평탄한 구조 (item wrapper 없음). v1 자동 모드에선 사용 안 함 — 미래 "민감한 작업만
+/// 묻기" 옵션 도입 시 재사용.
+#[allow(dead_code)]
 fn approval_text(kind: &ToolKind, params: &serde_json::Value) -> (String, String) {
     let reason = params.get("reason").and_then(|v| v.as_str());
     match kind {
@@ -409,10 +515,10 @@ async fn start_session(path: &PathBuf) -> anyhow::Result<ThreadSession> {
         ClientInfo::default(),
         ThreadStartParams {
             cwd: Some(path.to_string_lossy().into_owned()),
-            // 바이브 코더 안전 우선: 매 동작마다 친화적 모달로 확인.
-            approval_policy: Some(ApprovalPolicy::OnRequest),
-            // 작업 폴더 안에선 자유, 밖으로는 차단.
-            sandbox: Some(SandboxMode::WorkspaceWrite),
+            // 자동 에이전트: 권한 묻지 않음. 안전망은 stcode-vibe git auto-commit + 되돌리기.
+            approval_policy: Some(ApprovalPolicy::Never),
+            // sandbox 완전 풀기 — 자동 모드 의도. 위험성은 git 되돌리기로 회수.
+            sandbox: Some(SandboxMode::DangerFullAccess),
             ..Default::default()
         },
         opts,

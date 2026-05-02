@@ -127,6 +127,19 @@ async fn main() -> anyhow::Result<()> {
                     decision: ApprovalDecision::Decline,
                 })?;
             }
+            Ok(Some(UiEvent::TurnCommitted {
+                commit_oid,
+                summary,
+                revert_to,
+            })) => {
+                println!(
+                    "  TurnCommitted: oid={}… summary={summary:?} revert_to={revert_to:?}",
+                    commit_oid.chars().take(7).collect::<String>()
+                );
+            }
+            Ok(Some(UiEvent::Reverted { ok, error_text })) => {
+                println!("  Reverted: ok={ok} err={error_text:?}");
+            }
             Ok(Some(UiEvent::TurnDone { ok, error_text })) => {
                 println!("  TurnDone: ok={ok} err={error_text:?}");
                 turn_done = Some((ok, error_text));
