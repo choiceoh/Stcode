@@ -1,7 +1,5 @@
-//! Read-only selectable text — Zed gpui examples/input.rs 패턴 차용 (insert/delete/IME 제거).
-//!
-//! 단일 라인 character-level selection. multi-line 메시지는 호출자가 \n으로 split해
-//! SelectableText 여러 개로 렌더해야 한다 (라인 경계 넘는 selection은 v2).
+//! Read-only selectable text — multi-line wrap + character-level selection.
+//! shape_text(wrap_width)로 multi-line, height auto-grow.
 
 use std::ops::Range;
 
@@ -10,8 +8,8 @@ use gpui::{
     Context, CursorStyle, ElementId, ElementInputHandler, Entity, EntityInputHandler,
     FocusHandle, Focusable, GlobalElementId, InspectorElementId, IntoElement, KeyBinding,
     LayoutId, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, PaintQuad,
-    ParentElement, Pixels, Point, Render, ShapedLine, SharedString, Style, Styled, TextRun,
-    UTF16Selection, Window,
+    ParentElement, Pixels, Point, Render, SharedString, Style, Styled, TextRun, UTF16Selection,
+    Window, WrappedLine,
 };
 
 actions!(selectable_text, [Copy, SelectAll]);
@@ -29,8 +27,9 @@ pub struct SelectableText {
     focus_handle: FocusHandle,
     selected_range: Range<usize>,
     selection_reversed: bool,
-    last_layout: Option<ShapedLine>,
+    last_layout: Option<WrappedLine>,
     last_bounds: Option<Bounds<Pixels>>,
+    last_height: Option<Pixels>,
     is_selecting: bool,
     text_color: u32,
 }
@@ -44,6 +43,7 @@ impl SelectableText {
             selection_reversed: false,
             last_layout: None,
             last_bounds: None,
+            last_height: None,
             is_selecting: false,
             text_color: color,
         }
@@ -101,7 +101,7 @@ impl SelectableText {
         cx.notify();
     }
 
-    fn index_for_mouse_position(&self, position: Point<Pixels>) -> usize {
+    fn index_for_mouse_position(&self, position: Point<Pixels>, line_height: Pixels) -> usize {
         if self.content.is_empty() {
             return 0;
         }
@@ -115,12 +115,14 @@ impl SelectableText {
         if position.y > bounds.bottom() {
             return self.content.len();
         }
-        line.closest_index_for_x(position.x - bounds.left())
+        let local = point(position.x - bounds.left(), position.y - bounds.top());
+        line.closest_index_for_position(local, line_height)
+            .unwrap_or_else(|i| i)
     }
 
-    fn on_mouse_down(&mut self, event: &MouseDownEvent, _: &mut Window, cx: &mut Context<Self>) {
+    fn on_mouse_down(&mut self, event: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         self.is_selecting = true;
-        let idx = self.index_for_mouse_position(event.position);
+        let idx = self.index_for_mouse_position(event.position, window.line_height());
         if event.modifiers.shift {
             self.select_to(idx, cx);
         } else {
@@ -132,9 +134,10 @@ impl SelectableText {
         self.is_selecting = false;
     }
 
-    fn on_mouse_move(&mut self, event: &MouseMoveEvent, _: &mut Window, cx: &mut Context<Self>) {
+    fn on_mouse_move(&mut self, event: &MouseMoveEvent, window: &mut Window, cx: &mut Context<Self>) {
         if self.is_selecting {
-            self.select_to(self.index_for_mouse_position(event.position), cx);
+            let idx = self.index_for_mouse_position(event.position, window.line_height());
+            self.select_to(idx, cx);
         }
     }
 }
@@ -232,8 +235,8 @@ struct TextElement {
 }
 
 struct PrepaintState {
-    line: Option<ShapedLine>,
-    selection: Option<PaintQuad>,
+    line: Option<WrappedLine>,
+    selection: Vec<PaintQuad>,
 }
 
 impl IntoElement for TextElement {
@@ -261,9 +264,16 @@ impl gpui::Element for TextElement {
         window: &mut Window,
         cx: &mut App,
     ) -> (LayoutId, ()) {
+        let line_height = window.line_height();
+        let height = self
+            .entity
+            .read(cx)
+            .last_height
+            .unwrap_or(line_height)
+            .max(line_height);
         let mut style = Style::default();
         style.size.width = relative(1.).into();
-        style.size.height = window.line_height().into();
+        style.size.height = height.into();
         (window.request_layout(style, [], cx), ())
     }
 
@@ -282,17 +292,15 @@ impl gpui::Element for TextElement {
         let color = entity.text_color;
         let _ = entity;
 
-        // shape_line은 multi-line 거절 → \n을 ↵+space로 치환해 단일 라인화.
-        // 빈 문자열은 placeholder(공백 1자)로 대체해 layout 0 폭 방지.
+        // 빈 문자열은 공백 1자로 (layout 0 height 방지).
         let content: SharedString = if raw_content.is_empty() {
             " ".into()
-        } else if raw_content.contains('\n') {
-            raw_content.replace('\n', " ↵ ").into()
         } else {
             raw_content
         };
 
         let style = window.text_style();
+        let line_height = window.line_height();
         let run = TextRun {
             len: content.len(),
             font: style.font(),
@@ -302,27 +310,76 @@ impl gpui::Element for TextElement {
             strikethrough: None,
         };
         let font_size = style.font_size.to_pixels(window.rem_size());
-        let line = window
+        let lines = window
             .text_system()
-            .shape_line(content, font_size, &[run], None);
+            .shape_text(content, font_size, &[run], Some(bounds.size.width), None)
+            .unwrap_or_default();
+        let line = lines.into_iter().next();
 
-        let selection = if selected.is_empty() {
-            None
-        } else {
-            let start = bounds.left() + line.x_for_index(selected.start);
-            let end = bounds.left() + line.x_for_index(selected.end);
-            Some(fill(
-                Bounds::from_corners(
-                    point(start, bounds.top()),
-                    point(end, bounds.bottom() + px(2.)),
-                ),
-                rgba(0x4f6fff60),
-            ))
-        };
-        PrepaintState {
-            line: Some(line),
-            selection,
+        // selection rect (multi-line 인식, ChatInput과 같은 패턴)
+        let mut selection = Vec::new();
+        if let Some(line) = &line {
+            if !selected.is_empty() && selected.end <= line.text.len() {
+                if let (Some(start), Some(end)) = (
+                    line.position_for_index(selected.start, line_height),
+                    line.position_for_index(selected.end, line_height),
+                ) {
+                    if (start.y - end.y).abs() < line_height / 2. {
+                        selection.push(fill(
+                            Bounds::from_corners(
+                                point(bounds.left() + start.x, bounds.top() + start.y),
+                                point(
+                                    bounds.left() + end.x,
+                                    bounds.top() + start.y + line_height,
+                                ),
+                            ),
+                            rgba(0x4f6fff60),
+                        ));
+                    } else {
+                        selection.push(fill(
+                            Bounds::from_corners(
+                                point(bounds.left() + start.x, bounds.top() + start.y),
+                                point(bounds.right(), bounds.top() + start.y + line_height),
+                            ),
+                            rgba(0x4f6fff60),
+                        ));
+                        selection.push(fill(
+                            Bounds::from_corners(
+                                point(bounds.left(), bounds.top() + end.y),
+                                point(bounds.left() + end.x, bounds.top() + end.y + line_height),
+                            ),
+                            rgba(0x4f6fff60),
+                        ));
+                        let mut y = start.y + line_height;
+                        while y < end.y {
+                            selection.push(fill(
+                                Bounds::from_corners(
+                                    point(bounds.left(), bounds.top() + y),
+                                    point(bounds.right(), bounds.top() + y + line_height),
+                                ),
+                                rgba(0x4f6fff60),
+                            ));
+                            y += line_height;
+                        }
+                    }
+                }
+            }
         }
+
+        // height 캐시 (다음 frame request_layout)
+        let height = line
+            .as_ref()
+            .map(|l| l.size(line_height).height)
+            .unwrap_or(line_height);
+        let entity = self.entity.clone();
+        entity.update(cx, |this, cx| {
+            if this.last_height != Some(height) {
+                this.last_height = Some(height);
+                cx.notify();
+            }
+        });
+
+        PrepaintState { line, selection }
     }
 
     fn paint(
@@ -341,10 +398,12 @@ impl gpui::Element for TextElement {
             ElementInputHandler::new(bounds, self.entity.clone()),
             cx,
         );
-        if let Some(sel) = prepaint.selection.take() {
+        for sel in prepaint.selection.drain(..) {
             window.paint_quad(sel);
         }
-        let line = prepaint.line.take().unwrap();
+        let Some(line) = prepaint.line.take() else {
+            return;
+        };
         let _ = line.paint(
             bounds.origin,
             window.line_height(),

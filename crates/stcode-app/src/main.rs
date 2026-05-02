@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use gpui::{
     div, prelude::*, px, rgb, size, App, Bounds, Context, Entity, IntoElement, MouseButton,
-    ParentElement, Render, Styled, Window, WindowBounds, WindowOptions,
+    ParentElement, Render, ScrollHandle, Styled, Window, WindowBounds, WindowOptions,
 };
 use gpui_platform::application;
 
@@ -11,9 +11,8 @@ mod selectable_text;
 mod theme;
 
 use bridge::{Bridge, UiCommand, UiEvent};
+use chat_input::ChatInput;
 use selectable_text::SelectableText;
-
-const DEMO_PROMPT: &str = "한 줄로만 답해. 너 누구야?";
 
 enum Screen {
     Welcome,
@@ -22,6 +21,7 @@ enum Screen {
         messages: Vec<ChatMessage>,
         thread_started: bool,
         turn_in_flight: bool,
+        input: Entity<ChatInput>,
     },
 }
 
@@ -56,6 +56,7 @@ enum Speaker {
 struct MainView {
     screen: Screen,
     cmd_tx: tokio::sync::mpsc::UnboundedSender<UiCommand>,
+    messages_scroll: ScrollHandle,
 }
 
 impl MainView {
@@ -63,6 +64,7 @@ impl MainView {
         Self {
             screen: Screen::Welcome,
             cmd_tx,
+            messages_scroll: ScrollHandle::new(),
         }
     }
 
@@ -81,11 +83,15 @@ impl MainView {
             let _ = this.update(cx, |this, cx| {
                 let _ = this.cmd_tx.send(UiCommand::StartProject { path: path.clone() });
                 let intro = ChatMessage::new(Speaker::System, "세션을 여는 중…", cx);
+                let input = cx.new(|cx| {
+                    ChatInput::new("무엇을 만들까요?", theme::TOKENS.fg, theme::TOKENS.muted, cx)
+                });
                 this.screen = Screen::Chat {
                     project: path,
                     messages: vec![intro],
                     thread_started: false,
                     turn_in_flight: false,
+                    input,
                 };
                 cx.notify();
             });
@@ -93,22 +99,39 @@ impl MainView {
         .detach();
     }
 
-    fn send_demo(&mut self, cx: &mut Context<Self>) {
-        let can_send = matches!(
-            &self.screen,
-            Screen::Chat { thread_started: true, turn_in_flight: false, .. }
-        );
-        if !can_send {
+    fn send_user_input(&mut self, cx: &mut Context<Self>) {
+        let Screen::Chat {
+            thread_started,
+            turn_in_flight,
+            input,
+            ..
+        } = &self.screen
+        else {
+            return;
+        };
+        if !*thread_started || *turn_in_flight {
             return;
         }
-        let user_msg = ChatMessage::new(Speaker::User, DEMO_PROMPT, cx);
+        let text = input.read(cx).content().to_string();
+        if text.trim().is_empty() {
+            return;
+        }
+        let input_entity = input.clone();
+        input_entity.update(cx, |this, cx| this.clear(cx));
+
+        let user_msg = ChatMessage::new(Speaker::User, text.clone(), cx);
         let agent_msg = ChatMessage::new(Speaker::Agent, "", cx);
-        if let Screen::Chat { messages, turn_in_flight, .. } = &mut self.screen {
+        if let Screen::Chat {
+            messages,
+            turn_in_flight,
+            ..
+        } = &mut self.screen
+        {
             messages.push(user_msg);
             messages.push(agent_msg);
             *turn_in_flight = true;
         }
-        let _ = self.cmd_tx.send(UiCommand::SendText(DEMO_PROMPT.into()));
+        let _ = self.cmd_tx.send(UiCommand::SendText(text));
         cx.notify();
     }
 
@@ -187,6 +210,8 @@ impl MainView {
                 }
             }
         }
+        // 새 메시지/델타 후 자동 scroll to bottom
+        self.messages_scroll.scroll_to_bottom();
         cx.notify();
     }
 }
@@ -201,8 +226,17 @@ impl Render for MainView {
                 messages,
                 thread_started,
                 turn_in_flight,
-                ..
-            } => render_chat(t, project, messages, *thread_started, *turn_in_flight, cx),
+                input,
+            } => render_chat(
+                t,
+                project,
+                messages,
+                *thread_started,
+                *turn_in_flight,
+                input.clone(),
+                self.messages_scroll.clone(),
+                cx,
+            ),
         };
         div()
             .flex()
@@ -210,6 +244,8 @@ impl Render for MainView {
             .size_full()
             .bg(rgb(t.bg))
             .text_color(rgb(t.fg))
+            // ChatInput Submit 액션 — 어디서 발생하든 잡아서 send.
+            .on_action(cx.listener(|this, _: &chat_input::Submit, _, cx| this.send_user_input(cx)))
             .child(body)
     }
 }
@@ -252,6 +288,8 @@ fn render_chat(
     messages: &[ChatMessage],
     thread_started: bool,
     turn_in_flight: bool,
+    input: Entity<ChatInput>,
+    scroll: ScrollHandle,
     cx: &mut Context<MainView>,
 ) -> gpui::Div {
     let project_label = project
@@ -260,7 +298,7 @@ fn render_chat(
         .unwrap_or_else(|| project.to_string_lossy().into_owned());
 
     let send_enabled = thread_started && !turn_in_flight;
-    let send_label = if turn_in_flight { "⏳ 응답 중…" } else { "🐾 데모 보내기" };
+    let send_label = if turn_in_flight { "⏳ 응답 중…" } else { "↵ 보내기" };
     let send_color = if send_enabled { t.accent } else { 0x555566 };
 
     div()
@@ -280,20 +318,23 @@ fn render_chat(
         )
         .child(
             div()
+                .id("messages")
                 .flex()
                 .flex_col()
                 .flex_1()
                 .gap_3()
                 .p_4()
-                .overflow_hidden()
+                .overflow_y_scroll()
+                .track_scroll(&scroll)
                 .children(messages.iter().map(|m| render_message(t, m))),
         )
         .child(
             div()
                 .flex()
-                .h_16()
+                .min_h_16()
                 .px_4()
-                .items_center()
+                .py_3()
+                .items_start()
                 .gap_3()
                 .bg(rgb(t.surface))
                 .border_t_1()
@@ -301,38 +342,54 @@ fn render_chat(
                 .child(
                     div()
                         .flex_1()
-                        .text_sm()
-                        .text_color(rgb(t.muted))
-                        .child(format!("(M1.1: 데모 프롬프트 hardcoded — \"{DEMO_PROMPT}\")")),
+                        .px_3()
+                        .py_2()
+                        .bg(rgb(t.bg))
+                        .border_1()
+                        .border_color(rgb(0x383848))
+                        .rounded_md()
+                        .child(input),
                 )
                 .child(
                     div()
-                        .px_3()
+                        .px_4()
                         .py_2()
                         .bg(rgb(send_color))
                         .text_color(rgb(0x111122))
                         .rounded_md()
-                        .when(send_enabled, |d| d.cursor_pointer())
+                        .when(send_enabled, |d| {
+                            d.cursor_pointer()
+                                .hover(|d| d.bg(rgb(0xa0c0ff)))
+                        })
                         .child(send_label)
                         .on_mouse_down(
                             MouseButton::Left,
-                            cx.listener(|this, _, _, cx| this.send_demo(cx)),
+                            cx.listener(|this, _, _, cx| this.send_user_input(cx)),
                         ),
                 ),
         )
 }
 
-fn render_message(_t: &theme::Tokens, m: &ChatMessage) -> gpui::Div {
-    let icon = match m.who {
-        Speaker::User => "🧑",
-        Speaker::Agent => "🤖",
-        Speaker::System => "ℹ",
+fn render_message(t: &theme::Tokens, m: &ChatMessage) -> gpui::Div {
+    let (icon, bubble_bg, _is_user) = match m.who {
+        Speaker::User => ("🧑", 0x2a3050, true),
+        Speaker::Agent => ("🤖", t.surface, false),
+        Speaker::System => ("ℹ", 0x252535, false),
     };
     div()
         .flex()
         .gap_2()
-        .child(div().w_6().child(icon))
-        .child(div().flex_1().child(m.text.clone()))
+        .items_start()
+        .child(div().w_6().mt_1().child(icon))
+        .child(
+            div()
+                .flex_1()
+                .px_3()
+                .py_2()
+                .bg(rgb(bubble_bg))
+                .rounded_md()
+                .child(m.text.clone()),
+        )
 }
 
 fn main() {
@@ -348,6 +405,7 @@ fn main() {
 
     application().run(move |cx: &mut App| {
         selectable_text::init(cx);
+        chat_input::init(cx);
         let bounds = Bounds::centered(None, size(px(960.), px(640.)), cx);
         let main_view_handle = cx
             .open_window(
@@ -370,3 +428,4 @@ fn main() {
         .detach();
     });
 }
+mod chat_input;
