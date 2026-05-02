@@ -1,9 +1,10 @@
 use std::path::PathBuf;
 
 use gpui::{
-    div, prelude::*, px, rgb, size, App, Application, Bounds, Context, IntoElement, MouseButton,
+    div, prelude::*, px, rgb, size, App, Bounds, Context, IntoElement, MouseButton,
     ParentElement, Render, Styled, Window, WindowBounds, WindowOptions,
 };
+use gpui_platform::application;
 
 mod bridge;
 mod theme;
@@ -309,7 +310,7 @@ fn main() {
     // tokio 런타임 + codex 세션을 별도 스레드에서. cmd/evt 채널만 노출.
     let Bridge { cmd_tx, mut evt_rx } = Bridge::spawn();
 
-    Application::new().run(move |cx: &mut App| {
+    application().run(move |cx: &mut App| {
         let bounds = Bounds::centered(None, size(px(960.), px(640.)), cx);
         let main_view_handle = cx
             .open_window(

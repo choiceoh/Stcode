@@ -17,6 +17,7 @@ tokio.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 gpui.workspace = true
+gpui_platform.workspace = true
 
 stcode-codex.workspace = true
 

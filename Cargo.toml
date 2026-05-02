@@ -8,7 +8,7 @@ members = [
 
 [workspace.package]
 version = "0.0.1"
-edition = "2021"
+edition = "2024"
 license = "Proprietary"
 publish = false
 
@@ -20,7 +20,12 @@ serde_json = "1"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "io-util", "process", "sync", "time"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-gpui = "0.2"
+
+# GPUI: main HEAD 핀 (2026-05-01). 멀티 크레이트 분리됨 — gpui + gpui_platform
+# 두 dep만 명시하면 gpui_platform이 cfg(target_os)로 macOS/Linux/Windows
+# 백엔드를 자동 선택. 업데이트는 우리 의지로만, rev를 새 SHA로 변경.
+gpui = { git = "https://github.com/zed-industries/zed.git", rev = "9155bf4e1795131339ccf9e5e8e491d35ab9cfdd" }
+gpui_platform = { git = "https://github.com/zed-industries/zed.git", rev = "9155bf4e1795131339ccf9e5e8e491d35ab9cfdd", features = ["font-kit"] }
 
 stcode-codex = { path = "crates/stcode-codex" }
 stcode-vibe = { path = "crates/stcode-vibe" }

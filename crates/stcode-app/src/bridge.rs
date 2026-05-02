@@ -98,10 +98,10 @@ async fn handler_loop(
                     continue;
                 };
                 if let Err(e) = s.send_user_text(text).await {
+                    tracing::warn!("turn 시작 실패: {e}");
                     let _ = evt_tx.send(UiEvent::Error(format!("turn 시작 실패: {e}")));
                     continue;
                 }
-                // turn 종료까지 이벤트 펌프.
                 pump_turn(s, &evt_tx).await;
             }
             UiCommand::Shutdown => break,
