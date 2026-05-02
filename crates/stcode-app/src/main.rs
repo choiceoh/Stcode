@@ -18,24 +18,63 @@ enum Screen {
     Welcome,
     Chat {
         project: PathBuf,
-        messages: Vec<ChatMessage>,
+        messages: Vec<ChatItem>,
         thread_started: bool,
         turn_in_flight: bool,
         input: Entity<ChatInput>,
     },
 }
 
-struct ChatMessage {
-    who: Speaker,
-    text: Entity<SelectableText>,
+/// 채팅 영역의 한 항목. Message(사용자/agent/system) / Tool 카드 두 종류.
+enum ChatItem {
+    Message {
+        who: Speaker,
+        text: Entity<SelectableText>,
+        /// Agent 메시지의 reasoning(별도 회색 영역). None이면 표시 안 함.
+        reasoning: Option<Entity<SelectableText>>,
+    },
+    Tool {
+        item_id: String,
+        kind: stcode_codex::bridge::ToolKind,
+        title: String,
+        output: Entity<SelectableText>,
+        status: ToolStatus,
+    },
 }
 
-impl ChatMessage {
-    fn new(who: Speaker, text: impl Into<gpui::SharedString>, cx: &mut Context<MainView>) -> Self {
-        let color = color_for(who);
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ToolStatus {
+    InProgress,
+    CompletedOk,
+    CompletedFail,
+}
+
+impl ChatItem {
+    fn message(who: Speaker, text: impl Into<gpui::SharedString>, cx: &mut Context<MainView>) -> Self {
         let s = text.into();
+        let color = color_for(who);
         let entity = cx.new(|cx| SelectableText::new(s, color, cx));
-        Self { who, text: entity }
+        Self::Message {
+            who,
+            text: entity,
+            reasoning: None,
+        }
+    }
+
+    fn tool(
+        item_id: String,
+        kind: stcode_codex::bridge::ToolKind,
+        title: String,
+        cx: &mut Context<MainView>,
+    ) -> Self {
+        let output = cx.new(|cx| SelectableText::new("", theme::TOKENS.muted, cx));
+        Self::Tool {
+            item_id,
+            kind,
+            title,
+            output,
+            status: ToolStatus::InProgress,
+        }
     }
 }
 
@@ -82,7 +121,7 @@ impl MainView {
             tracing::info!("프로젝트 폴더 선택: {}", path.display());
             let _ = this.update(cx, |this, cx| {
                 let _ = this.cmd_tx.send(UiCommand::StartProject { path: path.clone() });
-                let intro = ChatMessage::new(Speaker::System, "세션을 여는 중…", cx);
+                let intro = ChatItem::message(Speaker::System, "세션을 여는 중…", cx);
                 let input = cx.new(|cx| {
                     ChatInput::new("무엇을 만들까요?", theme::TOKENS.fg, theme::TOKENS.muted, cx)
                 });
@@ -119,8 +158,8 @@ impl MainView {
         let input_entity = input.clone();
         input_entity.update(cx, |this, cx| this.clear(cx));
 
-        let user_msg = ChatMessage::new(Speaker::User, text.clone(), cx);
-        let agent_msg = ChatMessage::new(Speaker::Agent, "", cx);
+        let user_msg = ChatItem::message(Speaker::User, text.clone(), cx);
+        let agent_msg = ChatItem::message(Speaker::Agent, "", cx);
         if let Screen::Chat {
             messages,
             turn_in_flight,
@@ -141,7 +180,7 @@ impl MainView {
         }
         match ev {
             UiEvent::Started { thread_id } => {
-                let intro = ChatMessage::new(
+                let intro = ChatItem::message(
                     Speaker::System,
                     format!("세션 시작됨 ({thread_id})"),
                     cx,
@@ -160,24 +199,85 @@ impl MainView {
             UiEvent::AgentDelta(text) => {
                 let mut new_msg = None;
                 if let Screen::Chat { messages, .. } = &mut self.screen {
-                    match messages.last() {
-                        Some(last) if last.who == Speaker::Agent => {
-                            let entity = last.text.clone();
+                    match last_agent_message_text(messages) {
+                        Some(entity) => {
                             entity.update(cx, |this, cx| this.append(&text, cx));
                         }
-                        _ => new_msg = Some(()),
+                        None => new_msg = Some(()),
                     }
                 }
                 if new_msg.is_some() {
-                    let m = ChatMessage::new(Speaker::Agent, text, cx);
+                    let m = ChatItem::message(Speaker::Agent, text, cx);
                     if let Screen::Chat { messages, .. } = &mut self.screen {
                         messages.push(m);
                     }
                 }
             }
+            UiEvent::ReasoningDelta(text) => {
+                let mut create_new = None;
+                if let Screen::Chat { messages, .. } = &mut self.screen {
+                    if let Some(reasoning_entity) = ensure_agent_reasoning(messages) {
+                        reasoning_entity.update(cx, |this, cx| this.append(&text, cx));
+                    } else {
+                        create_new = Some(text);
+                    }
+                }
+                if let Some(text) = create_new {
+                    // 마지막이 Agent Message가 아닐 때 — agent 빈 메시지 만들고 reasoning 시작.
+                    let mut agent_msg = ChatItem::message(Speaker::Agent, "", cx);
+                    if let ChatItem::Message { reasoning, .. } = &mut agent_msg {
+                        let r = cx.new(|cx| SelectableText::new(text, theme::TOKENS.muted, cx));
+                        *reasoning = Some(r);
+                    }
+                    if let Screen::Chat { messages, .. } = &mut self.screen {
+                        messages.push(agent_msg);
+                    }
+                }
+            }
+            UiEvent::ToolStarted {
+                item_id,
+                kind,
+                title,
+            } => {
+                let card = ChatItem::tool(item_id, kind, title, cx);
+                if let Screen::Chat { messages, .. } = &mut self.screen {
+                    messages.push(card);
+                }
+            }
+            UiEvent::ToolOutput { item_id, delta } => {
+                if let Screen::Chat { messages, .. } = &mut self.screen {
+                    if let Some(out) = find_tool_output(messages, &item_id) {
+                        out.update(cx, |this, cx| this.append(&delta, cx));
+                    }
+                }
+            }
+            UiEvent::ToolCompleted {
+                item_id,
+                ok,
+                summary,
+            } => {
+                if let Screen::Chat { messages, .. } = &mut self.screen {
+                    if let Some(item) = messages.iter_mut().rev().find(|m| match m {
+                        ChatItem::Tool { item_id: id, .. } => id == &item_id,
+                        _ => false,
+                    }) {
+                        if let ChatItem::Tool { status, output, .. } = item {
+                            *status = if ok {
+                                ToolStatus::CompletedOk
+                            } else {
+                                ToolStatus::CompletedFail
+                            };
+                            if let Some(s) = summary {
+                                let entity = output.clone();
+                                entity.update(cx, |this, cx| this.set_content(s, cx));
+                            }
+                        }
+                    }
+                }
+            }
             UiEvent::TurnDone { ok, error_text } => {
                 let err_msg = if !ok {
-                    Some(ChatMessage::new(
+                    Some(ChatItem::message(
                         Speaker::System,
                         format!("⚠ turn 실패: {}", error_text.unwrap_or_default()),
                         cx,
@@ -198,7 +298,7 @@ impl MainView {
                 }
             }
             UiEvent::Error(text) => {
-                let m = ChatMessage::new(Speaker::System, format!("⚠ {text}"), cx);
+                let m = ChatItem::message(Speaker::System, format!("⚠ {text}"), cx);
                 if let Screen::Chat {
                     messages,
                     turn_in_flight,
@@ -285,7 +385,7 @@ fn render_welcome(t: &theme::Tokens, cx: &mut Context<MainView>) -> gpui::Div {
 fn render_chat(
     t: &theme::Tokens,
     project: &PathBuf,
-    messages: &[ChatMessage],
+    messages: &[ChatItem],
     thread_started: bool,
     turn_in_flight: bool,
     input: Entity<ChatInput>,
@@ -326,7 +426,7 @@ fn render_chat(
                 .p_4()
                 .overflow_y_scroll()
                 .track_scroll(&scroll)
-                .children(messages.iter().map(|m| render_message(t, m))),
+                .children(messages.iter().map(|m| render_chat_item(t, m))),
         )
         .child(
             div()
@@ -370,11 +470,78 @@ fn render_chat(
         )
 }
 
-fn render_message(t: &theme::Tokens, m: &ChatMessage) -> gpui::Div {
-    let (icon, bubble_bg, _is_user) = match m.who {
-        Speaker::User => ("🧑", 0x2a3050, true),
-        Speaker::Agent => ("🤖", t.surface, false),
-        Speaker::System => ("ℹ", 0x252535, false),
+fn render_chat_item(t: &theme::Tokens, item: &ChatItem) -> gpui::Div {
+    match item {
+        ChatItem::Message {
+            who,
+            text,
+            reasoning,
+        } => render_message(t, *who, text.clone(), reasoning.clone()),
+        ChatItem::Tool {
+            kind,
+            title,
+            output,
+            status,
+            ..
+        } => render_tool_card(t, *kind, title, output.clone(), *status),
+    }
+}
+
+fn render_message(
+    t: &theme::Tokens,
+    who: Speaker,
+    text: Entity<SelectableText>,
+    reasoning: Option<Entity<SelectableText>>,
+) -> gpui::Div {
+    let (icon, bubble_bg) = match who {
+        Speaker::User => ("🧑", 0x2a3050),
+        Speaker::Agent => ("🤖", t.surface),
+        Speaker::System => ("ℹ", 0x252535),
+    };
+    let mut body = div().flex_1().flex().flex_col().gap_2();
+    if let Some(r) = reasoning {
+        body = body.child(
+            div()
+                .px_3()
+                .py_2()
+                .bg(rgb(0x202028))
+                .rounded_md()
+                .border_l_2()
+                .border_color(rgb(0x556677))
+                .text_xs()
+                .text_color(rgb(t.muted))
+                .child(div().mb_1().child("💭 사고"))
+                .child(r),
+        );
+    }
+    body = body.child(
+        div()
+            .px_3()
+            .py_2()
+            .bg(rgb(bubble_bg))
+            .rounded_md()
+            .child(text),
+    );
+    div()
+        .flex()
+        .gap_2()
+        .items_start()
+        .child(div().w_6().mt_1().child(icon))
+        .child(body)
+}
+
+fn render_tool_card(
+    t: &theme::Tokens,
+    kind: stcode_codex::bridge::ToolKind,
+    title: &str,
+    output: Entity<SelectableText>,
+    status: ToolStatus,
+) -> gpui::Div {
+    let icon = kind.icon();
+    let (status_label, status_color) = match status {
+        ToolStatus::InProgress => ("⏳", 0xb0b0c0),
+        ToolStatus::CompletedOk => ("✅", 0x60d090),
+        ToolStatus::CompletedFail => ("❌", 0xd07070),
     };
     div()
         .flex()
@@ -384,12 +551,76 @@ fn render_message(t: &theme::Tokens, m: &ChatMessage) -> gpui::Div {
         .child(
             div()
                 .flex_1()
+                .flex()
+                .flex_col()
+                .gap_1()
                 .px_3()
                 .py_2()
-                .bg(rgb(bubble_bg))
+                .bg(rgb(0x1a1f2a))
                 .rounded_md()
-                .child(m.text.clone()),
+                .border_1()
+                .border_color(rgb(0x303848))
+                .child(
+                    div()
+                        .flex()
+                        .gap_2()
+                        .items_center()
+                        .child(div().text_color(rgb(status_color)).child(status_label))
+                        .child(
+                            div()
+                                .flex_1()
+                                .text_sm()
+                                .text_color(rgb(t.fg))
+                                .child(title.to_string()),
+                        ),
+                )
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(rgb(t.muted))
+                        .child(output),
+                ),
         )
+}
+
+fn last_agent_message_text(messages: &mut [ChatItem]) -> Option<Entity<SelectableText>> {
+    messages.iter_mut().rev().find_map(|m| match m {
+        ChatItem::Message {
+            who: Speaker::Agent,
+            text,
+            ..
+        } => Some(text.clone()),
+        _ => None,
+    })
+}
+
+fn ensure_agent_reasoning(messages: &mut Vec<ChatItem>) -> Option<Entity<SelectableText>> {
+    // 마지막이 Agent Message면 그 reasoning entity 반환 (없으면 None — 호출자가 만들어 push)
+    let last = messages.last_mut()?;
+    if let ChatItem::Message {
+        who: Speaker::Agent,
+        reasoning,
+        ..
+    } = last
+    {
+        if reasoning.is_some() {
+            return reasoning.clone();
+        }
+        // 빈 entity 만들 수 없음 — 호출자가 cx로 새로 만들어야. None 반환해서 시그널.
+        return None;
+    }
+    None
+}
+
+fn find_tool_output(messages: &mut [ChatItem], item_id: &str) -> Option<Entity<SelectableText>> {
+    messages.iter_mut().rev().find_map(|m| match m {
+        ChatItem::Tool {
+            item_id: id,
+            output,
+            ..
+        } if id == item_id => Some(output.clone()),
+        _ => None,
+    })
 }
 
 fn main() {
