@@ -1,15 +1,17 @@
 use std::path::PathBuf;
 
 use gpui::{
-    div, prelude::*, px, rgb, size, App, Bounds, Context, IntoElement, MouseButton,
+    div, prelude::*, px, rgb, size, App, Bounds, Context, Entity, IntoElement, MouseButton,
     ParentElement, Render, Styled, Window, WindowBounds, WindowOptions,
 };
 use gpui_platform::application;
 
 mod bridge;
+mod selectable_text;
 mod theme;
 
 use bridge::{Bridge, UiCommand, UiEvent};
+use selectable_text::SelectableText;
 
 const DEMO_PROMPT: &str = "한 줄로만 답해. 너 누구야?";
 
@@ -25,7 +27,23 @@ enum Screen {
 
 struct ChatMessage {
     who: Speaker,
-    text: String,
+    text: Entity<SelectableText>,
+}
+
+impl ChatMessage {
+    fn new(who: Speaker, text: impl Into<gpui::SharedString>, cx: &mut Context<MainView>) -> Self {
+        let color = color_for(who);
+        let s = text.into();
+        let entity = cx.new(|cx| SelectableText::new(s, color, cx));
+        Self { who, text: entity }
+    }
+}
+
+fn color_for(who: Speaker) -> u32 {
+    match who {
+        Speaker::User | Speaker::Agent => theme::TOKENS.fg,
+        Speaker::System => theme::TOKENS.muted,
+    }
 }
 
 #[derive(PartialEq, Eq, Clone, Copy)]
@@ -62,12 +80,10 @@ impl MainView {
             tracing::info!("프로젝트 폴더 선택: {}", path.display());
             let _ = this.update(cx, |this, cx| {
                 let _ = this.cmd_tx.send(UiCommand::StartProject { path: path.clone() });
+                let intro = ChatMessage::new(Speaker::System, "세션을 여는 중…", cx);
                 this.screen = Screen::Chat {
                     project: path,
-                    messages: vec![ChatMessage {
-                        who: Speaker::System,
-                        text: "세션을 여는 중…".into(),
-                    }],
+                    messages: vec![intro],
                     thread_started: false,
                     turn_in_flight: false,
                 };
@@ -78,72 +94,97 @@ impl MainView {
     }
 
     fn send_demo(&mut self, cx: &mut Context<Self>) {
-        let Screen::Chat { messages, turn_in_flight, thread_started, .. } = &mut self.screen
-        else {
-            return;
-        };
-        if !*thread_started || *turn_in_flight {
+        let can_send = matches!(
+            &self.screen,
+            Screen::Chat { thread_started: true, turn_in_flight: false, .. }
+        );
+        if !can_send {
             return;
         }
-        messages.push(ChatMessage {
-            who: Speaker::User,
-            text: DEMO_PROMPT.into(),
-        });
-        messages.push(ChatMessage {
-            who: Speaker::Agent,
-            text: String::new(),
-        });
-        *turn_in_flight = true;
+        let user_msg = ChatMessage::new(Speaker::User, DEMO_PROMPT, cx);
+        let agent_msg = ChatMessage::new(Speaker::Agent, "", cx);
+        if let Screen::Chat { messages, turn_in_flight, .. } = &mut self.screen {
+            messages.push(user_msg);
+            messages.push(agent_msg);
+            *turn_in_flight = true;
+        }
         let _ = self.cmd_tx.send(UiCommand::SendText(DEMO_PROMPT.into()));
         cx.notify();
     }
 
     fn handle_event(&mut self, ev: UiEvent, cx: &mut Context<Self>) {
-        let Screen::Chat {
-            messages,
-            thread_started,
-            turn_in_flight,
-            ..
-        } = &mut self.screen
-        else {
+        if !matches!(self.screen, Screen::Chat { .. }) {
             return;
-        };
+        }
         match ev {
             UiEvent::Started { thread_id } => {
-                *thread_started = true;
-                messages.clear();
-                messages.push(ChatMessage {
-                    who: Speaker::System,
-                    text: format!("세션 시작됨 ({thread_id})"),
-                });
+                let intro = ChatMessage::new(
+                    Speaker::System,
+                    format!("세션 시작됨 ({thread_id})"),
+                    cx,
+                );
+                if let Screen::Chat {
+                    messages,
+                    thread_started,
+                    ..
+                } = &mut self.screen
+                {
+                    *thread_started = true;
+                    messages.clear();
+                    messages.push(intro);
+                }
             }
             UiEvent::AgentDelta(text) => {
-                if let Some(last) = messages.last_mut() {
-                    if last.who == Speaker::Agent {
-                        last.text.push_str(&text);
-                    } else {
-                        messages.push(ChatMessage {
-                            who: Speaker::Agent,
-                            text,
-                        });
+                let mut new_msg = None;
+                if let Screen::Chat { messages, .. } = &mut self.screen {
+                    match messages.last() {
+                        Some(last) if last.who == Speaker::Agent => {
+                            let entity = last.text.clone();
+                            entity.update(cx, |this, cx| this.append(&text, cx));
+                        }
+                        _ => new_msg = Some(()),
+                    }
+                }
+                if new_msg.is_some() {
+                    let m = ChatMessage::new(Speaker::Agent, text, cx);
+                    if let Screen::Chat { messages, .. } = &mut self.screen {
+                        messages.push(m);
                     }
                 }
             }
             UiEvent::TurnDone { ok, error_text } => {
-                *turn_in_flight = false;
-                if !ok {
-                    messages.push(ChatMessage {
-                        who: Speaker::System,
-                        text: format!("⚠ turn 실패: {}", error_text.unwrap_or_default()),
-                    });
+                let err_msg = if !ok {
+                    Some(ChatMessage::new(
+                        Speaker::System,
+                        format!("⚠ turn 실패: {}", error_text.unwrap_or_default()),
+                        cx,
+                    ))
+                } else {
+                    None
+                };
+                if let Screen::Chat {
+                    messages,
+                    turn_in_flight,
+                    ..
+                } = &mut self.screen
+                {
+                    *turn_in_flight = false;
+                    if let Some(m) = err_msg {
+                        messages.push(m);
+                    }
                 }
             }
             UiEvent::Error(text) => {
-                *turn_in_flight = false;
-                messages.push(ChatMessage {
-                    who: Speaker::System,
-                    text: format!("⚠ {text}"),
-                });
+                let m = ChatMessage::new(Speaker::System, format!("⚠ {text}"), cx);
+                if let Screen::Chat {
+                    messages,
+                    turn_in_flight,
+                    ..
+                } = &mut self.screen
+                {
+                    *turn_in_flight = false;
+                    messages.push(m);
+                }
             }
         }
         cx.notify();
@@ -281,22 +322,17 @@ fn render_chat(
         )
 }
 
-fn render_message(t: &theme::Tokens, m: &ChatMessage) -> gpui::Div {
-    let (icon, color) = match m.who {
-        Speaker::User => ("🧑", t.fg),
-        Speaker::Agent => ("🤖", t.fg),
-        Speaker::System => ("ℹ", t.muted),
+fn render_message(_t: &theme::Tokens, m: &ChatMessage) -> gpui::Div {
+    let icon = match m.who {
+        Speaker::User => "🧑",
+        Speaker::Agent => "🤖",
+        Speaker::System => "ℹ",
     };
     div()
         .flex()
         .gap_2()
-        .text_color(rgb(color))
         .child(div().w_6().child(icon))
-        .child(
-            div()
-                .flex_1()
-                .child(if m.text.is_empty() { "▏".into() } else { m.text.clone() }),
-        )
+        .child(div().flex_1().child(m.text.clone()))
 }
 
 fn main() {
@@ -311,6 +347,7 @@ fn main() {
     let Bridge { cmd_tx, mut evt_rx } = Bridge::spawn();
 
     application().run(move |cx: &mut App| {
+        selectable_text::init(cx);
         let bounds = Bounds::centered(None, size(px(960.), px(640.)), cx);
         let main_view_handle = cx
             .open_window(
