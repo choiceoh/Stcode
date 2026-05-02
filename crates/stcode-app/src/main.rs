@@ -2,7 +2,8 @@ use std::path::PathBuf;
 
 use gpui::{
     div, prelude::*, px, rgb, size, App, Bounds, Context, Entity, IntoElement, MouseButton,
-    ParentElement, Render, ScrollHandle, Styled, Window, WindowBounds, WindowOptions,
+    MouseDownEvent, ParentElement, Render, ScrollHandle, Styled, Window, WindowBounds,
+    WindowOptions,
 };
 use gpui_platform::application;
 
@@ -12,7 +13,7 @@ mod theme;
 
 use chat_input::ChatInput;
 use selectable_text::SelectableText;
-use stcode_codex::bridge::{Bridge, UiCommand, UiEvent};
+use stcode_codex::bridge::{ApprovalDecision, Bridge, ToolKind, UiCommand, UiEvent};
 
 enum Screen {
     Welcome,
@@ -92,10 +93,19 @@ enum Speaker {
     System,
 }
 
+/// 진행 중인 승인 요청. 모달이 보이는 동안 메인 입력은 사실상 차단된다.
+struct PendingApproval {
+    request_id: i64,
+    kind: ToolKind,
+    friendly_title: String,
+    raw_detail: String,
+}
+
 struct MainView {
     screen: Screen,
     cmd_tx: tokio::sync::mpsc::UnboundedSender<UiCommand>,
     messages_scroll: ScrollHandle,
+    pending_approval: Option<PendingApproval>,
 }
 
 impl MainView {
@@ -104,7 +114,19 @@ impl MainView {
             screen: Screen::Welcome,
             cmd_tx,
             messages_scroll: ScrollHandle::new(),
+            pending_approval: None,
         }
+    }
+
+    fn answer_approval(&mut self, decision: ApprovalDecision, cx: &mut Context<Self>) {
+        let Some(p) = self.pending_approval.take() else {
+            return;
+        };
+        let _ = self.cmd_tx.send(UiCommand::ApprovalDecision {
+            request_id: p.request_id,
+            decision,
+        });
+        cx.notify();
     }
 
     fn open_folder(&mut self, cx: &mut Context<Self>) {
@@ -275,6 +297,19 @@ impl MainView {
                     }
                 }
             }
+            UiEvent::ApprovalRequested {
+                request_id,
+                kind,
+                friendly_title,
+                raw_detail,
+            } => {
+                self.pending_approval = Some(PendingApproval {
+                    request_id,
+                    kind,
+                    friendly_title,
+                    raw_detail,
+                });
+            }
             UiEvent::TurnDone { ok, error_text } => {
                 let err_msg = if !ok {
                     Some(ChatItem::message(
@@ -338,7 +373,12 @@ impl Render for MainView {
                 cx,
             ),
         };
+        let modal = self
+            .pending_approval
+            .as_ref()
+            .map(|p| render_approval_modal(t, p, cx));
         div()
+            .relative()
             .flex()
             .flex_col()
             .size_full()
@@ -347,7 +387,125 @@ impl Render for MainView {
             // ChatInput Submit 액션 — 어디서 발생하든 잡아서 send.
             .on_action(cx.listener(|this, _: &chat_input::Submit, _, cx| this.send_user_input(cx)))
             .child(body)
+            .when_some(modal, |d, m| d.child(m))
     }
+}
+
+fn render_approval_modal(
+    t: &theme::Tokens,
+    p: &PendingApproval,
+    cx: &mut Context<MainView>,
+) -> gpui::Div {
+    let icon = p.kind.icon();
+    let detail = p.raw_detail.clone();
+    let show_detail = !detail.is_empty();
+
+    div()
+        .absolute()
+        .inset_0()
+        .flex()
+        .items_center()
+        .justify_center()
+        .bg(rgb(0x10101a))
+        // 클릭 자체는 모달 백드랍에서 멈추게 — 뒤쪽 채팅으로 이벤트 새지 않게
+        .on_mouse_down(MouseButton::Left, |_, _, _| {})
+        .child(
+            div()
+                .flex()
+                .flex_col()
+                .gap_4()
+                .w(px(480.))
+                .p_6()
+                .bg(rgb(t.surface))
+                .border_1()
+                .border_color(rgb(t.accent))
+                .rounded_md()
+                .child(
+                    div()
+                        .flex()
+                        .gap_3()
+                        .items_center()
+                        .child(div().text_2xl().child(icon))
+                        .child(
+                            div()
+                                .flex_1()
+                                .text_lg()
+                                .child(p.friendly_title.clone()),
+                        ),
+                )
+                .when(show_detail, |d| {
+                    d.child(
+                        div()
+                            .px_3()
+                            .py_2()
+                            .bg(rgb(t.bg))
+                            .rounded_md()
+                            .border_1()
+                            .border_color(rgb(0x303848))
+                            .text_sm()
+                            .text_color(rgb(t.muted))
+                            .child(detail),
+                    )
+                })
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(rgb(t.muted))
+                        .child("Stcode가 도구를 쓰려고 해요. 안전해 보이면 허락해 주세요."),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .gap_2()
+                        .justify_end()
+                        .child(approval_button(
+                            t,
+                            "거절",
+                            0x4a3a3a,
+                            0xe0a0a0,
+                            cx.listener(|this, _, _, cx| {
+                                this.answer_approval(ApprovalDecision::Decline, cx)
+                            }),
+                        ))
+                        .child(approval_button(
+                            t,
+                            "한 번만 허락",
+                            t.surface,
+                            t.fg,
+                            cx.listener(|this, _, _, cx| {
+                                this.answer_approval(ApprovalDecision::AcceptOnce, cx)
+                            }),
+                        ))
+                        .child(approval_button(
+                            t,
+                            "이번 세션 내내 허락",
+                            t.accent,
+                            0x111122,
+                            cx.listener(|this, _, _, cx| {
+                                this.answer_approval(ApprovalDecision::AcceptForSession, cx)
+                            }),
+                        )),
+                ),
+        )
+}
+
+fn approval_button(
+    _t: &theme::Tokens,
+    label: &'static str,
+    bg_color: u32,
+    fg_color: u32,
+    on_click: impl Fn(&MouseDownEvent, &mut Window, &mut App) + 'static,
+) -> gpui::Div {
+    div()
+        .px_3()
+        .py_2()
+        .bg(rgb(bg_color))
+        .text_color(rgb(fg_color))
+        .rounded_md()
+        .cursor_pointer()
+        .text_sm()
+        .child(label)
+        .on_mouse_down(MouseButton::Left, on_click)
 }
 
 fn render_welcome(t: &theme::Tokens, cx: &mut Context<MainView>) -> gpui::Div {

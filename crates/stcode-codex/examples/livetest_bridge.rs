@@ -12,7 +12,7 @@ use std::env;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use stcode_codex::bridge::{Bridge, UiCommand, UiEvent};
+use stcode_codex::bridge::{ApprovalDecision, Bridge, UiCommand, UiEvent};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -111,6 +111,21 @@ async fn main() -> anyhow::Result<()> {
                 delta_count += 1;
                 accumulated.push_str(&text);
                 println!("  AgentDelta #{delta_count}: +{} chars", text.len());
+            }
+            Ok(Some(UiEvent::ApprovalRequested {
+                request_id,
+                kind,
+                friendly_title,
+                raw_detail,
+            })) => {
+                // 헤드리스 테스트: 자동으로 Decline 보내서 round-trip 확인 + turn 종료 유도
+                println!(
+                    "  ApprovalRequested(id={request_id}, kind={kind:?})\n    title : {friendly_title}\n    detail: {raw_detail}\n    → auto-Decline"
+                );
+                cmd_tx.send(UiCommand::ApprovalDecision {
+                    request_id,
+                    decision: ApprovalDecision::Decline,
+                })?;
             }
             Ok(Some(UiEvent::TurnDone { ok, error_text })) => {
                 println!("  TurnDone: ok={ok} err={error_text:?}");
