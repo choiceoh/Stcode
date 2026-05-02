@@ -19,3 +19,5 @@ tracing-subscriber.workspace = true
 gpui.workspace = true
 
 stcode-codex.workspace = true
+
+rfd = "0.15"

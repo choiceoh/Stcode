@@ -108,6 +108,51 @@ agentMessage delta가 한 글자씩 흘러나오면 끝.
 3. **Reverse-proxy로 role rewrite**: vLLM 앞에 nginx/caddy 두고 요청 본문의
    `"role":"developer"` → `"role":"system"` 치환. 복잡, 비권장.
 
+## 2단계 — "developer/system must be at the beginning" 추가 완화
+
+1단계 패치(`developer` → `system` 매핑) 후에도 다음 에러가 날 수 있습니다:
+
+```
+{"error":{"message":"Developer/system message must be at the beginning.",
+ "type":"BadRequestError","code":400}}
+```
+
+원인: codex는 multi-turn 대화에서 user→assistant→**developer/system 보강**→user 순서로
+메시지를 보낼 수 있는데, qwen 계열 chat template은 "system/developer는 첫 메시지에만"
+하드 검증을 가집니다 (Jinja `{{ raise_exception("...") }}`).
+
+해결: 패치한 template에서 순서 검증을 제거하고, 어디 위치든 동일하게 렌더링.
+
+```jinja
+{# 기존 #}
+{%- if message.role == "system" or message.role == "developer" %}
+  {%- if not loop.first %}{{ raise_exception("Developer/system message must be at the beginning.") }}{%- endif %}
+  <|im_start|>system
+  {{ message.content }}<|im_end|>
+
+{# 수정 — raise_exception 라인 삭제 #}
+{%- if message.role == "system" or message.role == "developer" %}
+  <|im_start|>system
+  {{ message.content }}<|im_end|>
+```
+
+vLLM 재시작 후 검증:
+
+```bash
+curl -sS http://100.105.145.6:8000/v1/responses \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "model":"qwen3.6-35b-a3b",
+    "input":[
+      {"role":"user","content":"hi"},
+      {"role":"developer","content":"You are concise."},
+      {"role":"user","content":"who are you"}
+    ]
+  }' | head -c 300
+```
+
+`status: "completed"` 떨어지면 끝.
+
 ## Stcode 측 대응
 
 Stcode 코드는 codex의 wire 스펙을 그대로 따르므로 우회 불가. M2 단계의 친화적
