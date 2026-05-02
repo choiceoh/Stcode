@@ -1,13 +1,23 @@
 //! `codex app-server`를 자식 프로세스로 spawn 하고 JSON-RPC 2.0(stdio)로 통신한다.
 //!
-//! M0 범위: spawn → `initialize` → `initialized` notification 까지 검증.
-//! M1+: thread/start, turn/start, item delta 스트림 + 승인 요청 라우팅.
+//! 레이어:
+//! - [`rpc`] — raw JSON-RPC 2.0 클라이언트 + 인바운드 채널
+//! - [`protocol`] — codex 프로토콜의 minimal serde 타입 (자체 정의)
+//! - [`session`] — 타입 안전 thread/turn 추상화 ([`ThreadSession`])
 
+pub mod protocol;
 mod rpc;
+pub mod session;
 mod spawn;
 
-pub use rpc::{RpcClient, RpcError};
-pub use spawn::{CodexBinary, SpawnError, find_codex_binary};
+pub use protocol::{
+    method, AccountReadParams, AccountReadResponse, AgentMessageDelta, ApprovalPolicy,
+    CommandOutputDelta, CommandStream, SandboxMode, Thread, ThreadStartParams,
+    ThreadStartResponse, TurnInfo, TurnStartParams, TurnStartResponse, TurnStatus, UserInput,
+};
+pub use rpc::{InboundMessage, RpcClient, RpcError};
+pub use session::{ThreadEvent, ThreadSession};
+pub use spawn::{find_codex_binary, CodexBinary, SpawnError, SpawnOptions};
 
 use serde::{Deserialize, Serialize};
 
@@ -54,19 +64,15 @@ pub struct InitializeResult {
     pub extra: serde_json::Map<String, serde_json::Value>,
 }
 
-/// M0 검증 헬퍼: codex 바이너리를 찾아 spawn 하고 initialize 한 뒤 결과를 반환.
-/// `codex` 미설치 시 친화적 에러로 변환.
+/// M0 검증 헬퍼 — codex 핸드셰이크만 보고 종료한다.
 pub async fn probe_initialize() -> anyhow::Result<InitializeResult> {
     let bin = find_codex_binary()?;
-    tracing::info!("codex 바이너리 발견: {}", bin.path.display());
-
-    let mut client = RpcClient::spawn_app_server(&bin).await?;
-    let result = client
-        .request::<_, InitializeResult>("initialize", InitializeParams::default())
+    tracing::info!("codex 바이너리: {}", bin.path.display());
+    let (rpc, _inbound) = RpcClient::spawn_app_server(&bin).await?;
+    let result: InitializeResult = rpc
+        .request(method::INITIALIZE, InitializeParams::default())
         .await?;
-    client.notify("initialized", serde_json::json!({})).await?;
-
-    // M0에선 핸드셰이크 확인 후 곧바로 종료.
-    client.shutdown().await;
+    rpc.notify(method::INITIALIZED, serde_json::json!({})).await?;
+    rpc.shutdown().await;
     Ok(result)
 }
