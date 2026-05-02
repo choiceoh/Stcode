@@ -2,50 +2,89 @@
 
 코드를 모르는 바이브코더를 위한 macOS 데스크톱 코딩 에이전트.
 
-- **GUI**: Zed의 [GPUI](https://crates.io/crates/gpui) (Apache-2.0)
-- **백엔드**: [OpenAI Codex CLI](https://github.com/openai/codex)의 `codex app-server` (Apache-2.0)
+- **GUI**: Zed의 [GPUI](https://github.com/zed-industries/zed/tree/main/crates/gpui) main HEAD (Apache-2.0)
+- **백엔드**: [OpenAI Codex CLI](https://github.com/openai/codex)의 fork (Apache-2.0) + `app-server` JSON-RPC
+- **LLM**: 로컬 vLLM (예: qwen3.6-35b-a3b) — fork patch가 vLLM 호환 처리
 - **타깃**: macOS 우선 — 사내/팀 도구
 
 ## 사전 요구사항
 
 - macOS 13+
-- Rust stable (rustup 권장)
-- `codex` CLI: `brew install codex` 또는 `npm i -g @openai/codex`
-- OpenAI API 키 (앱 첫 실행 시 입력 — macOS Keychain에 저장)
+- Xcode + Metal Toolchain (`xcodebuild -downloadComponent MetalToolchain`)
+- Rust stable (`brew install rustup` → `rustup default stable`)
+- vLLM 서버 (OpenAI Responses API 지원, `/v1/responses` 엔드포인트). 모델은 reasoning model (qwen3.6-a3b 등) 가능.
 
-## 빌드 & 실행 (M0)
+## 빌드 & 실행
+
+### 1) codex fork 클론 + 빌드 (한 번)
 
 ```bash
+cd ~/Documents/GitHub
+git clone --depth 1 https://github.com/openai/codex.git codex-fork
+# Stcode patch 적용 후 빌드 (이 repo의 patch는 별도)
+cd codex-fork/codex-rs && cargo build -p codex-cli
+```
+
+Stcode가 `~/Documents/GitHub/codex-fork/codex-rs/target/debug/codex`를 자동으로 사용. 다른 위치면 `STCODE_CODEX_BIN=/path/to/codex` 환경변수.
+
+### 2) Stcode 빌드 + 실행
+
+```bash
+cd ~/Documents/GitHub/Stcode
 cargo run -p stcode-app
 ```
 
-성공 시:
-1. GPUI 윈도우가 뜨고 "Stcode" 텍스트가 보임
-2. 백그라운드 스레드에서 `codex app-server` spawn → `initialize` 핸드셰이크 시도
-3. 콘솔(`RUST_LOG=info,stcode=debug`)에 `codex initialize OK: …` 또는 친화적 에러 출력
+### 3) 사용
 
-`codex`가 PATH에 없으면 친화적 에러 메시지가 콘솔에 노출됨 (정상).
+1. **📁 폴더 열기** → 프로젝트 폴더 선택
+2. 인풋바에 한국어 prompt 타이핑 → ↵ Enter (또는 ↵ 보내기 버튼)
+3. 응답이 채팅에 흘러나옴
+4. 메시지 텍스트는 마우스 드래그로 selection + ⌘C 복사
+
+### 환경변수
+
+- `STCODE_CODEX_BIN` — codex 바이너리 절대 경로 override
+- `STCODE_VLLM_COMPAT=1` — fork patch 활성 (Stcode bridge.rs가 자동 set)
+- `RUST_LOG=info,stcode=debug` — 더 자세한 로그
 
 ## 워크스페이스 구조
 
 ```
 crates/
-  stcode-app/    GPUI 앱 진입점, 뷰
-  stcode-codex/  codex app-server JSON-RPC 클라이언트
-  stcode-vibe/   바이브코더 안전 레이어 (M3)
+  stcode-app/         GPUI 앱 (Welcome / Chat / SelectableText / ChatInput)
+  stcode-codex/       codex app-server JSON-RPC 클라이언트 + ThreadSession
+  stcode-vibe/        바이브코더 안전 레이어 (M3 예정)
+  stcode-vllm-proxy/  HTTP 프록시 (fork patch 도입 후 사실상 deprecated)
 ```
+
+`docs/m1-wireframe.md` — UI 와이어프레임  
+`docs/vllm-developer-role-fix.md` — vLLM chat template 가이드 (fork patch 도입 전 우회법)
+
+## 코덱스 fork 패치 위치
+
+`~/Documents/GitHub/codex-fork`에서:
+
+- `codex-rs/codex-api/src/endpoint/responses.rs::stream_request` — outbound:
+  - input array의 `type=message` 외 항목 drop (reasoning, function_call 등)
+  - content array → string concat
+  - `developer` role → `system` (qwen 등 호환)
+  - system 메시지를 맨 앞으로 sort
+  - top-level `instructions` 필드 제거 (input[0]에 중복)
+
+게이팅: ENV `STCODE_VLLM_COMPAT=1`. OpenAI 본가 트래픽 영향 없음.
 
 ## 마일스톤
 
 - **M0** ✅ scaffolding — GPUI 윈도우 + codex initialize 핸드셰이크
-- **M1** 채팅 PoC — 폴더 선택, 메시지 스트리밍
-- **M2** 승인 + 도구 — 모달 다이얼로그, command output
-- **M3** 바이브 안전 레이어 — auto-git, 되돌리기, 친화적 메시지
+- **M1** ✅ 채팅 PoC — 폴더 선택, 한국어 입력, multi-line wrap, 응답 스트리밍, vLLM 호환 (fork)
+- **M2** 승인 다이얼로그, command 출력, 파일 변경 알림
+- **M3** 바이브 안전 레이어 — auto-git, 되돌리기, 친화적 에러
 - **M4** 팀 배포 — `.app` 번들, 사내 코드사이닝
 
 자세한 계획은 `~/.claude/plans/zed-gui-typed-trinket.md`.
 
 ## 라이선스 주의
 
-- `gpui`, `codex` 모두 Apache-2.0이라 사내 비공개 도구로 임베드 가능
-- **Zed 본체(zed-industries/zed의 gpui 외 크레이트)는 GPL/AGPL** — 코드 단 한 줄도 복사 금지
+- `gpui`, `codex` 모두 Apache-2.0
+- **Zed 본체의 gpui 외 crate (editor, ui, workspace 등)는 GPL/AGPL** — 코드 한 줄도 복사 금지
+- Stcode 자체는 사내 도구 (private)
