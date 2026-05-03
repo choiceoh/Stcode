@@ -5,7 +5,7 @@
 //!
 //! provider/model 호환 필드는 유지하되, 실제 라우팅은 main/sub agent 모델 기본값으로 한다.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
@@ -21,7 +21,12 @@ pub struct Settings {
     /// 실제 반복/실행 작업을 맡는 서브 에이전트 기본 모델.
     #[serde(default)]
     pub sub_model: String,
+    /// 최근 열었던 프로젝트. GUI에서 바로 다시 열 수 있게 경로만 저장한다.
+    #[serde(default)]
+    pub recent_projects: Vec<String>,
 }
+
+const MAX_RECENT_PROJECTS: usize = 8;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AgentModelRole {
@@ -37,6 +42,7 @@ impl Default for Settings {
             model: model.clone(),
             main_model: model.clone(),
             sub_model: model,
+            recent_projects: Vec::new(),
         }
     }
 }
@@ -54,6 +60,17 @@ impl Settings {
         if self.sub_model.trim().is_empty() {
             self.sub_model = self.main_model.clone();
         }
+        let mut recent_projects = Vec::new();
+        for project in self.recent_projects {
+            if project.trim().is_empty() || recent_projects.contains(&project) {
+                continue;
+            }
+            recent_projects.push(project);
+            if recent_projects.len() == MAX_RECENT_PROJECTS {
+                break;
+            }
+        }
+        self.recent_projects = recent_projects;
         self
     }
 
@@ -61,6 +78,18 @@ impl Settings {
         match role {
             AgentModelRole::Main => &self.main_model,
             AgentModelRole::Sub => &self.sub_model,
+        }
+    }
+
+    pub fn remember_recent_project(&mut self, path: &Path) {
+        let path = path.to_string_lossy().into_owned();
+        if path.trim().is_empty() {
+            return;
+        }
+        self.recent_projects.retain(|p| p != &path);
+        self.recent_projects.insert(0, path);
+        if self.recent_projects.len() > MAX_RECENT_PROJECTS {
+            self.recent_projects.truncate(MAX_RECENT_PROJECTS);
         }
     }
 }
@@ -127,6 +156,7 @@ model = "old-model"
         assert_eq!(normalized.sub_model, "old-model");
         assert_eq!(normalized.model_for_role(AgentModelRole::Main), "old-model");
         assert_eq!(normalized.model_for_role(AgentModelRole::Sub), "old-model");
+        assert!(normalized.recent_projects.is_empty());
     }
 
     #[test]
@@ -147,5 +177,25 @@ sub_model = "worker"
         assert_eq!(normalized.sub_model, "worker");
         assert_eq!(normalized.model_for_role(AgentModelRole::Main), "planner");
         assert_eq!(normalized.model_for_role(AgentModelRole::Sub), "worker");
+    }
+
+    #[test]
+    fn recent_projects_are_deduped_and_capped() {
+        let mut settings = Settings::default();
+        for idx in 0..10 {
+            settings.remember_recent_project(Path::new(&format!("/tmp/project-{idx}")));
+        }
+        settings.remember_recent_project(Path::new("/tmp/project-5"));
+
+        assert_eq!(settings.recent_projects.first().unwrap(), "/tmp/project-5");
+        assert_eq!(settings.recent_projects.len(), 8);
+        assert_eq!(
+            settings
+                .recent_projects
+                .iter()
+                .filter(|path| path.as_str() == "/tmp/project-5")
+                .count(),
+            1
+        );
     }
 }

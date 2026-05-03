@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use gpui::{
     App, Bounds, Context, Entity, IntoElement, MouseButton, MouseDownEvent, ParentElement, Render,
@@ -274,6 +274,7 @@ impl MainView {
             model: main_model.clone(),
             main_model,
             sub_model,
+            recent_projects: self.settings.recent_projects.clone(),
         };
         match settings::save(&new_settings) {
             Ok(()) => {
@@ -309,7 +310,21 @@ impl MainView {
         .detach();
     }
 
+    fn open_recent_project(&mut self, path: String, cx: &mut Context<Self>) {
+        let path = PathBuf::from(path);
+        if !path.is_dir() {
+            self.notice = Some(format!(
+                "최근 프로젝트를 찾을 수 없어요\n{}",
+                path.to_string_lossy()
+            ));
+            cx.notify();
+            return;
+        }
+        self.add_new_session(path, cx);
+    }
+
     fn add_new_session(&mut self, path: PathBuf, cx: &mut Context<Self>) {
+        self.remember_recent_project(&path);
         // Welcome → Workspace 전환 또는 기존 Workspace에 추가.
         if matches!(self.screen, Screen::Welcome) {
             self.screen = Screen::Workspace(WorkspaceState {
@@ -342,6 +357,13 @@ impl MainView {
                 .to_string(),
         });
         cx.notify();
+    }
+
+    fn remember_recent_project(&mut self, path: &Path) {
+        self.settings.remember_recent_project(path);
+        if let Err(e) = settings::save(&self.settings) {
+            tracing::warn!("최근 프로젝트 저장 실패: {e}");
+        }
     }
 
     fn set_active(&mut self, sid: SessionId, cx: &mut Context<Self>) {
@@ -717,8 +739,10 @@ impl Render for MainView {
         let t = &theme::TOKENS;
         let chips_model = model_route_label(&self.settings);
         let body = match &self.screen {
-            Screen::Welcome => render_welcome(t, cx),
-            Screen::Workspace(ws) => render_workspace(t, ws, &chips_model, cx),
+            Screen::Welcome => render_welcome(t, &self.settings.recent_projects, cx),
+            Screen::Workspace(ws) => {
+                render_workspace(t, ws, &chips_model, &self.settings.recent_projects, cx)
+            }
         };
         let approval_modal = self
             .pending_approval
@@ -766,38 +790,167 @@ fn model_route_label(settings: &Settings) -> String {
     }
 }
 
-fn render_welcome(t: &theme::Tokens, cx: &mut Context<MainView>) -> gpui::Div {
+fn render_welcome(
+    t: &theme::Tokens,
+    recent_projects: &[String],
+    cx: &mut Context<MainView>,
+) -> gpui::Div {
+    div()
+        .flex()
+        .flex_row()
+        .size_full()
+        .bg(rgb(t.bg))
+        .child(render_welcome_sidebar(t, recent_projects, cx))
+        .child(render_welcome_main(t, recent_projects, cx))
+}
+
+fn render_welcome_sidebar(
+    t: &theme::Tokens,
+    recent_projects: &[String],
+    cx: &mut Context<MainView>,
+) -> gpui::Div {
+    let new_session_btn = sidebar_action_row(
+        t,
+        "✎",
+        "새 작업",
+        cx.listener(|this, _, _, cx| this.open_folder(cx)),
+    );
+    let settings_btn = sidebar_action_row(
+        t,
+        "⚙",
+        "설정",
+        cx.listener(|this, _, _, cx| this.open_settings(cx)),
+    );
+
     div()
         .flex()
         .flex_col()
-        .size_full()
-        .items_center()
-        .justify_center()
-        .gap_6()
-        .bg(rgb(t.bg))
-        .child(div().text_2xl().text_color(rgb(t.fg)).child("Stcode"))
+        .w(px(300.))
+        .h_full()
+        .bg(rgb(t.sidebar))
+        .border_r_1()
+        .border_color(rgb(t.border))
+        .child(sidebar_brand(t))
         .child(
             div()
-                .text_sm()
-                .text_color(rgb(t.muted))
-                .child("여러 에이전트가 긴 작업을 나눠서 진행하는 콘솔"),
+                .flex()
+                .flex_col()
+                .gap_1()
+                .px_2()
+                .pb_4()
+                .child(new_session_btn)
+                .child(sidebar_nav_row(t, "⌕", "검색", false))
+                .child(sidebar_nav_row(t, "◇", "플러그인", false))
+                .child(sidebar_nav_row(t, "○", "자동화", false)),
+        )
+        .child(render_recent_project_section(t, recent_projects, cx))
+        .child(div().flex_1())
+        .child(settings_btn)
+}
+
+fn render_welcome_main(
+    t: &theme::Tokens,
+    recent_projects: &[String],
+    cx: &mut Context<MainView>,
+) -> gpui::Div {
+    div()
+        .flex()
+        .flex_col()
+        .flex_1()
+        .h_full()
+        .bg(rgb(t.bg))
+        .child(
+            div()
+                .flex()
+                .h(px(58.))
+                .px_6()
+                .items_center()
+                .justify_end()
+                .border_b_1()
+                .border_color(rgb(t.border))
+                .child(status_pill(t, "대기")),
         )
         .child(
             div()
+                .flex()
+                .flex_col()
+                .flex_1()
+                .items_center()
+                .justify_center()
+                .gap_5()
                 .px_8()
-                .py_3()
-                .bg(rgb(t.surface))
-                .rounded_lg()
-                .border_1()
-                .border_color(rgb(t.border))
-                .shadow_sm()
-                .cursor_pointer()
-                .text_color(rgb(t.fg))
-                .child("프로젝트 열기")
-                .on_mouse_down(
-                    MouseButton::Left,
-                    cx.listener(|this, _, _, cx| this.open_folder(cx)),
-                ),
+                .child(
+                    div()
+                        .text_2xl()
+                        .text_color(rgb(t.fg))
+                        .child("무엇을 만들까요?"),
+                )
+                .child(welcome_composer(t, cx))
+                .when(!recent_projects.is_empty(), |d| {
+                    d.child(render_recent_projects_panel(t, recent_projects, cx))
+                }),
+        )
+}
+
+fn welcome_composer(t: &theme::Tokens, cx: &mut Context<MainView>) -> gpui::Div {
+    div()
+        .flex()
+        .items_center()
+        .gap_3()
+        .w_full()
+        .max_w(px(820.))
+        .min_h(px(86.))
+        .px_5()
+        .py_4()
+        .bg(rgb(t.surface))
+        .border_1()
+        .border_color(rgb(t.border))
+        .rounded_2xl()
+        .shadow_lg()
+        .cursor_pointer()
+        .hover(|d| d.border_color(rgb(0xc8c8cc)))
+        .child(
+            div()
+                .flex_1()
+                .text_lg()
+                .text_color(rgb(t.muted))
+                .child("프로젝트를 열고 새 작업을 시작하세요"),
+        )
+        .child(
+            div()
+                .size(px(40.))
+                .flex()
+                .items_center()
+                .justify_center()
+                .bg(rgb(0x8a8a8f))
+                .text_color(rgb(0xffffff))
+                .rounded_full()
+                .child("↑"),
+        )
+        .on_mouse_down(
+            MouseButton::Left,
+            cx.listener(|this, _, _, cx| this.open_folder(cx)),
+        )
+}
+
+fn render_recent_projects_panel(
+    t: &theme::Tokens,
+    recent_projects: &[String],
+    cx: &mut Context<MainView>,
+) -> gpui::Div {
+    div()
+        .flex()
+        .flex_col()
+        .gap_1()
+        .w_full()
+        .max_w(px(820.))
+        .child(section_label("최근 프로젝트"))
+        .children(
+            recent_projects
+                .iter()
+                .take(4)
+                .cloned()
+                .map(|path| render_recent_project_row(t, path, true, cx)),
         )
 }
 
@@ -805,18 +958,24 @@ fn render_workspace(
     t: &theme::Tokens,
     ws: &WorkspaceState,
     chips_model: &str,
+    recent_projects: &[String],
     cx: &mut Context<MainView>,
 ) -> gpui::Div {
     div()
         .flex()
         .flex_row()
         .size_full()
-        .child(render_sidebar(t, ws, cx))
+        .child(render_sidebar(t, ws, recent_projects, cx))
         .child(render_active_main(t, ws, chips_model, cx))
 }
 
 /// 좌측 사이드바 — dynamic 세션 list. 클릭으로 active 전환. status icon 동기화.
-fn render_sidebar(t: &theme::Tokens, ws: &WorkspaceState, cx: &mut Context<MainView>) -> gpui::Div {
+fn render_sidebar(
+    t: &theme::Tokens,
+    ws: &WorkspaceState,
+    recent_projects: &[String],
+    cx: &mut Context<MainView>,
+) -> gpui::Div {
     let items: Vec<gpui::Div> = ws
         .order
         .iter()
@@ -832,41 +991,18 @@ fn render_sidebar(t: &theme::Tokens, ws: &WorkspaceState, cx: &mut Context<MainV
         })
         .collect();
 
-    let new_session_btn = div()
-        .flex()
-        .gap_2()
-        .items_center()
-        .mx_3()
-        .px_3()
-        .py_2()
-        .text_color(rgb(t.fg))
-        .rounded_lg()
-        .cursor_pointer()
-        .hover(|d| d.bg(rgb(t.sidebar_active)))
-        .child(div().w_5().text_color(rgb(t.muted)).child("✎"))
-        .child(div().flex_1().child("새 작업"))
-        .on_mouse_down(
-            MouseButton::Left,
-            cx.listener(|this, _, _, cx| this.open_folder(cx)),
-        );
-
-    let settings_btn = div()
-        .flex()
-        .gap_2()
-        .items_center()
-        .mx_3()
-        .px_3()
-        .py_2()
-        .text_color(rgb(t.muted))
-        .rounded_lg()
-        .cursor_pointer()
-        .hover(|d| d.bg(rgb(t.sidebar_active)).text_color(rgb(t.fg)))
-        .child(div().w_5().child("⚙"))
-        .child(div().flex_1().child("설정"))
-        .on_mouse_down(
-            MouseButton::Left,
-            cx.listener(|this, _, _, cx| this.open_settings(cx)),
-        );
+    let new_session_btn = sidebar_action_row(
+        t,
+        "✎",
+        "새 작업",
+        cx.listener(|this, _, _, cx| this.open_folder(cx)),
+    );
+    let settings_btn = sidebar_action_row(
+        t,
+        "⚙",
+        "설정",
+        cx.listener(|this, _, _, cx| this.open_settings(cx)),
+    );
 
     div()
         .flex()
@@ -876,17 +1012,7 @@ fn render_sidebar(t: &theme::Tokens, ws: &WorkspaceState, cx: &mut Context<MainV
         .bg(rgb(t.sidebar))
         .border_r_1()
         .border_color(rgb(t.border))
-        .child(
-            div()
-                .flex()
-                .h(px(58.))
-                .px_5()
-                .items_center()
-                .gap_2()
-                .text_lg()
-                .text_color(rgb(t.fg))
-                .child("Stcode"),
-        )
+        .child(sidebar_brand(t))
         .child(
             div()
                 .flex()
@@ -899,6 +1025,7 @@ fn render_sidebar(t: &theme::Tokens, ws: &WorkspaceState, cx: &mut Context<MainV
                 .child(sidebar_nav_row(t, "◇", "플러그인", false))
                 .child(sidebar_nav_row(t, "○", "자동화", false)),
         )
+        .child(render_recent_project_section(t, recent_projects, cx))
         .child(
             div()
                 .px_5()
@@ -922,6 +1049,40 @@ fn render_sidebar(t: &theme::Tokens, ws: &WorkspaceState, cx: &mut Context<MainV
         .child(settings_btn)
 }
 
+fn sidebar_brand(t: &theme::Tokens) -> gpui::Div {
+    div()
+        .flex()
+        .h(px(58.))
+        .px_5()
+        .items_center()
+        .gap_2()
+        .text_lg()
+        .text_color(rgb(t.fg))
+        .child("Stcode")
+}
+
+fn sidebar_action_row(
+    t: &theme::Tokens,
+    icon: &'static str,
+    label: &'static str,
+    on_click: impl Fn(&MouseDownEvent, &mut Window, &mut App) + 'static,
+) -> gpui::Div {
+    div()
+        .flex()
+        .gap_2()
+        .items_center()
+        .mx_3()
+        .px_3()
+        .py_2()
+        .text_color(rgb(t.fg))
+        .rounded_lg()
+        .cursor_pointer()
+        .hover(|d| d.bg(rgb(t.sidebar_active)))
+        .child(div().w_5().text_color(rgb(t.muted)).child(icon))
+        .child(div().flex_1().child(label))
+        .on_mouse_down(MouseButton::Left, on_click)
+}
+
 fn sidebar_nav_row(
     t: &theme::Tokens,
     icon: &'static str,
@@ -941,6 +1102,108 @@ fn sidebar_nav_row(
         .text_color(rgb(t.muted))
         .child(div().w_5().child(icon))
         .child(div().flex_1().child(label))
+}
+
+fn render_recent_project_section(
+    t: &theme::Tokens,
+    recent_projects: &[String],
+    cx: &mut Context<MainView>,
+) -> gpui::Div {
+    let rows: Vec<gpui::Div> = recent_projects
+        .iter()
+        .take(5)
+        .cloned()
+        .map(|path| render_recent_project_row(t, path, false, cx))
+        .collect();
+    let body = if rows.is_empty() {
+        div()
+            .mx_3()
+            .px_3()
+            .py_2()
+            .text_sm()
+            .text_color(rgb(t.muted))
+            .child("최근 프로젝트 없음")
+    } else {
+        div().flex().flex_col().gap_1().children(rows)
+    };
+
+    div()
+        .flex()
+        .flex_col()
+        .gap_1()
+        .pb_4()
+        .child(section_label("프로젝트"))
+        .child(body)
+}
+
+fn section_label(label: &'static str) -> gpui::Div {
+    div()
+        .px_5()
+        .pt_4()
+        .pb_2()
+        .text_sm()
+        .text_color(rgb(0xa0a0a6))
+        .child(label)
+}
+
+fn render_recent_project_row(
+    t: &theme::Tokens,
+    path: String,
+    roomy: bool,
+    cx: &mut Context<MainView>,
+) -> gpui::Div {
+    let label = project_display_name(&path);
+    let hint = project_parent_hint(&path);
+    let path_for_click = path.clone();
+    let row = div()
+        .flex()
+        .items_center()
+        .gap_2()
+        .rounded_lg()
+        .cursor_pointer()
+        .bg(rgb(if roomy { t.surface } else { t.sidebar }))
+        .hover(|d| d.bg(rgb(t.sidebar_active)))
+        .child(div().w_5().text_color(rgb(t.muted)).child("□"))
+        .child(
+            div()
+                .flex()
+                .flex_col()
+                .flex_1()
+                .overflow_hidden()
+                .child(div().text_color(rgb(t.fg)).child(label))
+                .child(div().text_xs().text_color(rgb(t.muted)).child(hint)),
+        )
+        .child(div().text_color(rgb(t.muted)).child("↗"))
+        .on_mouse_down(
+            MouseButton::Left,
+            cx.listener(move |this, _, _, cx| this.open_recent_project(path_for_click.clone(), cx)),
+        );
+
+    if roomy {
+        row.px_4()
+            .py_3()
+            .border_1()
+            .border_color(rgb(t.border))
+            .shadow_sm()
+    } else {
+        row.mx_3().px_3().py_2()
+    }
+}
+
+fn project_display_name(path: &str) -> String {
+    Path::new(path)
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .filter(|name| !name.is_empty())
+        .unwrap_or_else(|| path.to_string())
+}
+
+fn project_parent_hint(path: &str) -> String {
+    Path::new(path)
+        .parent()
+        .map(|parent| parent.to_string_lossy().into_owned())
+        .filter(|parent| !parent.is_empty())
+        .unwrap_or_else(|| path.to_string())
 }
 
 fn render_session_item(
@@ -2068,6 +2331,7 @@ mod markdown_tests {
             model: "qwen".into(),
             main_model: "qwen".into(),
             sub_model: "qwen".into(),
+            recent_projects: Vec::new(),
         };
         assert_eq!(model_route_label(&same), "조율/작업 qwen");
 
@@ -2076,6 +2340,7 @@ mod markdown_tests {
             model: "planner".into(),
             main_model: "planner".into(),
             sub_model: "worker".into(),
+            recent_projects: Vec::new(),
         };
         assert_eq!(model_route_label(&split), "조율 planner · 작업 worker");
     }
