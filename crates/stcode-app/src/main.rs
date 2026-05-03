@@ -850,13 +850,11 @@ fn render_welcome_sidebar(
                 .gap_1()
                 .px_2()
                 .pb_4()
-                .child(new_session_btn)
-                .child(sidebar_nav_row(t, "⌕", "검색", false))
-                .child(sidebar_nav_row(t, "◇", "플러그인", false))
-                .child(sidebar_nav_row(t, "○", "자동화", false)),
+                .child(new_session_btn),
         )
         .child(render_recent_project_section(t, recent_projects, cx))
         .child(div().flex_1())
+        .child(render_sidebar_safety_section(t))
         .child(settings_btn)
 }
 
@@ -1057,10 +1055,7 @@ fn render_sidebar(
                 .gap_1()
                 .px_2()
                 .pb_4()
-                .child(new_session_btn)
-                .child(sidebar_nav_row(t, "⌕", "검색", false))
-                .child(sidebar_nav_row(t, "◇", "플러그인", false))
-                .child(sidebar_nav_row(t, "○", "자동화", false)),
+                .child(new_session_btn),
         )
         .child(render_recent_project_section(t, recent_projects, cx))
         .child(
@@ -1083,6 +1078,7 @@ fn render_sidebar(
                 .overflow_y_scroll()
                 .children(items),
         )
+        .child(render_sidebar_safety_section(t))
         .child(settings_btn)
 }
 
@@ -1129,27 +1125,6 @@ fn sidebar_action_row(
         .on_mouse_down(MouseButton::Left, on_click)
 }
 
-fn sidebar_nav_row(
-    t: &theme::Tokens,
-    icon: &'static str,
-    label: &'static str,
-    active: bool,
-) -> gpui::Div {
-    let bg = if active { t.sidebar_active } else { t.sidebar };
-    div()
-        .flex()
-        .items_center()
-        .gap_2()
-        .mx_3()
-        .px_3()
-        .py_2()
-        .rounded_lg()
-        .bg(rgb(bg))
-        .text_color(rgb(t.muted))
-        .child(div().w_5().child(icon))
-        .child(div().flex_1().child(label))
-}
-
 fn render_recent_project_section(
     t: &theme::Tokens,
     recent_projects: &[String],
@@ -1180,6 +1155,32 @@ fn render_recent_project_section(
         .pb_4()
         .child(section_label("프로젝트"))
         .child(body)
+}
+
+fn render_sidebar_safety_section(t: &theme::Tokens) -> gpui::Div {
+    div()
+        .flex()
+        .flex_col()
+        .gap_1()
+        .pb_3()
+        .child(section_label("작업 안전망"))
+        .child(sidebar_status_row(t, "원본 폴더", "보호"))
+        .child(sidebar_status_row(t, "작업공간", "자동"))
+        .child(sidebar_status_row(t, "브랜치 정리", "자동"))
+}
+
+fn sidebar_status_row(t: &theme::Tokens, label: &'static str, value: &'static str) -> gpui::Div {
+    div()
+        .flex()
+        .items_center()
+        .gap_2()
+        .mx_3()
+        .px_3()
+        .py_2()
+        .rounded_lg()
+        .bg(rgb(0xf6f6f7))
+        .child(div().flex_1().text_sm().text_color(rgb(t.fg)).child(label))
+        .child(div().text_xs().text_color(rgb(t.muted)).child(value))
 }
 
 fn section_label(label: &'static str) -> gpui::Div {
