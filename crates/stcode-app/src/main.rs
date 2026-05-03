@@ -15,6 +15,7 @@ mod theme;
 use chat_input::ChatInput;
 use selectable_text::SelectableText;
 use stcode_codex::bridge::{ApprovalDecision, Bridge, SessionId, ToolKind, UiCommand, UiEvent};
+use stcode_vibe::friendly_translate;
 
 // ─── 화면 / 상태 ──────────────────────────────────────────
 
@@ -328,8 +329,12 @@ impl MainView {
                 });
             }
             UiEvent::SessionFailed { session_id, error } => {
-                let m =
-                    ChatItem::message(Speaker::System, format!("⚠ 세션 시작 실패: {error}"), cx);
+                let friendly = friendly_translate(&error);
+                let m = ChatItem::message(
+                    Speaker::System,
+                    format!("세션 시작 실패\n{friendly}"),
+                    cx,
+                );
                 self.with_session(&session_id, |s| s.messages.push(m));
             }
             UiEvent::SessionClosed { session_id } => {
@@ -443,9 +448,11 @@ impl MainView {
                 error_text,
             } => {
                 let err_msg = if !ok {
+                    let raw = error_text.unwrap_or_default();
+                    let friendly = friendly_translate(&raw);
                     Some(ChatItem::message(
                         Speaker::System,
-                        format!("⚠ turn 실패: {}", error_text.unwrap_or_default()),
+                        format!("turn 실패\n{friendly}"),
                         cx,
                     ))
                 } else {
@@ -494,9 +501,11 @@ impl MainView {
                 let m = if ok {
                     ChatItem::message(Speaker::System, "↶ 마지막 변경을 되돌렸어요", cx)
                 } else {
+                    let raw = error_text.unwrap_or_default();
+                    let friendly = friendly_translate(&raw);
                     ChatItem::message(
                         Speaker::System,
-                        format!("⚠ 되돌리기 실패: {}", error_text.unwrap_or_default()),
+                        format!("되돌리기 실패\n{friendly}"),
                         cx,
                     )
                 };
@@ -504,7 +513,8 @@ impl MainView {
             }
             UiEvent::Error(text) => {
                 // 글로벌 에러 — active 세션에 표시. 세션이 없으면 무시.
-                let m = ChatItem::message(Speaker::System, format!("⚠ {text}"), cx);
+                let friendly = friendly_translate(&text);
+                let m = ChatItem::message(Speaker::System, friendly, cx);
                 if let Screen::Workspace(ws) = &mut self.screen {
                     if let Some(sid) = ws.active.clone() {
                         if let Some(s) = ws.sessions.get_mut(&sid) {

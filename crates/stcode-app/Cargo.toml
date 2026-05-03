@@ -20,5 +20,6 @@ gpui.workspace = true
 gpui_platform.workspace = true
 
 stcode-codex.workspace = true
+stcode-vibe.workspace = true
 
 rfd = "0.15"
