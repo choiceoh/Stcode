@@ -725,9 +725,26 @@ fn cleanup_session_workspace(
                 cleanup.deleted_branch,
                 cleanup.kept_branch_reason
             );
+            let mut message = workspace_cleanup_message(&cleanup);
+            match stcode_vibe::cleanup_finished_session_branches(&worktree.repo_root, "main") {
+                Ok(finished_cleanup) => {
+                    if !finished_cleanup.deleted_branches.is_empty() {
+                        tracing::info!(
+                            "[{session_id}] 완료된 세션 branch 정리: {:?}",
+                            finished_cleanup.deleted_branches
+                        );
+                        message =
+                            append_cleanup_note(message, "사용하지 않는 작업 기록도 정리했어요");
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!("[{session_id}] 완료된 세션 branch 정리 실패: {e}");
+                    let _ = evt_tx.send(UiEvent::Error(format!("작업 기록 정리 실패: {e}")));
+                }
+            }
             let _ = evt_tx.send(UiEvent::WorkspaceCleanup {
                 session_id: session_id.clone(),
-                message: workspace_cleanup_message(&cleanup),
+                message,
             });
         }
         Err(e) => {
@@ -735,6 +752,14 @@ fn cleanup_session_workspace(
             let _ = evt_tx.send(UiEvent::Error(format!("작업공간 정리 실패: {e}")));
         }
     }
+}
+
+fn append_cleanup_note(mut message: String, note: &str) -> String {
+    if !message.is_empty() {
+        message.push('\n');
+    }
+    message.push_str(note);
+    message
 }
 
 fn workspace_cleanup_message(cleanup: &stcode_vibe::WorktreeCleanup) -> String {
@@ -900,6 +925,21 @@ mod tests {
             }),
             "작업 결과가 남아 있어 보관했어요"
         );
+    }
+
+    #[test]
+    fn branch_cleanup_note_stays_user_facing() {
+        let message = append_cleanup_note(
+            "작업공간 정리됨".into(),
+            "사용하지 않는 작업 기록도 정리했어요",
+        );
+
+        assert_eq!(
+            message,
+            "작업공간 정리됨\n사용하지 않는 작업 기록도 정리했어요"
+        );
+        assert!(!message.contains("branch"));
+        assert!(!message.contains("worktree"));
     }
 
     #[test]

@@ -17,7 +17,8 @@ pub use git_safety::{
     GitError, TurnCommit, auto_commit_turn, current_head, ensure_repo, revert_to,
 };
 pub use session_worktree::{
-    SessionWorktree, WorktreeCleanup, WorktreeError, cleanup_session_worktree,
-    default_worktrees_root, prepare_session_worktree, session_branch_name,
+    FinishedBranchCleanup, KeptSessionBranch, SessionWorktree, WorktreeCleanup, WorktreeError,
+    cleanup_finished_session_branches, cleanup_session_worktree, default_worktrees_root,
+    prepare_session_worktree, session_branch_name,
 };
 pub use settings::Settings;

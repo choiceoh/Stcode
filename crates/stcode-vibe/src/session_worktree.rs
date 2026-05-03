@@ -46,6 +46,18 @@ pub struct WorktreeCleanup {
     pub kept_branch_reason: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FinishedBranchCleanup {
+    pub deleted_branches: Vec<String>,
+    pub kept_branches: Vec<KeptSessionBranch>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KeptSessionBranch {
+    pub branch: String,
+    pub reason: String,
+}
+
 /// 기본 worktree 보관 위치.
 ///
 /// macOS에서는 `~/Library/Application Support/Stcode/worktrees`가 된다.
@@ -156,11 +168,121 @@ pub fn cleanup_session_worktree(
     Ok(cleanup)
 }
 
+/// PR merge 또는 작업 폐기 이후 더 이상 필요 없는 `stcode/*` 로컬 branch를 정리한다.
+///
+/// 삭제 조건은 보수적이다.
+/// - branch가 `base_ref`에 병합되어 있으면 삭제한다.
+/// - branch에 upstream이 있었고, 현재 remote-tracking ref가 사라졌으면 PR merge/폐기로 보고 삭제한다.
+/// - 다른 worktree에서 checkout 중인 branch는 삭제하지 않는다.
+/// - upstream도 없고 base에도 병합되지 않은 branch는 작업물이 남은 것으로 보고 보관한다.
+pub fn cleanup_finished_session_branches(
+    repo_path: &Path,
+    base_ref: &str,
+) -> Result<FinishedBranchCleanup, WorktreeError> {
+    let repo_root = discover_repo_root(repo_path)?;
+    let checked_out = checked_out_branches(&repo_root)?;
+    let mut cleanup = FinishedBranchCleanup {
+        deleted_branches: Vec::new(),
+        kept_branches: Vec::new(),
+    };
+
+    for branch in session_branches(&repo_root)? {
+        if checked_out.iter().any(|b| b == &branch.name) {
+            cleanup.kept_branches.push(KeptSessionBranch {
+                branch: branch.name,
+                reason: "다른 작업공간에서 사용 중".into(),
+            });
+            continue;
+        }
+
+        let merged = is_ancestor(&repo_root, &branch.name, base_ref)?;
+        let upstream_gone = configured_upstream_short(&repo_root, &branch.name)?
+            .as_deref()
+            .is_some_and(|upstream| !remote_tracking_ref_exists(&repo_root, upstream));
+
+        if merged || upstream_gone {
+            git_output(&repo_root, ["branch", "-D", &branch.name])?;
+            cleanup.deleted_branches.push(branch.name);
+        } else {
+            cleanup.kept_branches.push(KeptSessionBranch {
+                branch: branch.name,
+                reason: "아직 병합/폐기 확인 전".into(),
+            });
+        }
+    }
+
+    Ok(cleanup)
+}
+
 fn discover_repo_root(path: &Path) -> Result<PathBuf, WorktreeError> {
     Ok(PathBuf::from(git_output(
         path,
         ["rev-parse", "--show-toplevel"],
     )?))
+}
+
+struct LocalSessionBranch {
+    name: String,
+}
+
+fn session_branches(repo: &Path) -> Result<Vec<LocalSessionBranch>, WorktreeError> {
+    let out = git_output(
+        repo,
+        [
+            "for-each-ref",
+            "--format=%(refname:short)",
+            "refs/heads/stcode",
+        ],
+    )?;
+    let branches = out
+        .lines()
+        .filter_map(|line| {
+            let name = line.trim();
+            if name.is_empty() {
+                return None;
+            }
+            Some(LocalSessionBranch {
+                name: name.to_string(),
+            })
+        })
+        .collect();
+    Ok(branches)
+}
+
+fn configured_upstream_short(repo: &Path, branch: &str) -> Result<Option<String>, WorktreeError> {
+    let Some(remote) = git_config_optional(repo, &format!("branch.{branch}.remote"))? else {
+        return Ok(None);
+    };
+    let Some(merge_ref) = git_config_optional(repo, &format!("branch.{branch}.merge"))? else {
+        return Ok(None);
+    };
+    let Some(remote_branch) = merge_ref.strip_prefix("refs/heads/") else {
+        return Ok(None);
+    };
+    Ok(Some(format!("{remote}/{remote_branch}")))
+}
+
+fn git_config_optional(repo: &Path, key: &str) -> Result<Option<String>, WorktreeError> {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(repo)
+        .args(["config", "--get", key])
+        .output()
+        .map_err(WorktreeError::Spawn)?;
+    if !output.status.success() {
+        return Ok(None);
+    }
+    let value = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    Ok((!value.is_empty()).then_some(value))
+}
+
+fn checked_out_branches(repo: &Path) -> Result<Vec<String>, WorktreeError> {
+    let out = git_output(repo, ["worktree", "list", "--porcelain"])?;
+    Ok(out
+        .lines()
+        .filter_map(|line| line.strip_prefix("branch refs/heads/"))
+        .map(str::to_string)
+        .collect())
 }
 
 fn worktree_path_for(root: &Path, repo_root: &Path, session_id: &str) -> PathBuf {
@@ -173,6 +295,27 @@ fn worktree_path_for(root: &Path, repo_root: &Path, session_id: &str) -> PathBuf
     repo_root.to_string_lossy().hash(&mut hasher);
     let repo_key = format!("{repo_name}-{:016x}", hasher.finish());
     root.join(repo_key).join(sanitize_component(session_id))
+}
+
+fn is_ancestor(repo: &Path, branch: &str, base_ref: &str) -> Result<bool, WorktreeError> {
+    let status = Command::new("git")
+        .arg("-C")
+        .arg(repo)
+        .args(["merge-base", "--is-ancestor", branch, base_ref])
+        .status()
+        .map_err(WorktreeError::Spawn)?;
+    Ok(status.success())
+}
+
+fn remote_tracking_ref_exists(repo: &Path, upstream_short: &str) -> bool {
+    let reference = format!("refs/remotes/{upstream_short}");
+    Command::new("git")
+        .arg("-C")
+        .arg(repo)
+        .args(["show-ref", "--verify", "--quiet", &reference])
+        .status()
+        .map(|status| status.success())
+        .unwrap_or(false)
 }
 
 fn branch_exists(repo: &Path, branch: &str) -> Result<bool, WorktreeError> {
@@ -412,5 +555,109 @@ mod tests {
         );
         assert!(worktree.worktree_path.exists());
         assert!(branch_exists(&worktree.repo_root, &worktree.branch).expect("branch exists"));
+    }
+
+    #[test]
+    fn cleanup_finished_branches_deletes_branch_merged_into_base() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let repo = tmp.path().join("repo");
+        fs::create_dir(&repo).expect("repo dir");
+        init_repo(&repo);
+
+        git(&repo, &["checkout", "-b", "stcode/merged"]);
+        fs::write(repo.join("merged.txt"), "done\n").expect("write merged");
+        git(&repo, &["add", "merged.txt"]);
+        git(&repo, &["commit", "-m", "merged work"]);
+        git(&repo, &["checkout", "main"]);
+        git(
+            &repo,
+            &["merge", "--no-ff", "stcode/merged", "-m", "merge session"],
+        );
+
+        let cleanup = cleanup_finished_session_branches(&repo, "main").expect("cleanup branches");
+
+        assert_eq!(cleanup.deleted_branches, vec!["stcode/merged"]);
+        assert!(cleanup.kept_branches.is_empty());
+        assert!(!branch_exists(&repo, "stcode/merged").expect("branch exists"));
+    }
+
+    #[test]
+    fn cleanup_finished_branches_deletes_branch_with_gone_upstream() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let repo = tmp.path().join("repo");
+        fs::create_dir(&repo).expect("repo dir");
+        init_repo(&repo);
+
+        git(&repo, &["checkout", "-b", "stcode/squashed"]);
+        fs::write(repo.join("squashed.txt"), "done\n").expect("write squashed");
+        git(&repo, &["add", "squashed.txt"]);
+        git(&repo, &["commit", "-m", "squashed work"]);
+        git(&repo, &["checkout", "main"]);
+        git(
+            &repo,
+            &["config", "branch.stcode/squashed.remote", "origin"],
+        );
+        git(
+            &repo,
+            &[
+                "config",
+                "branch.stcode/squashed.merge",
+                "refs/heads/stcode/squashed",
+            ],
+        );
+
+        let cleanup = cleanup_finished_session_branches(&repo, "main").expect("cleanup branches");
+
+        assert_eq!(cleanup.deleted_branches, vec!["stcode/squashed"]);
+        assert!(cleanup.kept_branches.is_empty());
+        assert!(!branch_exists(&repo, "stcode/squashed").expect("branch exists"));
+    }
+
+    #[test]
+    fn cleanup_finished_branches_keeps_unconfirmed_work() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let repo = tmp.path().join("repo");
+        fs::create_dir(&repo).expect("repo dir");
+        init_repo(&repo);
+
+        git(&repo, &["checkout", "-b", "stcode/unconfirmed"]);
+        fs::write(repo.join("work.txt"), "not merged\n").expect("write work");
+        git(&repo, &["add", "work.txt"]);
+        git(&repo, &["commit", "-m", "unconfirmed work"]);
+        git(&repo, &["checkout", "main"]);
+
+        let cleanup = cleanup_finished_session_branches(&repo, "main").expect("cleanup branches");
+
+        assert!(cleanup.deleted_branches.is_empty());
+        assert_eq!(
+            cleanup.kept_branches,
+            vec![KeptSessionBranch {
+                branch: "stcode/unconfirmed".into(),
+                reason: "아직 병합/폐기 확인 전".into(),
+            }]
+        );
+        assert!(branch_exists(&repo, "stcode/unconfirmed").expect("branch exists"));
+    }
+
+    #[test]
+    fn cleanup_finished_branches_keeps_checked_out_worktree_branch() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let repo = tmp.path().join("repo");
+        fs::create_dir(&repo).expect("repo dir");
+        init_repo(&repo);
+        let root = tmp.path().join("worktrees");
+        let worktree = prepare_session_worktree(&repo, "in-use", &root).expect("prepare worktree");
+
+        let cleanup = cleanup_finished_session_branches(&repo, "main").expect("cleanup branches");
+
+        assert!(cleanup.deleted_branches.is_empty());
+        assert_eq!(
+            cleanup.kept_branches,
+            vec![KeptSessionBranch {
+                branch: worktree.branch.clone(),
+                reason: "다른 작업공간에서 사용 중".into(),
+            }]
+        );
+        assert!(branch_exists(&repo, &worktree.branch).expect("branch exists"));
     }
 }
