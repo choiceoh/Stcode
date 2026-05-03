@@ -17,7 +17,7 @@ use std::{ffi::OsStr, fs, sync::Arc, thread::ThreadId, time::Duration};
 use sysinfo::{MemoryRefreshKind, RefreshKind, System};
 use util::ResultExt;
 
-use crate::STARTUP_TIME;
+use crate::bootstrap::STARTUP_TIME;
 
 const MAX_HANG_TRACES: usize = 3;
 

@@ -6,5 +6,5 @@ mod reliability;
 mod zed;
 
 fn main() {
-    bootstrap::run(bootstrap::LaunchMode::Zed);
+    bootstrap::run(bootstrap::LaunchMode::Stcode);
 }
