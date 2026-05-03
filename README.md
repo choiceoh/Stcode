@@ -70,14 +70,18 @@ bash scripts/build-app.sh --no-codesign   # CI 등
 
 ```
 crates/
-  stcode-app/         GPUI 앱 (Welcome / Chat / SelectableText / ChatInput)
-  stcode-codex/       codex app-server JSON-RPC 클라이언트 + ThreadSession
-  stcode-vibe/        바이브코더 안전 레이어 (M3 예정)
-  stcode-vllm-proxy/  HTTP 프록시 (fork patch 도입 후 사실상 deprecated)
+  stcode-app/         GPUI 앱 (Welcome / Workspace / 사이드바 / 멀티세션 / 설정 모달)
+  stcode-codex/       codex app-server JSON-RPC 클라이언트 + ThreadSession + Bridge
+  stcode-vibe/        바이브코더 안전 레이어 (git 자동 commit/되돌리기, friendly 에러,
+                       사용자 settings)
 ```
 
 `docs/m1-wireframe.md` — UI 와이어프레임  
-`docs/vllm-developer-role-fix.md` — vLLM chat template 가이드 (fork patch 도입 전 우회법)
+`docs/vllm-developer-role-fix.md` — vLLM chat template 가이드 (fork patch 도입 전 우회법, 참고용)
+
+> 과거 `stcode-vllm-proxy` crate가 있었지만 codex fork의 `STCODE_VLLM_COMPAT=1` 패치
+> 도입 (M1.3) 후 불필요해져 제거됨. 마찬가지로 `examples/probe.rs` 도 `livetest.rs` /
+> `livetest_bridge.rs` 가 완전히 대체.
 
 ## 코덱스 fork 패치 위치
 
