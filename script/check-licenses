@@ -2,8 +2,7 @@
 
 set -euo pipefail
 
-AGPL_CRATES=("collab")
-RELEASE_CRATES=("cli" "remote_server" "zed")
+AGPL_CRATES=()
 
 check_symlink_target () {
     local symlink_path="$1"
@@ -68,21 +67,6 @@ check_license () {
 
 git ls-files "**/*/Cargo.toml" | while read -r cargo_toml; do
    check_license "$(dirname "$cargo_toml")"
-done
-
-
-# Make sure the AGPL server crates are included in the release tarball.
-for release_crate in "${RELEASE_CRATES[@]}"; do
-    tree_output=$(cargo tree --package "$release_crate")
-    for agpl_crate in "${AGPL_CRATES[@]}"; do
-        # Look for lines that contain the crate name followed by " v" (version)
-        # This matches patterns like "├── collab v0.44.0"
-        if echo "$tree_output" | grep -E "(^|[^a-zA-Z_])${agpl_crate} v" > /dev/null; then
-            echo "Error: crate '${agpl_crate}' is AGPL and is a dependency of crate '${release_crate}'." >&2
-            echo "AGPL licensed code should not be used in the release distribution, only in servers." >&2
-            exit 1
-        fi
-    done
 done
 
 echo "check-licenses succeeded"

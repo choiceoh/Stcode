@@ -8,6 +8,8 @@ This repository intentionally imported Zed 1.0 broadly, then started removing wh
 - Replaced upstream Zed contributor guidance with Stcode-specific contribution notes.
 - Removed imported Zed documentation, website, cloud, release, extension sample, and public infrastructure files.
 - Removed sample extension crates and upstream `xtask`/compliance tooling from the Cargo workspace.
+- Documented that the editor runtime stays as the AI-agent workbench.
+- Removed the hosted Zed collaboration server crate, standalone eval/import/benchmark CLIs, and upstream operational scripts that do not support Stcode.
 
 ## Keep For Now
 
@@ -17,6 +19,12 @@ This repository intentionally imported Zed 1.0 broadly, then started removing wh
 - `terminal`, `terminal_view`, `task`
 - `language_model` and provider crates
 - GPUI, UI, component, theme, asset, and platform crates
+
+## Editor Decision
+
+Keep the editor runtime. The user should not have to operate a traditional code editor, but AI agents still need one. The editor gives agents real buffers, cursor and selection behavior, diagnostics, search, diffs, terminal-adjacent context, and review surfaces. Stcode should remove the broad Zed IDE shell around that engine, not the editing engine itself.
+
+That means `editor`, `ui_input`, `multi_buffer`, `text`, `rope`, project/worktree state, Git, terminal, task execution, and agent UI stay in the core pruning set. Panels and flows that only serve a human power-user IDE can move out after a Stcode app shell exists.
 
 ## Next Removal Passes
 
@@ -36,11 +44,11 @@ cargo check -p agent_ui
 
 ## Measured Code Shape
 
-After the first repository cleanup:
+After the second repository cleanup:
 
-- workspace packages: 234
+- workspace packages: 223
 - workspace packages in the `agent_ui` normal dependency closure: 141
-- workspace packages outside that closure: 93
+- workspace packages outside that closure: 82
 
 The outside-closure group includes obvious future removal candidates, but also the current Zed binary entrypoint and platform/app-shell crates. Do not delete that group blindly. The safer order is:
 
@@ -52,7 +60,7 @@ The outside-closure group includes obvious future removal candidates, but also t
 High-signal outside-closure candidates to inspect next:
 
 - broad IDE panels: `project_panel`, `outline_panel`, `markdown_preview`, `keymap_editor`, `settings_ui`, `theme_selector`
-- upstream operational tools: `auto_update_helper`, `auto_update_ui`, `crashes`, `install_cli`, `docs_preprocessor`, `extension_cli`
+- upstream operational tools: `auto_update_helper`, `auto_update_ui`, `crashes`, `install_cli`
 - language/extension breadth: `languages`, `language_tools`, `language_selector`, `zed_extension_api`
 - app-shell surfaces: `zed`, `activity_indicator`, `command_palette`, `title_bar`, `sidebar`, `which_key`
-- benchmarks and diagnostics: `project_benchmarks`, `worktree_benchmarks`, `fs_benchmarks`, `input_latency_ui`, `miniprofiler_ui`
+- diagnostics and instrumentation: `input_latency_ui`, `miniprofiler_ui`

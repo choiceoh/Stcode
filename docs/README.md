@@ -22,6 +22,8 @@ Keep the pieces that make the experience high quality:
 - `workspace`, `project`, `worktree`, `git`, and `terminal` for actual implementation capability
 - GPUI, theme, component, assets, and platform crates needed to render the app well
 
+The editor is kept because AI agents need it even when the user does not. Stcode should hide unnecessary editor complexity from the user, but retain real editing machinery for agent work, review, diagnostics, search, and diff context.
+
 ## What To Remove First
 
 Remove upstream material that does not help Stcode's user:
@@ -29,6 +31,7 @@ Remove upstream material that does not help Stcode's user:
 - Zed website documentation
 - release and distribution automation
 - Cloudflare, Nix, Docker, sponsorship, and public-community operations
+- hosted Zed collaboration server and deployment tooling
 - sample extensions
 - broad IDE panels that are not part of the non-coder multi-agent workflow
 
