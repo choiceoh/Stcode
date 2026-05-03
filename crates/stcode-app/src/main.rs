@@ -78,9 +78,12 @@ struct LastCommit {
 enum ChatItem {
     Message {
         who: Speaker,
+        /// Streaming 중인 raw 텍스트 — turn 끝나기 전엔 이걸 그대로 렌더.
         text: Entity<SelectableText>,
         /// Agent 메시지의 reasoning(별도 회색 영역). None이면 표시 안 함.
         reasoning: Option<Entity<SelectableText>>,
+        /// turn이 끝나면 markdown 파싱해서 채움. Some이면 segments를 렌더 — text 무시.
+        segments: Option<Vec<MessageSegment>>,
     },
     Tool {
         item_id: String,
@@ -88,6 +91,18 @@ enum ChatItem {
         title: String,
         output: Entity<SelectableText>,
         status: ToolStatus,
+    },
+}
+
+/// Markdown 파싱된 한 조각. v1엔 fenced code block만 분리. inline code/list/heading
+/// 은 다음 단계.
+enum MessageSegment {
+    /// 일반 텍스트 (줄바꿈 포함).
+    Plain(Entity<SelectableText>),
+    /// fenced code block. ```language\n...\n``` 의 안쪽 내용. mono font + 다른 bg.
+    Code {
+        body: Entity<SelectableText>,
+        language: Option<String>,
     },
 }
 
@@ -107,6 +122,7 @@ impl ChatItem {
             who,
             text: entity,
             reasoning: None,
+            segments: None,
         }
     }
 
@@ -435,12 +451,19 @@ impl MainView {
                 } else {
                     None
                 };
-                self.with_session(&session_id, |s| {
-                    s.turn_in_flight = false;
-                    if let Some(m) = err_msg {
-                        s.messages.push(m);
+                if let Screen::Workspace(ws) = &mut self.screen {
+                    if let Some(s) = ws.sessions.get_mut(&session_id) {
+                        s.turn_in_flight = false;
+                        if let Some(m) = err_msg {
+                            s.messages.push(m);
+                        }
+                        // turn 성공 시: 마지막 agent message에 markdown 파싱해서 segments 채움.
+                        // streaming 끝나서 raw text 완성된 시점이라 안전.
+                        if ok {
+                            finalize_last_agent_message_markdown(s, cx);
+                        }
                     }
-                });
+                }
                 self.mark_unread_if_inactive(&session_id);
             }
             UiEvent::TurnCommitted {
@@ -891,7 +914,8 @@ fn render_chat_item(t: &theme::Tokens, item: &ChatItem) -> gpui::Div {
             who,
             text,
             reasoning,
-        } => render_message(t, *who, text.clone(), reasoning.clone()),
+            segments,
+        } => render_message(t, *who, text.clone(), reasoning.clone(), segments.as_deref()),
         ChatItem::Tool {
             kind,
             title,
@@ -907,6 +931,7 @@ fn render_message(
     who: Speaker,
     text: Entity<SelectableText>,
     reasoning: Option<Entity<SelectableText>>,
+    segments: Option<&[MessageSegment]>,
 ) -> gpui::Div {
     let (icon, bubble_bg) = match who {
         Speaker::User => ("🧑", 0x2a3050),
@@ -929,20 +954,66 @@ fn render_message(
                 .child(r),
         );
     }
-    body = body.child(
-        div()
-            .px_3()
-            .py_2()
-            .bg(rgb(bubble_bg))
-            .rounded_md()
-            .child(text),
-    );
+    // segments가 채워졌으면(turn 끝나서 markdown 파싱됨) segments를 렌더, 아니면
+    // streaming 중이라 raw text 그대로.
+    if let Some(segs) = segments {
+        for seg in segs {
+            body = body.child(render_segment(t, seg, bubble_bg));
+        }
+    } else {
+        body = body.child(
+            div()
+                .px_3()
+                .py_2()
+                .bg(rgb(bubble_bg))
+                .rounded_md()
+                .child(text),
+        );
+    }
     div()
         .flex()
         .gap_2()
         .items_start()
         .child(div().w_6().mt_1().child(icon))
         .child(body)
+}
+
+fn render_segment(t: &theme::Tokens, seg: &MessageSegment, bubble_bg: u32) -> gpui::Div {
+    match seg {
+        MessageSegment::Plain(entity) => div()
+            .px_3()
+            .py_2()
+            .bg(rgb(bubble_bg))
+            .rounded_md()
+            .child(entity.clone()),
+        MessageSegment::Code { body, language } => {
+            // 코드 블록: mono font + 어두운 bg + 옅은 라벨 (language). language는 부모
+            // div에 .font_family로 걸면 SelectableText가 자동 상속.
+            let mut card = div()
+                .flex()
+                .flex_col()
+                .gap_1()
+                .px_3()
+                .py_2()
+                .bg(rgb(0x10141a))
+                .border_1()
+                .border_color(rgb(0x2a3a4a))
+                .rounded_md();
+            if let Some(lang) = language {
+                if !lang.is_empty() {
+                    card = card.child(
+                        div()
+                            .text_xs()
+                            .text_color(rgb(t.muted))
+                            .child(lang.clone()),
+                    );
+                }
+            }
+            card.font_family("Menlo")
+                .text_color(rgb(0xc0d8e8))
+                .child(body.clone())
+        }
+    }
 }
 
 fn render_tool_card(
@@ -1110,6 +1181,103 @@ fn approval_button(
         .text_sm()
         .child(label)
         .on_mouse_down(MouseButton::Left, on_click)
+}
+
+// ─── Markdown ───────────────────────────────────────────
+
+/// 세션의 마지막 agent message에 markdown 파싱한 segments를 채운다.
+/// 이미 채워졌거나 ``` 코드블록이 없으면 no-op.
+fn finalize_last_agent_message_markdown(s: &mut SessionUiState, cx: &mut Context<MainView>) {
+    let Some(item) = s.messages.iter_mut().rev().find(|m| {
+        matches!(
+            m,
+            ChatItem::Message {
+                who: Speaker::Agent,
+                ..
+            }
+        )
+    }) else {
+        return;
+    };
+    let ChatItem::Message {
+        text, segments, ..
+    } = item
+    else {
+        return;
+    };
+    if segments.is_some() {
+        return;
+    }
+    // raw text 추출 — read는 immut borrow, scope 끝내고 cx.new로 mut.
+    let raw = text.read(cx).content().to_string();
+    if !raw.contains("```") {
+        return;
+    }
+    let parsed = parse_markdown_segments(&raw, cx);
+    *segments = Some(parsed);
+}
+
+/// `raw`를 fenced code block 기준으로 Plain/Code 세그먼트로 자른다.
+/// v1엔 ``` 만 인식. inline code/list/heading 은 다음 단계.
+fn parse_markdown_segments(raw: &str, cx: &mut Context<MainView>) -> Vec<MessageSegment> {
+    let mut segments: Vec<MessageSegment> = Vec::new();
+    let mut buf = String::new();
+    let mut in_code = false;
+    let mut code_lang: Option<String> = None;
+
+    let push_plain = |buf: &mut String,
+                      segs: &mut Vec<MessageSegment>,
+                      cx: &mut Context<MainView>| {
+        if buf.trim().is_empty() {
+            buf.clear();
+            return;
+        }
+        let text = buf.trim_end_matches('\n').to_string();
+        let entity = cx.new(|cx| SelectableText::new(text, theme::TOKENS.fg, cx));
+        segs.push(MessageSegment::Plain(entity));
+        buf.clear();
+    };
+
+    let push_code = |buf: &mut String,
+                     lang: &mut Option<String>,
+                     segs: &mut Vec<MessageSegment>,
+                     cx: &mut Context<MainView>| {
+        let body_text = buf.trim_end_matches('\n').to_string();
+        let entity = cx.new(|cx| SelectableText::new(body_text, 0xc0d8e8, cx));
+        segs.push(MessageSegment::Code {
+            body: entity,
+            language: lang.take(),
+        });
+        buf.clear();
+    };
+
+    for line in raw.split_inclusive('\n') {
+        let trimmed = line.trim_end_matches('\n').trim_end_matches('\r');
+        // 줄 시작이 ``` (옵션 language) — fence
+        if let Some(rest) = trimmed.strip_prefix("```") {
+            if in_code {
+                push_code(&mut buf, &mut code_lang, &mut segments, cx);
+                in_code = false;
+            } else {
+                push_plain(&mut buf, &mut segments, cx);
+                let lang = rest.trim().to_string();
+                code_lang = if lang.is_empty() { None } else { Some(lang) };
+                in_code = true;
+            }
+            continue;
+        }
+        buf.push_str(line);
+    }
+
+    // 끝: 남은 buffer flush.
+    if in_code {
+        // 미닫힌 code block — 그래도 code로 처리.
+        push_code(&mut buf, &mut code_lang, &mut segments, cx);
+    } else {
+        push_plain(&mut buf, &mut segments, cx);
+    }
+
+    segments
 }
 
 // ─── ChatItem 헬퍼 ──────────────────────────────────────
