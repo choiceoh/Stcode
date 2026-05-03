@@ -1,10 +1,10 @@
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use gpui::{
-    div, prelude::*, px, rgb, rgba, size, App, Bounds, Context, Entity, IntoElement, MouseButton,
-    MouseDownEvent, ParentElement, Render, ScrollHandle, SharedString, Styled, Window, WindowBounds,
-    WindowOptions,
+    App, Bounds, Context, Entity, FontWeight, IntoElement, MouseButton, MouseDownEvent,
+    ParentElement, Render, ScrollHandle, SharedString, Styled, Window, WindowBounds, WindowOptions,
+    div, prelude::*, px, rgb, rgba, size,
 };
 use gpui_platform::application;
 
@@ -17,7 +17,7 @@ use selectable_text::{InlineKind, InlineSpan, SelectableText};
 use stcode_codex::bridge::{
     ApprovalDecision, Bridge, SessionId, ToolKind, UiCommand, UiEvent, WorkspaceMode,
 };
-use stcode_vibe::{friendly_translate, settings, Settings};
+use stcode_vibe::{AgentModelRole, Settings, friendly_translate, settings};
 
 // ─── 화면 / 상태 ──────────────────────────────────────────
 
@@ -54,11 +54,26 @@ struct SessionUiState {
     scroll: ScrollHandle,
 }
 
+#[derive(Default)]
+struct SessionSummary {
+    user_turns: usize,
+    agent_messages: usize,
+    tools_running: usize,
+    tools_ok: usize,
+    tools_failed: usize,
+}
+
 impl SessionUiState {
     fn new(project: PathBuf, cx: &mut Context<MainView>) -> Self {
         let intro = ChatItem::message(Speaker::System, "세션을 여는 중…", cx);
-        let input =
-            cx.new(|cx| ChatInput::new("무엇을 만들까요?", theme::TOKENS.fg, theme::TOKENS.muted, cx));
+        let input = cx.new(|cx| {
+            ChatInput::new(
+                "후속 변경 사항을 부탁하세요",
+                theme::TOKENS.fg,
+                theme::TOKENS.muted,
+                cx,
+            )
+        });
         Self {
             project,
             messages: vec![intro],
@@ -113,9 +128,7 @@ enum MessageSegment {
         body: Entity<SelectableText>,
     },
     /// `- item` 또는 `* item`. body는 bullet 제외한 본문.
-    ListItem {
-        body: Entity<SelectableText>,
-    },
+    ListItem { body: Entity<SelectableText> },
     /// fenced code block. ```language\n...\n``` 의 안쪽 내용. mono font + 다른 bg.
     Code {
         body: Entity<SelectableText>,
@@ -178,10 +191,11 @@ struct PendingApproval {
     raw_detail: String,
 }
 
-/// 설정 모달이 떠 있을 때의 임시 입력 상태. ChatInput 두 개 (provider, model).
+/// 설정 모달이 떠 있을 때의 임시 입력 상태.
 struct SettingsDraft {
     provider: Entity<ChatInput>,
-    model: Entity<ChatInput>,
+    main_model: Entity<ChatInput>,
+    sub_model: Entity<ChatInput>,
     /// 저장 후 잠깐 보여줄 안내 (Some(text), 자동 사라짐 없음 — 닫을 때 None).
     notice: Option<String>,
 }
@@ -219,20 +233,27 @@ impl MainView {
 
     fn open_settings(&mut self, cx: &mut Context<Self>) {
         let provider_text = self.settings.provider.clone();
-        let model_text = self.settings.model.clone();
+        let main_model_text = self.settings.main_model.clone();
+        let sub_model_text = self.settings.sub_model.clone();
         let provider = cx.new(|cx| {
             let mut ci = ChatInput::new("provider 이름", theme::TOKENS.fg, theme::TOKENS.muted, cx);
             ci.set_content(provider_text, cx);
             ci
         });
-        let model = cx.new(|cx| {
-            let mut ci = ChatInput::new("model 식별자", theme::TOKENS.fg, theme::TOKENS.muted, cx);
-            ci.set_content(model_text, cx);
+        let main_model = cx.new(|cx| {
+            let mut ci = ChatInput::new("조율 모델", theme::TOKENS.fg, theme::TOKENS.muted, cx);
+            ci.set_content(main_model_text, cx);
+            ci
+        });
+        let sub_model = cx.new(|cx| {
+            let mut ci = ChatInput::new("작업 모델", theme::TOKENS.fg, theme::TOKENS.muted, cx);
+            ci.set_content(sub_model_text, cx);
             ci
         });
         self.settings_draft = Some(SettingsDraft {
             provider,
-            model,
+            main_model,
+            sub_model,
             notice: None,
         });
         cx.notify();
@@ -248,15 +269,22 @@ impl MainView {
             return;
         };
         let provider = d.provider.read(cx).content().trim().to_string();
-        let model = d.model.read(cx).content().trim().to_string();
-        if provider.is_empty() || model.is_empty() {
+        let main_model = d.main_model.read(cx).content().trim().to_string();
+        let sub_model = d.sub_model.read(cx).content().trim().to_string();
+        if provider.is_empty() || main_model.is_empty() || sub_model.is_empty() {
             if let Some(d) = self.settings_draft.as_mut() {
-                d.notice = Some("provider 와 model 모두 입력해 주세요".into());
+                d.notice = Some("provider, 조율 모델, 작업 모델을 모두 입력해 주세요".into());
             }
             cx.notify();
             return;
         }
-        let new_settings = Settings { provider, model };
+        let new_settings = Settings {
+            provider,
+            model: main_model.clone(),
+            main_model,
+            sub_model,
+            recent_projects: self.settings.recent_projects.clone(),
+        };
         match settings::save(&new_settings) {
             Ok(()) => {
                 self.settings = new_settings;
@@ -291,7 +319,21 @@ impl MainView {
         .detach();
     }
 
+    fn open_recent_project(&mut self, path: String, cx: &mut Context<Self>) {
+        let path = PathBuf::from(path);
+        if !path.is_dir() {
+            self.notice = Some(format!(
+                "최근 프로젝트를 찾을 수 없어요\n{}",
+                path.to_string_lossy()
+            ));
+            cx.notify();
+            return;
+        }
+        self.add_new_session(path, cx);
+    }
+
     fn add_new_session(&mut self, path: PathBuf, cx: &mut Context<Self>) {
+        self.remember_recent_project(&path);
         // Welcome → Workspace 전환 또는 기존 Workspace에 추가.
         if matches!(self.screen, Screen::Welcome) {
             self.screen = Screen::Workspace(WorkspaceState {
@@ -314,9 +356,23 @@ impl MainView {
             session_id,
             path,
             provider: self.settings.provider.clone(),
-            model: self.settings.model.clone(),
+            main_model: self
+                .settings
+                .model_for_role(AgentModelRole::Main)
+                .to_string(),
+            sub_model: self
+                .settings
+                .model_for_role(AgentModelRole::Sub)
+                .to_string(),
         });
         cx.notify();
+    }
+
+    fn remember_recent_project(&mut self, path: &Path) {
+        self.settings.remember_recent_project(path);
+        if let Err(e) = settings::save(&self.settings) {
+            tracing::warn!("최근 프로젝트 저장 실패: {e}");
+        }
     }
 
     fn set_active(&mut self, sid: SessionId, cx: &mut Context<Self>) {
@@ -343,7 +399,9 @@ impl MainView {
                 self.screen = Screen::Welcome;
             }
         }
-        let _ = self.cmd_tx.send(UiCommand::CloseSession { session_id: sid });
+        let _ = self
+            .cmd_tx
+            .send(UiCommand::CloseSession { session_id: sid });
         cx.notify();
     }
 
@@ -371,7 +429,9 @@ impl MainView {
             return;
         }
         s.last_commit = None;
-        let _ = self.cmd_tx.send(UiCommand::RevertLastTurn { session_id: sid });
+        let _ = self
+            .cmd_tx
+            .send(UiCommand::RevertLastTurn { session_id: sid });
         cx.notify();
     }
 
@@ -387,10 +447,15 @@ impl MainView {
             return;
         }
         s.interrupt_requested = true;
-        s.messages
-            .push(ChatItem::message(Speaker::System, "중단 요청을 보냈어요", cx));
+        s.messages.push(ChatItem::message(
+            Speaker::System,
+            "중단 요청을 보냈어요",
+            cx,
+        ));
         s.scroll.scroll_to_bottom();
-        let _ = self.cmd_tx.send(UiCommand::InterruptTurn { session_id: sid });
+        let _ = self
+            .cmd_tx
+            .send(UiCommand::InterruptTurn { session_id: sid });
         cx.notify();
     }
 
@@ -399,7 +464,9 @@ impl MainView {
             return;
         };
         let Some(sid) = ws.active.clone() else { return };
-        let Some(s) = ws.sessions.get(&sid) else { return };
+        let Some(s) = ws.sessions.get(&sid) else {
+            return;
+        };
         if !s.thread_started || s.turn_in_flight {
             return;
         }
@@ -440,11 +507,8 @@ impl MainView {
                 thread_id: _,
                 workspace_mode,
             } => {
-                let intro = ChatItem::message(
-                    Speaker::System,
-                    session_started_message(workspace_mode),
-                    cx,
-                );
+                let intro =
+                    ChatItem::message(Speaker::System, session_started_message(workspace_mode), cx);
                 self.with_session(&session_id, |s| {
                     s.thread_started = true;
                     s.messages.clear();
@@ -453,11 +517,8 @@ impl MainView {
             }
             UiEvent::SessionFailed { session_id, error } => {
                 let friendly = friendly_translate(&error);
-                let m = ChatItem::message(
-                    Speaker::System,
-                    format!("세션 시작 실패\n{friendly}"),
-                    cx,
-                );
+                let m =
+                    ChatItem::message(Speaker::System, format!("세션 시작 실패\n{friendly}"), cx);
                 self.with_session(&session_id, |s| s.messages.push(m));
             }
             UiEvent::SessionClosed { session_id } => {
@@ -638,11 +699,7 @@ impl MainView {
                 } else {
                     let raw = error_text.unwrap_or_default();
                     let friendly = friendly_translate(&raw);
-                    ChatItem::message(
-                        Speaker::System,
-                        format!("되돌리기 실패\n{friendly}"),
-                        cx,
-                    )
+                    ChatItem::message(Speaker::System, format!("되돌리기 실패\n{friendly}"), cx)
                 };
                 self.with_session(&session_id, |s| s.messages.push(m));
             }
@@ -689,10 +746,12 @@ impl MainView {
 impl Render for MainView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let t = &theme::TOKENS;
-        let chips_model = self.settings.model.clone();
+        let display_model = "5.5 매우 높음";
         let body = match &self.screen {
-            Screen::Welcome => render_welcome(t, cx),
-            Screen::Workspace(ws) => render_workspace(t, ws, &chips_model, cx),
+            Screen::Welcome => render_welcome(t, display_model, &self.settings.recent_projects, cx),
+            Screen::Workspace(ws) => {
+                render_workspace(t, ws, display_model, &self.settings.recent_projects, cx)
+            }
         };
         let approval_modal = self
             .pending_approval
@@ -713,6 +772,8 @@ impl Render for MainView {
             .size_full()
             .bg(rgb(t.bg))
             .text_color(rgb(t.fg))
+            .text_size(px(14.))
+            .line_height(px(20.))
             .on_action(cx.listener(|this, _: &chat_input::Submit, _, cx| this.send_user_input(cx)))
             .child(body)
             .when_some(approval_modal, |d, m| d.child(m))
@@ -730,35 +791,194 @@ fn session_started_message(workspace_mode: WorkspaceMode) -> &'static str {
     }
 }
 
-fn render_welcome(t: &theme::Tokens, cx: &mut Context<MainView>) -> gpui::Div {
+#[cfg(test)]
+fn model_route_label(settings: &Settings) -> String {
+    let main = settings.model_for_role(AgentModelRole::Main);
+    let sub = settings.model_for_role(AgentModelRole::Sub);
+    if main == sub {
+        format!("조율/작업 {main}")
+    } else {
+        format!("조율 {main} · 작업 {sub}")
+    }
+}
+
+fn render_welcome(
+    t: &theme::Tokens,
+    chips_model: &str,
+    recent_projects: &[String],
+    cx: &mut Context<MainView>,
+) -> gpui::Div {
+    div()
+        .flex()
+        .flex_row()
+        .size_full()
+        .bg(rgb(t.bg))
+        .child(render_welcome_sidebar(t, recent_projects, cx))
+        .child(render_welcome_main(t, chips_model, recent_projects, cx))
+}
+
+fn render_welcome_sidebar(
+    t: &theme::Tokens,
+    recent_projects: &[String],
+    cx: &mut Context<MainView>,
+) -> gpui::Div {
+    let new_session_btn = sidebar_action_row(
+        t,
+        "+",
+        "새 작업",
+        cx.listener(|this, _, _, cx| this.open_folder(cx)),
+    )
+    .bg(rgb(t.sidebar_active));
+    let settings_btn = sidebar_action_row(
+        t,
+        "",
+        "설정",
+        cx.listener(|this, _, _, cx| this.open_settings(cx)),
+    );
+
     div()
         .flex()
         .flex_col()
-        .size_full()
-        .items_center()
-        .justify_center()
-        .gap_8()
-        .child(div().text_2xl().child("🚀 Stcode"))
+        .w(px(248.))
+        .h_full()
+        .bg(rgb(t.sidebar))
+        .border_r_1()
+        .border_color(rgb(t.border))
+        .child(sidebar_brand(t))
+        .child(
+            div()
+                .flex()
+                .flex_col()
+                .gap_1()
+                .px_2()
+                .pb_4()
+                .child(new_session_btn),
+        )
+        .child(render_recent_project_section(t, recent_projects, cx))
+        .child(div().flex_1())
+        .child(render_sidebar_safety_section(t))
+        .child(settings_btn)
+}
+
+fn render_welcome_main(
+    t: &theme::Tokens,
+    chips_model: &str,
+    recent_projects: &[String],
+    cx: &mut Context<MainView>,
+) -> gpui::Div {
+    div()
+        .flex()
+        .flex_col()
+        .flex_1()
+        .h_full()
+        .bg(rgb(t.bg))
+        .child(
+            div()
+                .flex()
+                .h(px(50.))
+                .px_4()
+                .items_center()
+                .border_b_1()
+                .border_color(rgb(t.border))
+                .child(top_bar_title(t, "새 작업"))
+                .child(div().flex_1())
+                .child(top_bar_controls(t, chips_model)),
+        )
+        .child(
+            div()
+                .flex()
+                .flex_col()
+                .flex_1()
+                .items_center()
+                .justify_end()
+                .gap_3()
+                .px_5()
+                .pb_5()
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .items_center()
+                        .gap_2()
+                        .mb_3()
+                        .child(
+                            div()
+                                .text_xl()
+                                .font_weight(FontWeight::MEDIUM)
+                                .text_color(rgb(t.fg))
+                                .child("무엇을 만들까요?"),
+                        )
+                        .child(
+                            div()
+                                .text_sm()
+                                .text_color(rgb(t.muted))
+                                .child("새 작업 준비됨"),
+                        ),
+                )
+                .when(!recent_projects.is_empty(), |d| {
+                    d.child(render_recent_projects_panel(t, recent_projects, cx))
+                })
+                .child(welcome_composer(t, chips_model, cx)),
+        )
+}
+
+fn welcome_composer(t: &theme::Tokens, chips_model: &str, cx: &mut Context<MainView>) -> gpui::Div {
+    div()
+        .flex()
+        .flex_col()
+        .gap_2()
+        .w_full()
+        .max_w(px(800.))
+        .min_h(px(84.))
+        .px_4()
+        .py_2()
+        .bg(rgb(t.surface))
+        .border_1()
+        .border_color(rgb(t.border))
+        .rounded_lg()
+        .cursor_pointer()
+        .hover(|d| d.border_color(rgb(0xc8c8cc)))
         .child(
             div()
                 .text_sm()
                 .text_color(rgb(t.muted))
-                .child("자연어로 시키면 코드를 만들어드려요"),
+                .child("작업할 프로젝트를 선택하세요"),
         )
         .child(
             div()
-                .px_8()
-                .py_4()
-                .bg(rgb(t.surface))
-                .rounded_md()
-                .border_1()
-                .border_color(rgb(t.accent))
-                .cursor_pointer()
-                .child("📁  폴더 열기")
-                .on_mouse_down(
-                    MouseButton::Left,
-                    cx.listener(|this, _, _, cx| this.open_folder(cx)),
-                ),
+                .flex()
+                .items_center()
+                .gap_3()
+                .child(composer_icon_button(t, "+"))
+                .child(permission_chip(t))
+                .child(div().flex_1())
+                .child(chip_owned(t, chips_model.to_string()))
+                .child(send_circle("↑", 0x8a8a8f, true)),
+        )
+        .on_mouse_down(
+            MouseButton::Left,
+            cx.listener(|this, _, _, cx| this.open_folder(cx)),
+        )
+}
+
+fn render_recent_projects_panel(
+    t: &theme::Tokens,
+    recent_projects: &[String],
+    cx: &mut Context<MainView>,
+) -> gpui::Div {
+    div()
+        .flex()
+        .flex_col()
+        .gap_1()
+        .w_full()
+        .max_w(px(760.))
+        .child(section_label("최근 프로젝트"))
+        .children(
+            recent_projects
+                .iter()
+                .take(4)
+                .cloned()
+                .map(|path| render_recent_project_row(t, path, true, cx)),
         )
 }
 
@@ -766,13 +986,14 @@ fn render_workspace(
     t: &theme::Tokens,
     ws: &WorkspaceState,
     chips_model: &str,
+    recent_projects: &[String],
     cx: &mut Context<MainView>,
 ) -> gpui::Div {
     div()
         .flex()
         .flex_row()
         .size_full()
-        .child(render_sidebar(t, ws, cx))
+        .child(render_sidebar(t, ws, recent_projects, cx))
         .child(render_active_main(t, ws, chips_model, cx))
 }
 
@@ -780,6 +1001,7 @@ fn render_workspace(
 fn render_sidebar(
     t: &theme::Tokens,
     ws: &WorkspaceState,
+    recent_projects: &[String],
     cx: &mut Context<MainView>,
 ) -> gpui::Div {
     let items: Vec<gpui::Div> = ws
@@ -787,76 +1009,258 @@ fn render_sidebar(
         .iter()
         .filter_map(|sid| {
             let s = ws.sessions.get(sid)?;
-            Some(render_session_item(t, sid.clone(), s, ws.active.as_ref() == Some(sid), cx))
+            Some(render_session_item(
+                t,
+                sid.clone(),
+                s,
+                ws.active.as_ref() == Some(sid),
+                cx,
+            ))
         })
         .collect();
 
-    let new_session_btn = div()
-        .flex()
-        .gap_2()
-        .items_center()
-        .px_3()
-        .py_2()
-        .text_sm()
-        .text_color(rgb(t.muted))
-        .cursor_pointer()
-        .hover(|d| d.bg(rgb(t.sidebar_active)).text_color(rgb(t.fg)))
-        .child(div().w_4().text_xs().child("+"))
-        .child(div().flex_1().child("새 세션"))
-        .on_mouse_down(
-            MouseButton::Left,
-            cx.listener(|this, _, _, cx| this.open_folder(cx)),
-        );
-
-    let settings_btn = div()
-        .flex()
-        .gap_2()
-        .items_center()
-        .px_3()
-        .py_2()
-        .text_sm()
-        .text_color(rgb(t.muted))
-        .cursor_pointer()
-        .border_t_1()
-        .border_color(rgb(t.border))
-        .hover(|d| d.bg(rgb(t.sidebar_active)).text_color(rgb(t.fg)))
-        .child(div().w_4().text_xs().child("⚙"))
-        .child(div().flex_1().child("설정"))
-        .on_mouse_down(
-            MouseButton::Left,
-            cx.listener(|this, _, _, cx| this.open_settings(cx)),
-        );
+    let new_session_btn = sidebar_action_row(
+        t,
+        "+",
+        "새 작업",
+        cx.listener(|this, _, _, cx| this.open_folder(cx)),
+    );
+    let settings_btn = sidebar_action_row(
+        t,
+        "",
+        "설정",
+        cx.listener(|this, _, _, cx| this.open_settings(cx)),
+    );
 
     div()
         .flex()
         .flex_col()
-        .w(px(220.))
+        .w(px(248.))
         .h_full()
         .bg(rgb(t.sidebar))
         .border_r_1()
         .border_color(rgb(t.border))
+        .child(sidebar_brand(t))
         .child(
             div()
                 .flex()
-                .h_10()
+                .flex_col()
+                .gap_1()
+                .px_2()
+                .pb_4()
+                .child(new_session_btn),
+        )
+        .child(render_recent_project_section(t, recent_projects, cx))
+        .child(
+            div()
                 .px_4()
-                .items_center()
-                .border_b_1()
-                .border_color(rgb(t.border))
-                .text_sm()
+                .pt_3()
+                .pb_1()
+                .text_xs()
+                .text_color(rgb(0xa0a0a6))
+                .child("작업 세션"),
+        )
+        .child(
+            div()
+                .id("session-list")
+                .flex()
+                .flex_col()
+                .flex_1()
+                .gap_1()
+                .px_2()
+                .overflow_y_scroll()
+                .children(items),
+        )
+        .child(render_sidebar_safety_section(t))
+        .child(settings_btn)
+}
+
+fn sidebar_brand(t: &theme::Tokens) -> gpui::Div {
+    div()
+        .flex()
+        .h(px(50.))
+        .px_4()
+        .items_center()
+        .gap_2()
+        .text_size(px(15.))
+        .font_weight(FontWeight::MEDIUM)
+        .text_color(rgb(t.fg))
+        .child("Stcode")
+}
+
+fn top_bar_title(t: &theme::Tokens, title: &'static str) -> gpui::Div {
+    div().flex().items_center().gap_2().child(
+        div()
+            .text_size(px(14.))
+            .font_weight(FontWeight::MEDIUM)
+            .text_color(rgb(t.fg))
+            .child(title),
+    )
+}
+
+fn sidebar_action_row(
+    t: &theme::Tokens,
+    icon: &'static str,
+    label: &'static str,
+    on_click: impl Fn(&MouseDownEvent, &mut Window, &mut App) + 'static,
+) -> gpui::Div {
+    div()
+        .flex()
+        .gap_2()
+        .items_center()
+        .mx_2()
+        .px_2()
+        .py_1()
+        .text_color(rgb(t.fg))
+        .rounded_lg()
+        .cursor_pointer()
+        .hover(|d| d.bg(rgb(t.sidebar_active)))
+        .child(
+            div()
+                .w(px(18.))
+                .text_xs()
                 .text_color(rgb(t.muted))
-                .child("🚀 Stcode"),
+                .child(icon),
+        )
+        .child(div().flex_1().text_size(px(14.)).child(label))
+        .on_mouse_down(MouseButton::Left, on_click)
+}
+
+fn render_recent_project_section(
+    t: &theme::Tokens,
+    recent_projects: &[String],
+    cx: &mut Context<MainView>,
+) -> gpui::Div {
+    let rows: Vec<gpui::Div> = recent_projects
+        .iter()
+        .take(5)
+        .cloned()
+        .map(|path| render_recent_project_row(t, path, false, cx))
+        .collect();
+    let body = if rows.is_empty() {
+        div()
+            .mx_2()
+            .px_2()
+            .py_1()
+            .text_xs()
+            .text_color(rgb(t.muted))
+            .child("최근 프로젝트 없음")
+    } else {
+        div().flex().flex_col().gap_1().children(rows)
+    };
+
+    div()
+        .flex()
+        .flex_col()
+        .gap_1()
+        .pb_4()
+        .child(section_label("프로젝트"))
+        .child(body)
+}
+
+fn render_sidebar_safety_section(t: &theme::Tokens) -> gpui::Div {
+    div()
+        .flex()
+        .flex_col()
+        .gap_1()
+        .pb_3()
+        .child(section_label("작업 안전망"))
+        .child(sidebar_status_row(t, "원본 폴더", "보호"))
+        .child(sidebar_status_row(t, "작업공간", "자동"))
+        .child(sidebar_status_row(t, "브랜치 정리", "자동"))
+}
+
+fn sidebar_status_row(t: &theme::Tokens, label: &'static str, value: &'static str) -> gpui::Div {
+    div()
+        .flex()
+        .items_center()
+        .gap_2()
+        .mx_2()
+        .px_2()
+        .py_1()
+        .rounded_lg()
+        .bg(rgb(0xf6f6f7))
+        .child(div().flex_1().text_xs().text_color(rgb(t.fg)).child(label))
+        .child(div().text_xs().text_color(rgb(t.muted)).child(value))
+}
+
+fn section_label(label: &'static str) -> gpui::Div {
+    div()
+        .px_4()
+        .pt_3()
+        .pb_1()
+        .text_xs()
+        .text_color(rgb(0xa0a0a6))
+        .child(label)
+}
+
+fn render_recent_project_row(
+    t: &theme::Tokens,
+    path: String,
+    roomy: bool,
+    cx: &mut Context<MainView>,
+) -> gpui::Div {
+    let label = project_display_name(&path);
+    let hint = project_parent_hint(&path);
+    let path_for_click = path.clone();
+    let row = div()
+        .flex()
+        .items_center()
+        .gap_2()
+        .rounded_lg()
+        .cursor_pointer()
+        .bg(rgb(if roomy { t.surface } else { t.sidebar }))
+        .hover(|d| d.bg(rgb(t.sidebar_active)))
+        .child(
+            div()
+                .w(px(16.))
+                .h(px(16.))
+                .rounded_md()
+                .border_1()
+                .border_color(rgb(t.muted)),
         )
         .child(
             div()
                 .flex()
                 .flex_col()
                 .flex_1()
-                .py_2()
-                .children(items)
-                .child(new_session_btn),
+                .overflow_hidden()
+                .child(
+                    div()
+                        .text_size(px(14.))
+                        .font_weight(FontWeight::MEDIUM)
+                        .text_color(rgb(t.fg))
+                        .child(label),
+                )
+                .child(div().text_xs().text_color(rgb(t.muted)).child(hint)),
         )
-        .child(settings_btn)
+        .child(div().text_xs().text_color(rgb(t.muted)).child("열기"))
+        .on_mouse_down(
+            MouseButton::Left,
+            cx.listener(move |this, _, _, cx| this.open_recent_project(path_for_click.clone(), cx)),
+        );
+
+    if roomy {
+        row.px_4().py_2().border_1().border_color(rgb(t.border))
+    } else {
+        row.mx_2().px_2().py_1()
+    }
+}
+
+fn project_display_name(path: &str) -> String {
+    Path::new(path)
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .filter(|name| !name.is_empty())
+        .unwrap_or_else(|| path.to_string())
+}
+
+fn project_parent_hint(path: &str) -> String {
+    Path::new(path)
+        .parent()
+        .map(|parent| parent.to_string_lossy().into_owned())
+        .filter(|parent| !parent.is_empty())
+        .unwrap_or_else(|| path.to_string())
 }
 
 fn render_session_item(
@@ -887,33 +1291,37 @@ fn render_session_item(
         .flex()
         .gap_2()
         .items_center()
-        .px_3()
-        .py_2()
+        .mx_2()
+        .px_2()
+        .py_1()
+        .rounded_lg()
         .bg(rgb(bg))
-        .text_sm()
         .text_color(rgb(t.fg))
         .cursor_pointer()
+        .hover(|d| d.bg(rgb(t.sidebar_active)))
         .child(
             div()
-                .w_4()
+                .w(px(16.))
                 .text_xs()
-                .text_color(rgb(t.muted))
+                .text_color(rgb(if s.turn_in_flight { t.accent } else { t.muted }))
                 .child(status_icon),
         )
         .child(
             div()
                 .flex_1()
                 .overflow_hidden()
-                .child(format!("📁 {project_label}")),
+                .text_size(px(14.))
+                .font_weight(FontWeight::MEDIUM)
+                .child(project_label),
         )
         .child(
             div()
-                .px_1()
+                .w(px(16.))
                 .text_xs()
                 .text_color(rgb(t.muted))
                 .cursor_pointer()
-                .hover(|d| d.text_color(rgb(0xe0a0a0)))
-                .child("✕")
+                .hover(|d| d.text_color(rgb(0xb43b3b)))
+                .child("×")
                 .on_mouse_down(
                     MouseButton::Left,
                     cx.listener(move |this, _ev: &MouseDownEvent, _, cx| {
@@ -926,7 +1334,7 @@ fn render_session_item(
             cx.listener(move |this, _, _, cx| this.set_active(sid_for_click.clone(), cx)),
         );
     if active {
-        row = row.border_l_2().border_color(rgb(t.accent));
+        row = row.text_color(rgb(0x111114));
     }
     row
 }
@@ -943,10 +1351,20 @@ fn render_active_main(
             .flex_1()
             .h_full()
             .flex()
+            .flex_col()
             .items_center()
             .justify_center()
+            .gap_2()
+            .bg(rgb(t.bg))
+            .child(
+                div()
+                    .text_lg()
+                    .font_weight(FontWeight::MEDIUM)
+                    .text_color(rgb(t.fg))
+                    .child("프로젝트를 열어 작업을 시작하세요"),
+            )
             .text_color(rgb(t.muted))
-            .child("열린 세션이 없어요. 사이드바의 + 새 세션을 눌러주세요.");
+            .child("왼쪽의 새 작업을 누르면 세션별 작업공간과 브랜치를 자동으로 준비합니다.");
     };
     let Some(s) = ws.sessions.get(&sid) else {
         return div().flex_1();
@@ -961,22 +1379,23 @@ fn render_chat_main(
     cx: &mut Context<MainView>,
 ) -> gpui::Div {
     let send_enabled = s.thread_started && !s.turn_in_flight;
-    let send_label = if s.turn_in_flight {
-        "⏳ 응답 중…"
-    } else {
-        "↵ 보내기"
-    };
-    let send_color = if send_enabled { t.accent } else { 0x555566 };
+    let send_label = if s.turn_in_flight { "…" } else { "↑" };
+    let send_color = if send_enabled { 0x8a8a8f } else { 0xd1d1d6 };
+    let project_label = s
+        .project
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| s.project.to_string_lossy().into_owned());
 
     let revert_btn = s.last_commit.as_ref().filter(|c| c.revertible).map(|c| {
-        let tooltip = format!("↶ 되돌리기 — {}", c.summary);
+        let tooltip = format!("되돌리기 · {}", c.summary);
         div()
             .px_3()
-            .py_1()
-            .bg(rgb(0x2a2030))
-            .text_color(rgb(0xe0c0d0))
+            .py_2()
+            .bg(rgb(0xf1f1f3))
+            .text_color(rgb(t.fg))
             .text_xs()
-            .rounded_md()
+            .rounded_lg()
             .cursor_pointer()
             .child(tooltip)
             .on_mouse_down(
@@ -987,20 +1406,24 @@ fn render_chat_main(
 
     let interrupt_btn = s.turn_in_flight.then(|| {
         let requested = s.interrupt_requested;
-        let label = if requested { "중단 요청됨" } else { "중단" };
-        let bg = if requested { 0x3a3440 } else { 0x4a2630 };
-        let fg = if requested { t.muted } else { 0xffb8c0 };
+        let label = if requested {
+            "중단 요청됨"
+        } else {
+            "중단"
+        };
+        let bg = if requested { 0xf1f1f3 } else { 0xffeee6 };
+        let fg = if requested { t.muted } else { t.accent };
         div()
             .px_3()
-            .py_1()
+            .py_2()
             .bg(rgb(bg))
             .text_color(rgb(fg))
             .text_xs()
-            .rounded_md()
+            .rounded_lg()
             .child(label)
             .when(!requested, |d| {
                 d.cursor_pointer()
-                    .hover(|d| d.bg(rgb(0x603040)))
+                    .hover(|d| d.bg(rgb(0xffe0d0)))
                     .on_mouse_down(
                         MouseButton::Left,
                         cx.listener(|this, _, _, cx| this.interrupt_active(cx)),
@@ -1021,105 +1444,405 @@ fn render_chat_main(
         .flex_col()
         .flex_1()
         .h_full()
+        .bg(rgb(t.bg))
         .child(
             div()
                 .flex()
-                .h_10()
+                .h(px(50.))
                 .px_4()
                 .items_center()
                 .gap_3()
-                .bg(rgb(t.surface))
+                .bg(rgb(0xfbfbfc))
                 .border_b_1()
                 .border_color(rgb(t.border))
                 .child(
                     div()
                         .flex_1()
-                        .text_sm()
-                        .text_color(rgb(t.muted))
-                        .child(status_label),
+                        .flex()
+                        .items_center()
+                        .gap_3()
+                        .child(
+                            div()
+                                .text_size(px(15.))
+                                .font_weight(FontWeight::MEDIUM)
+                                .text_color(rgb(t.fg))
+                                .child(project_label),
+                        )
+                        .child(status_pill(t, status_label)),
                 )
+                .child(top_bar_controls(t, chips_model))
                 .when_some(interrupt_btn, |d, b| d.child(b))
                 .when_some(revert_btn, |d, b| d.child(b)),
         )
         .child(
             div()
-                .id("messages")
                 .flex()
-                .flex_col()
                 .flex_1()
-                .gap_3()
-                .p_4()
-                .overflow_y_scroll()
-                .track_scroll(&s.scroll)
-                .children(s.messages.iter().map(|m| render_chat_item(t, m))),
-        )
-        .child(
-            div()
-                .flex()
-                .gap_2()
-                .px_4()
-                .py_2()
-                .bg(rgb(t.surface))
-                .border_t_1()
-                .border_color(rgb(t.border))
-                .child(chip_owned(t, format!("🤖 {chips_model}")))
-                .child(chip(t, "⚡ 자동 모드"))
-                .child(chip(t, "📂 작업 폴더 자유")),
-        )
-        .child(
-            div()
-                .flex()
-                .min_h_16()
-                .px_4()
-                .py_3()
-                .items_start()
-                .gap_3()
-                .bg(rgb(t.surface))
-                .border_t_1()
-                .border_color(rgb(t.border))
                 .child(
                     div()
+                        .flex()
+                        .flex_col()
                         .flex_1()
-                        .px_3()
-                        .py_2()
-                        .bg(rgb(t.bg))
-                        .border_1()
-                        .border_color(rgb(t.border))
-                        .rounded_md()
-                        .child(s.input.clone()),
+                        .h_full()
+                        .child(
+                            div()
+                                .id("messages")
+                                .flex()
+                                .flex_col()
+                                .flex_1()
+                                .items_center()
+                                .overflow_y_scroll()
+                                .track_scroll(&s.scroll)
+                                .child(
+                                    div()
+                                        .flex()
+                                        .flex_col()
+                                        .gap_4()
+                                        .w_full()
+                                        .max_w(px(820.))
+                                        .px_5()
+                                        .py_5()
+                                        .children(
+                                            s.messages.iter().map(|m| render_chat_item(t, m)),
+                                        ),
+                                ),
+                        )
+                        .child(render_composer(
+                            t,
+                            s,
+                            chips_model,
+                            send_label,
+                            send_color,
+                            send_enabled,
+                            cx,
+                        )),
                 )
-                .child(
-                    div()
-                        .px_4()
-                        .py_2()
-                        .bg(rgb(send_color))
-                        .text_color(rgb(0x111122))
-                        .rounded_md()
-                        .when(send_enabled, |d| {
-                            d.cursor_pointer().hover(|d| d.bg(rgb(0xa0c0ff)))
-                        })
-                        .child(send_label)
-                        .on_mouse_down(
+                .child(render_session_overview(t, s)),
+        )
+}
+
+fn render_composer(
+    t: &theme::Tokens,
+    s: &SessionUiState,
+    chips_model: &str,
+    send_label: &'static str,
+    send_color: u32,
+    send_enabled: bool,
+    cx: &mut Context<MainView>,
+) -> gpui::Div {
+    div().flex().justify_center().px_5().pb_5().child(
+        div()
+            .flex()
+            .flex_col()
+            .gap_2()
+            .w_full()
+            .max_w(px(760.))
+            .min_h(px(82.))
+            .px_4()
+            .py_2()
+            .bg(rgb(t.surface))
+            .border_1()
+            .border_color(rgb(t.border))
+            .rounded_lg()
+            .child(div().flex_1().child(s.input.clone()))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_3()
+                    .child(composer_icon_button(t, "+"))
+                    .child(permission_chip(t))
+                    .child(div().flex_1())
+                    .child(chip_owned(t, chips_model.to_string()))
+                    .child(
+                        send_circle(send_label, send_color, send_enabled).on_mouse_down(
                             MouseButton::Left,
                             cx.listener(|this, _, _, cx| this.send_user_input(cx)),
                         ),
+                    ),
+            ),
+    )
+}
+
+fn render_session_overview(t: &theme::Tokens, s: &SessionUiState) -> gpui::Div {
+    let summary = session_summary(s);
+    let workspace_state = if s.thread_started {
+        "준비됨"
+    } else {
+        "준비 중"
+    };
+    let agent_state = if s.interrupt_requested {
+        "중단 요청"
+    } else if s.turn_in_flight {
+        "진행 중"
+    } else if s.thread_started {
+        "대기"
+    } else {
+        "연결 중"
+    };
+    let save_state = s
+        .last_commit
+        .as_ref()
+        .map(|commit| commit.summary.clone())
+        .unwrap_or_else(|| "아직 저장 없음".to_string());
+    let tool_total = summary.tools_running + summary.tools_ok + summary.tools_failed;
+
+    div()
+        .flex()
+        .flex_col()
+        .w(px(220.))
+        .h_full()
+        .px_3()
+        .py_3()
+        .gap_4()
+        .bg(rgb(0xfbfbfc))
+        .border_l_1()
+        .border_color(rgb(t.border))
+        .child(
+            div()
+                .flex()
+                .flex_col()
+                .gap_2()
+                .child(panel_title(t, "작업 트리"))
+                .child(timeline_row(
+                    t,
+                    "1",
+                    "작업공간",
+                    workspace_state,
+                    s.thread_started,
+                ))
+                .child(timeline_row(
+                    t,
+                    "2",
+                    "에이전트",
+                    agent_state,
+                    s.turn_in_flight,
+                ))
+                .child(timeline_row(
+                    t,
+                    "3",
+                    "변경 저장",
+                    save_state.as_str(),
+                    s.last_commit.is_some(),
+                )),
+        )
+        .child(
+            div()
+                .flex()
+                .flex_col()
+                .gap_2()
+                .child(panel_title(t, "세션 요약"))
+                .child(
+                    div()
+                        .flex()
+                        .gap_2()
+                        .child(metric_tile(t, "요청", summary.user_turns.to_string()))
+                        .child(metric_tile(t, "응답", summary.agent_messages.to_string())),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .gap_2()
+                        .child(metric_tile(t, "도구", tool_total.to_string()))
+                        .child(metric_tile(t, "실패", summary.tools_failed.to_string())),
+                ),
+        )
+        .child(
+            div()
+                .flex()
+                .flex_col()
+                .gap_2()
+                .child(panel_title(t, "안전망"))
+                .child(safety_row(t, "원본 폴더", "보호"))
+                .child(safety_row(t, "작업공간", "자동"))
+                .child(safety_row(
+                    t,
+                    "되돌리기",
+                    if s.last_commit.as_ref().is_some_and(|c| c.revertible) {
+                        "가능"
+                    } else {
+                        "대기"
+                    },
+                )),
+        )
+}
+
+fn panel_title(t: &theme::Tokens, label: &'static str) -> gpui::Div {
+    div()
+        .text_xs()
+        .font_weight(FontWeight::MEDIUM)
+        .text_color(rgb(t.muted))
+        .child(label)
+}
+
+fn timeline_row(
+    t: &theme::Tokens,
+    _step: &'static str,
+    label: &'static str,
+    state: &str,
+    active: bool,
+) -> gpui::Div {
+    div()
+        .flex()
+        .items_center()
+        .gap_2()
+        .px_1()
+        .py_1()
+        .child(
+            div()
+                .size(px(7.))
+                .rounded_full()
+                .bg(rgb(if active { t.accent } else { 0xc7c7cc })),
+        )
+        .child(
+            div()
+                .flex()
+                .flex_col()
+                .flex_1()
+                .overflow_hidden()
+                .child(div().text_xs().text_color(rgb(t.fg)).child(label))
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(rgb(t.muted))
+                        .child(state.to_string()),
                 ),
         )
 }
 
-fn chip(t: &theme::Tokens, label: &'static str) -> gpui::Div {
-    chip_owned(t, label.to_string())
+fn metric_tile(t: &theme::Tokens, label: &'static str, value: String) -> gpui::Div {
+    div()
+        .flex()
+        .items_center()
+        .flex_1()
+        .gap_2()
+        .px_1()
+        .py_1()
+        .child(div().text_xs().text_color(rgb(t.muted)).child(label))
+        .child(
+            div()
+                .text_size(px(14.))
+                .font_weight(FontWeight::MEDIUM)
+                .text_color(rgb(t.fg))
+                .child(value),
+        )
+}
+
+fn safety_row(t: &theme::Tokens, label: &'static str, state: &'static str) -> gpui::Div {
+    div()
+        .flex()
+        .items_center()
+        .gap_2()
+        .px_1()
+        .py_1()
+        .child(div().flex_1().text_xs().text_color(rgb(t.fg)).child(label))
+        .child(div().text_xs().text_color(rgb(t.muted)).child(state))
+}
+
+fn session_summary(s: &SessionUiState) -> SessionSummary {
+    let mut summary = SessionSummary::default();
+    for item in &s.messages {
+        match item {
+            ChatItem::Message { who, .. } => match who {
+                Speaker::User => summary.user_turns += 1,
+                Speaker::Agent => summary.agent_messages += 1,
+                Speaker::System => {}
+            },
+            ChatItem::Tool { status, .. } => match status {
+                ToolStatus::InProgress => summary.tools_running += 1,
+                ToolStatus::CompletedOk => summary.tools_ok += 1,
+                ToolStatus::CompletedFail => summary.tools_failed += 1,
+            },
+        }
+    }
+    summary
+}
+
+fn status_pill(t: &theme::Tokens, label: &'static str) -> gpui::Div {
+    div()
+        .px_2()
+        .py_1()
+        .bg(rgb(0xf2f2f4))
+        .rounded_md()
+        .text_xs()
+        .text_color(rgb(t.muted))
+        .child(label)
+}
+
+fn top_bar_controls(t: &theme::Tokens, chips_model: &str) -> gpui::Div {
+    div()
+        .flex()
+        .items_center()
+        .gap_2()
+        .child(model_selector_chip(t, chips_model))
+}
+
+fn model_selector_chip(t: &theme::Tokens, label: &str) -> gpui::Div {
+    div()
+        .flex()
+        .items_center()
+        .gap_2()
+        .px_3()
+        .py_1()
+        .bg(rgb(t.surface))
+        .border_1()
+        .border_color(rgb(t.border))
+        .rounded_lg()
+        .text_xs()
+        .text_color(rgb(t.fg))
+        .child(label.to_string())
+        .child(div().text_color(rgb(t.muted)).child("⌄"))
+}
+
+fn composer_icon_button(t: &theme::Tokens, label: &'static str) -> gpui::Div {
+    div()
+        .size(px(28.))
+        .flex()
+        .items_center()
+        .justify_center()
+        .text_sm()
+        .text_color(rgb(t.muted))
+        .rounded_full()
+        .hover(|d| d.bg(rgb(0xf1f1f3)).text_color(rgb(t.fg)))
+        .child(label)
+}
+
+fn send_circle(label: &'static str, color: u32, enabled: bool) -> gpui::Div {
+    div()
+        .size(px(34.))
+        .flex()
+        .items_center()
+        .justify_center()
+        .bg(rgb(color))
+        .text_color(rgb(0xffffff))
+        .rounded_full()
+        .when(enabled, |d| {
+            d.cursor_pointer().hover(|d| d.bg(rgb(0x6f6f75)))
+        })
+        .child(label)
+}
+
+fn permission_chip(t: &theme::Tokens) -> gpui::Div {
+    div()
+        .flex()
+        .items_center()
+        .gap_2()
+        .px_2()
+        .py_1()
+        .rounded_md()
+        .text_xs()
+        .text_color(rgb(t.accent))
+        .child("전체 권한")
+        .child("⌄")
 }
 
 fn chip_owned(t: &theme::Tokens, label: String) -> gpui::Div {
     div()
         .px_2()
         .py_1()
-        .bg(rgb(t.bg))
+        .bg(rgb(0xf3f3f4))
         .text_xs()
         .text_color(rgb(t.muted))
-        .border_1()
-        .border_color(rgb(t.border))
         .rounded_md()
         .child(label)
 }
@@ -1157,7 +1880,13 @@ fn render_chat_item(t: &theme::Tokens, item: &ChatItem) -> gpui::Div {
             text,
             reasoning,
             segments,
-        } => render_message(t, *who, text.clone(), reasoning.clone(), segments.as_deref()),
+        } => render_message(
+            t,
+            *who,
+            text.clone(),
+            reasoning.clone(),
+            segments.as_deref(),
+        ),
         ChatItem::Tool {
             kind,
             title,
@@ -1175,24 +1904,26 @@ fn render_message(
     reasoning: Option<Entity<SelectableText>>,
     segments: Option<&[MessageSegment]>,
 ) -> gpui::Div {
-    let (icon, bubble_bg) = match who {
-        Speaker::User => ("🧑", 0x2a3050),
-        Speaker::Agent => ("🤖", t.surface),
-        Speaker::System => ("ℹ", 0x252535),
-    };
+    if who == Speaker::System {
+        return render_status_message(t, text);
+    }
+    if who == Speaker::User {
+        return render_user_message(t, text);
+    }
+
     let mut body = div().flex_1().flex().flex_col().gap_2();
     if let Some(r) = reasoning {
         body = body.child(
             div()
-                .px_3()
-                .py_2()
-                .bg(rgb(0x202028))
+                .px_2()
+                .py_1()
+                .bg(rgb(0xf4f5f6))
                 .rounded_md()
                 .border_l_2()
-                .border_color(rgb(0x556677))
+                .border_color(rgb(0xc7ccd3))
                 .text_xs()
                 .text_color(rgb(t.muted))
-                .child(div().mb_1().child("💭 사고"))
+                .child(div().mb_1().child("생각"))
                 .child(r),
         );
     }
@@ -1200,44 +1931,60 @@ fn render_message(
     // streaming 중이라 raw text 그대로.
     if let Some(segs) = segments {
         for seg in segs {
-            body = body.child(render_segment(t, seg, bubble_bg));
+            body = body.child(render_segment(t, seg));
         }
     } else {
-        body = body.child(
-            div()
-                .px_3()
-                .py_2()
-                .bg(rgb(bubble_bg))
-                .rounded_md()
-                .child(text),
-        );
+        body = body.child(div().py_1().text_color(rgb(t.fg)).child(text));
     }
-    div()
-        .flex()
-        .gap_2()
-        .items_start()
-        .child(div().w_6().mt_1().child(icon))
-        .child(body)
+    div().flex().gap_2().items_start().child(body)
 }
 
-fn render_segment(t: &theme::Tokens, seg: &MessageSegment, bubble_bg: u32) -> gpui::Div {
-    match seg {
-        MessageSegment::Paragraph(entity) => div()
+fn render_status_message(t: &theme::Tokens, text: Entity<SelectableText>) -> gpui::Div {
+    div()
+        .flex()
+        .items_start()
+        .gap_2()
+        .py_1()
+        .text_xs()
+        .text_color(rgb(t.muted))
+        .child(
+            div()
+                .mt(px(7.))
+                .size(px(6.))
+                .rounded_full()
+                .bg(rgb(0xb7b7bd)),
+        )
+        .child(div().flex_1().child(text))
+}
+
+fn render_user_message(t: &theme::Tokens, text: Entity<SelectableText>) -> gpui::Div {
+    div().flex().justify_end().child(
+        div()
+            .max_w(px(520.))
             .px_3()
             .py_2()
-            .bg(rgb(bubble_bg))
-            .rounded_md()
-            .child(entity.clone()),
+            .bg(rgb(0xf0f0f2))
+            .rounded_lg()
+            .text_color(rgb(t.fg))
+            .child(text),
+    )
+}
+
+fn render_segment(t: &theme::Tokens, seg: &MessageSegment) -> gpui::Div {
+    match seg {
+        MessageSegment::Paragraph(entity) => {
+            div().py_1().text_color(rgb(t.fg)).child(entity.clone())
+        }
         MessageSegment::Heading { level, body } => {
-            // H1=2xl, H2=xl, H3=lg. 색은 약간 더 밝게 강조.
             let base = div()
-                .px_3()
-                .py_2()
-                .text_color(rgb(0xffffff));
+                .pt_2()
+                .pb_1()
+                .font_weight(FontWeight::MEDIUM)
+                .text_color(rgb(t.fg));
             match level {
-                1 => base.text_2xl(),
-                2 => base.text_xl(),
-                _ => base.text_lg(),
+                1 => base.text_lg(),
+                2 => base.text_size(px(16.)),
+                _ => base.text_size(px(15.)),
             }
             .child(body.clone())
         }
@@ -1249,30 +1996,24 @@ fn render_segment(t: &theme::Tokens, seg: &MessageSegment, bubble_bg: u32) -> gp
             .child(div().w_4().text_color(rgb(t.muted)).child("•"))
             .child(div().flex_1().child(body.clone())),
         MessageSegment::Code { body, language } => {
-            // 코드 블록: mono font + 어두운 bg + 옅은 라벨 (language). language는 부모
-            // div에 .font_family로 걸면 SelectableText가 자동 상속.
             let mut card = div()
                 .flex()
                 .flex_col()
                 .gap_1()
                 .px_3()
                 .py_2()
-                .bg(rgb(0x10141a))
+                .bg(rgb(0xf4f4f5))
                 .border_1()
-                .border_color(rgb(0x2a3a4a))
-                .rounded_md();
+                .border_color(rgb(t.border))
+                .rounded_md()
+                .text_size(px(13.));
             if let Some(lang) = language {
                 if !lang.is_empty() {
-                    card = card.child(
-                        div()
-                            .text_xs()
-                            .text_color(rgb(t.muted))
-                            .child(lang.clone()),
-                    );
+                    card = card.child(div().text_xs().text_color(rgb(t.muted)).child(lang.clone()));
                 }
             }
             card.font_family("Menlo")
-                .text_color(rgb(0xc0d8e8))
+                .text_color(rgb(t.fg))
                 .child(body.clone())
         }
     }
@@ -1287,48 +2028,26 @@ fn render_tool_card(
 ) -> gpui::Div {
     let icon = kind.icon();
     let (status_label, status_color) = match status {
-        ToolStatus::InProgress => ("⏳", 0xb0b0c0),
-        ToolStatus::CompletedOk => ("✅", 0x60d090),
-        ToolStatus::CompletedFail => ("❌", 0xd07070),
+        ToolStatus::InProgress => ("진행", 0x8a8a91),
+        ToolStatus::CompletedOk => ("완료", 0x2f8f55),
+        ToolStatus::CompletedFail => ("실패", 0xb43b3b),
     };
     div()
         .flex()
         .gap_2()
-        .items_start()
-        .child(div().w_6().mt_1().child(icon))
+        .items_center()
+        .py_1()
+        .text_xs()
+        .text_color(rgb(t.muted))
+        .child(div().w(px(18.)).text_color(rgb(status_color)).child(icon))
+        .child(div().text_color(rgb(status_color)).child(status_label))
         .child(
             div()
                 .flex_1()
-                .flex()
-                .flex_col()
-                .gap_1()
-                .px_3()
-                .py_2()
-                .bg(rgb(0x1a1f2a))
-                .rounded_md()
-                .border_1()
-                .border_color(rgb(0x303848))
-                .child(
-                    div()
-                        .flex()
-                        .gap_2()
-                        .items_center()
-                        .child(div().text_color(rgb(status_color)).child(status_label))
-                        .child(
-                            div()
-                                .flex_1()
-                                .text_sm()
-                                .text_color(rgb(t.fg))
-                                .child(title.to_string()),
-                        ),
-                )
-                .child(
-                    div()
-                        .text_xs()
-                        .text_color(rgb(t.muted))
-                        .child(output),
-                ),
+                .text_color(rgb(t.fg))
+                .child(title.to_string()),
         )
+        .child(div().max_w(px(280.)).overflow_hidden().child(output))
 }
 
 // ─── 모달 (자동 모드에선 거의 안 뜸 — 인프라만 남김) ──────
@@ -1348,7 +2067,7 @@ fn render_approval_modal(
         .flex()
         .items_center()
         .justify_center()
-        .bg(rgb(0x10101a))
+        .bg(rgba(0x00000040))
         .on_mouse_down(MouseButton::Left, |_, _, _| {})
         .child(
             div()
@@ -1359,20 +2078,16 @@ fn render_approval_modal(
                 .p_6()
                 .bg(rgb(t.surface))
                 .border_1()
-                .border_color(rgb(t.accent))
-                .rounded_md()
+                .border_color(rgb(t.border))
+                .rounded_2xl()
+                .shadow_lg()
                 .child(
                     div()
                         .flex()
                         .gap_3()
                         .items_center()
                         .child(div().text_2xl().child(icon))
-                        .child(
-                            div()
-                                .flex_1()
-                                .text_lg()
-                                .child(p.friendly_title.clone()),
-                        ),
+                        .child(div().flex_1().text_lg().child(p.friendly_title.clone())),
                 )
                 .when(show_detail, |d| {
                     d.child(
@@ -1380,9 +2095,9 @@ fn render_approval_modal(
                             .px_3()
                             .py_2()
                             .bg(rgb(t.bg))
-                            .rounded_md()
+                            .rounded_lg()
                             .border_1()
-                            .border_color(rgb(0x303848))
+                            .border_color(rgb(t.border))
                             .text_sm()
                             .text_color(rgb(t.muted))
                             .child(detail),
@@ -1474,23 +2189,13 @@ fn render_notice_modal(
                 .rounded_md()
                 .on_mouse_down(MouseButton::Left, |_, _, _| {})
                 .child(div().text_lg().child("작업공간"))
-                .child(
-                    div()
-                        .text_sm()
-                        .text_color(rgb(t.muted))
-                        .child(message),
-                )
-                .child(
-                    div()
-                        .flex()
-                        .justify_end()
-                        .child(approval_button(
-                            "확인",
-                            t.accent,
-                            0x111122,
-                            cx.listener(|this, _, _, cx| this.dismiss_notice(cx)),
-                        )),
-                ),
+                .child(div().text_sm().text_color(rgb(t.muted)).child(message))
+                .child(div().flex().justify_end().child(approval_button(
+                    "확인",
+                    t.accent,
+                    0x111122,
+                    cx.listener(|this, _, _, cx| this.dismiss_notice(cx)),
+                ))),
         )
 }
 
@@ -1512,7 +2217,7 @@ fn render_settings_modal(
         .flex()
         .items_center()
         .justify_center()
-        .bg(rgb(0x10101a))
+        .bg(rgba(0x00000040))
         .on_mouse_down(MouseButton::Left, |_, _, _| {})
         .child(
             div()
@@ -1523,9 +2228,10 @@ fn render_settings_modal(
                 .p_6()
                 .bg(rgb(t.surface))
                 .border_1()
-                .border_color(rgb(t.accent))
-                .rounded_md()
-                .child(div().text_lg().child("⚙ 설정"))
+                .border_color(rgb(t.border))
+                .rounded_2xl()
+                .shadow_lg()
+                .child(div().text_lg().child("설정"))
                 .child(
                     div()
                         .text_xs()
@@ -1537,7 +2243,8 @@ fn render_settings_modal(
                     "Provider (codex config.toml에 정의된 이름)",
                     d.provider.clone(),
                 ))
-                .child(setting_field(t, "Model", d.model.clone()))
+                .child(setting_field(t, "조율 모델", d.main_model.clone()))
+                .child(setting_field(t, "작업 모델", d.sub_model.clone()))
                 .when_some(notice, |dv, n| {
                     dv.child(
                         div()
@@ -1582,12 +2289,7 @@ fn setting_field(t: &theme::Tokens, label: &'static str, input: Entity<ChatInput
         .flex()
         .flex_col()
         .gap_1()
-        .child(
-            div()
-                .text_xs()
-                .text_color(rgb(t.muted))
-                .child(label),
-        )
+        .child(div().text_xs().text_color(rgb(t.muted)).child(label))
         .child(
             div()
                 .px_3()
@@ -1616,10 +2318,7 @@ fn finalize_last_agent_message_markdown(s: &mut SessionUiState, cx: &mut Context
     }) else {
         return;
     };
-    let ChatItem::Message {
-        text, segments, ..
-    } = item
-    else {
+    let ChatItem::Message { text, segments, .. } = item else {
         return;
     };
     if segments.is_some() {
@@ -1657,9 +2356,15 @@ fn has_markdown_markers(raw: &str) -> bool {
 #[derive(Debug, PartialEq, Eq)]
 enum RawSegment {
     Paragraph(String),
-    Heading { level: u8, body: String },
+    Heading {
+        level: u8,
+        body: String,
+    },
     ListItem(String),
-    Code { body: String, language: Option<String> },
+    Code {
+        body: String,
+        language: Option<String>,
+    },
 }
 
 /// `raw`를 RawSegment로 자른다 (entity 없음 → 테스트 가능).
@@ -1845,15 +2550,21 @@ fn parse_markdown_segments(raw: &str, cx: &mut Context<MainView>) -> Vec<Message
             }
             RawSegment::Heading { level, body } => {
                 let entity = selectable_from_markdown_inline(body, theme::TOKENS.fg, cx);
-                MessageSegment::Heading { level, body: entity }
+                MessageSegment::Heading {
+                    level,
+                    body: entity,
+                }
             }
             RawSegment::ListItem(body) => {
                 let entity = selectable_from_markdown_inline(body, theme::TOKENS.fg, cx);
                 MessageSegment::ListItem { body: entity }
             }
             RawSegment::Code { body, language } => {
-                let entity = cx.new(|cx| SelectableText::new(body, 0xc0d8e8, cx));
-                MessageSegment::Code { body: entity, language }
+                let entity = cx.new(|cx| SelectableText::new(body, theme::TOKENS.fg, cx));
+                MessageSegment::Code {
+                    body: entity,
+                    language,
+                }
             }
         })
         .collect()
@@ -1894,16 +2605,28 @@ mod markdown_tests {
 
     #[test]
     fn status_label_tracks_reasoning_before_answer() {
-        assert_eq!(turn_status_label(false, false, false, 0, 0), "세션 여는 중…");
+        assert_eq!(
+            turn_status_label(false, false, false, 0, 0),
+            "세션 여는 중…"
+        );
         assert_eq!(turn_status_label(true, false, false, 0, 0), "대기");
-        assert_eq!(turn_status_label(true, true, false, 0, 0), "응답 기다리는 중");
+        assert_eq!(
+            turn_status_label(true, true, false, 0, 0),
+            "응답 기다리는 중"
+        );
         assert_eq!(turn_status_label(true, true, false, 10, 0), "생각 중");
         assert_eq!(
             turn_status_label(true, true, false, LONG_REASONING_CHARS, 0),
             "생각이 길어지는 중"
         );
-        assert_eq!(turn_status_label(true, true, false, 10_000, 1), "답변 작성 중");
-        assert_eq!(turn_status_label(true, true, true, 10_000, 0), "중단 요청 중");
+        assert_eq!(
+            turn_status_label(true, true, false, 10_000, 1),
+            "답변 작성 중"
+        );
+        assert_eq!(
+            turn_status_label(true, true, true, 10_000, 0),
+            "중단 요청 중"
+        );
     }
 
     #[test]
@@ -1916,6 +2639,27 @@ mod markdown_tests {
 
         let direct = session_started_message(WorkspaceMode::Direct);
         assert_eq!(direct, "작업공간 준비됨\n에이전트 연결됨");
+    }
+
+    #[test]
+    fn model_route_label_shows_main_and_sub_roles() {
+        let same = Settings {
+            provider: "local-vllm".into(),
+            model: "qwen".into(),
+            main_model: "qwen".into(),
+            sub_model: "qwen".into(),
+            recent_projects: Vec::new(),
+        };
+        assert_eq!(model_route_label(&same), "조율/작업 qwen");
+
+        let split = Settings {
+            provider: "local-vllm".into(),
+            model: "planner".into(),
+            main_model: "planner".into(),
+            sub_model: "worker".into(),
+            recent_projects: Vec::new(),
+        };
+        assert_eq!(model_route_label(&split), "조율 planner · 작업 worker");
     }
 
     #[test]
@@ -1997,9 +2741,18 @@ mod markdown_tests {
         assert_eq!(
             segs,
             vec![
-                RawSegment::Heading { level: 1, body: "h1".into() },
-                RawSegment::Heading { level: 2, body: "h2".into() },
-                RawSegment::Heading { level: 3, body: "h3".into() },
+                RawSegment::Heading {
+                    level: 1,
+                    body: "h1".into()
+                },
+                RawSegment::Heading {
+                    level: 2,
+                    body: "h2".into()
+                },
+                RawSegment::Heading {
+                    level: 3,
+                    body: "h3".into()
+                },
             ]
         );
     }
@@ -2036,11 +2789,17 @@ mod markdown_tests {
         assert_eq!(
             segs,
             vec![
-                RawSegment::Heading { level: 1, body: "안녕".into() },
+                RawSegment::Heading {
+                    level: 1,
+                    body: "안녕".into()
+                },
                 RawSegment::Paragraph("첫 단락.".into()),
                 RawSegment::ListItem("항목 1".into()),
                 RawSegment::ListItem("항목 2".into()),
-                RawSegment::Code { body: "fn main() {}".into(), language: Some("rs".into()) },
+                RawSegment::Code {
+                    body: "fn main() {}".into(),
+                    language: Some("rs".into())
+                },
                 RawSegment::Paragraph("끝.".into()),
             ]
         );
@@ -2114,7 +2873,7 @@ fn main() {
     application().run(move |cx: &mut App| {
         selectable_text::init(cx);
         chat_input::init(cx);
-        let bounds = Bounds::centered(None, size(px(960.), px(640.)), cx);
+        let bounds = Bounds::centered(None, size(px(1280.), px(820.)), cx);
         let main_view_handle = cx
             .open_window(
                 WindowOptions {

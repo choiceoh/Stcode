@@ -49,17 +49,15 @@ async fn run_single() -> anyhow::Result<()> {
     println!("  cwd        : {}", cwd.display());
     println!("  prompt     : {user_text}");
 
-    let Bridge {
-        cmd_tx,
-        mut evt_rx,
-    } = Bridge::spawn();
+    let Bridge { cmd_tx, mut evt_rx } = Bridge::spawn();
 
     let sid: SessionId = "s1".into();
     cmd_tx.send(UiCommand::NewSession {
         session_id: sid.clone(),
         path: cwd,
         provider: "local-vllm".into(),
-        model: "qwen3.6-35b-a3b".into(),
+        main_model: "qwen3.6-35b-a3b".into(),
+        sub_model: "qwen3.6-35b-a3b".into(),
     })?;
 
     let timeout = Duration::from_secs(
@@ -74,9 +72,11 @@ async fn run_single() -> anyhow::Result<()> {
     loop {
         let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
         match tokio::time::timeout(remaining, evt_rx.recv()).await {
-            Ok(Some(UiEvent::SessionStarted { session_id, thread_id, .. }))
-                if session_id == sid =>
-            {
+            Ok(Some(UiEvent::SessionStarted {
+                session_id,
+                thread_id,
+                ..
+            })) if session_id == sid => {
                 println!("  Started: {thread_id}");
                 break;
             }
@@ -120,7 +120,10 @@ async fn run_single() -> anyhow::Result<()> {
                 })?;
             }
             Ok(Some(UiEvent::TurnCommitted {
-                commit_oid, summary, revert_to, ..
+                commit_oid,
+                summary,
+                revert_to,
+                ..
             })) => {
                 println!(
                     "  TurnCommitted: oid={}… summary={summary:?} revert_to={revert_to:?}",
@@ -156,10 +159,10 @@ async fn run_single() -> anyhow::Result<()> {
 }
 
 async fn run_parallel() -> anyhow::Result<()> {
-    let prompt_a = env::var("STCODE_PROMPT_A")
-        .unwrap_or_else(|_| "1부터 5까지 세어. 한 줄로.".into());
-    let prompt_b = env::var("STCODE_PROMPT_B")
-        .unwrap_or_else(|_| "오늘 기분이 어때? 한 줄로.".into());
+    let prompt_a =
+        env::var("STCODE_PROMPT_A").unwrap_or_else(|_| "1부터 5까지 세어. 한 줄로.".into());
+    let prompt_b =
+        env::var("STCODE_PROMPT_B").unwrap_or_else(|_| "오늘 기분이 어때? 한 줄로.".into());
     let cwd_a: PathBuf = env::var("STCODE_CWD_A")
         .map(PathBuf::from)
         .unwrap_or_else(|_| env::current_dir().expect("cwd"));
@@ -173,10 +176,7 @@ async fn run_parallel() -> anyhow::Result<()> {
     println!("  s2 cwd    : {}", cwd_b.display());
     println!("  s2 prompt : {prompt_b}");
 
-    let Bridge {
-        cmd_tx,
-        mut evt_rx,
-    } = Bridge::spawn();
+    let Bridge { cmd_tx, mut evt_rx } = Bridge::spawn();
     let sid_a: SessionId = "s1".into();
     let sid_b: SessionId = "s2".into();
 
@@ -184,13 +184,15 @@ async fn run_parallel() -> anyhow::Result<()> {
         session_id: sid_a.clone(),
         path: cwd_a,
         provider: "local-vllm".into(),
-        model: "qwen3.6-35b-a3b".into(),
+        main_model: "qwen3.6-35b-a3b".into(),
+        sub_model: "qwen3.6-35b-a3b".into(),
     })?;
     cmd_tx.send(UiCommand::NewSession {
         session_id: sid_b.clone(),
         path: cwd_b,
         provider: "local-vllm".into(),
-        model: "qwen3.6-35b-a3b".into(),
+        main_model: "qwen3.6-35b-a3b".into(),
+        sub_model: "qwen3.6-35b-a3b".into(),
     })?;
 
     let timeout = Duration::from_secs(
@@ -223,7 +225,11 @@ async fn run_parallel() -> anyhow::Result<()> {
             }
         };
         match &ev {
-            UiEvent::SessionStarted { session_id, thread_id, .. } => {
+            UiEvent::SessionStarted {
+                session_id,
+                thread_id,
+                ..
+            } => {
                 println!("  [{session_id}] Started: {thread_id}");
                 if session_id == &sid_a {
                     started_a = true;
@@ -235,7 +241,11 @@ async fn run_parallel() -> anyhow::Result<()> {
             UiEvent::AgentDelta { session_id, text } => {
                 println!("  [{session_id}] +{} chars", text.len());
             }
-            UiEvent::TurnCommitted { session_id, summary, .. } => {
+            UiEvent::TurnCommitted {
+                session_id,
+                summary,
+                ..
+            } => {
                 println!("  [{session_id}] Committed: {summary:?}");
             }
             UiEvent::TurnDone { session_id, ok, .. } => {

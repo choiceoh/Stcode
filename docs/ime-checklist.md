@@ -8,7 +8,7 @@ Stcode 입력창(`ChatInput`)은 macOS IME가 주는 UTF-16 range를 UTF-8 byte 
 
 - macOS 입력 소스: `한국어 - 두벌식`.
 - 앱 실행: `bash scripts/build-app.sh --debug --no-codesign` 후 `dist/Stcode.app` 실행.
-- 테스트 대상: 채팅 입력창. 설정 모달의 Provider/Model 입력도 같은 `ChatInput`이므로
+- 테스트 대상: 채팅 입력창. 설정 모달의 Provider/조율 모델/작업 모델 입력도 같은 `ChatInput`이므로
   마지막에 한 번만 확인한다.
 - 실패 기록에는 입력 문자열, 조작 순서, 기대/실제 결과, 앱 로그를 함께 남긴다.
 
@@ -63,7 +63,7 @@ Stcode 입력창(`ChatInput`)은 macOS IME가 주는 UTF-16 range를 UTF-8 byte 
 
 ## 설정 모달
 
-- [ ] 설정 모달을 열고 Provider/Model 입력칸에서 `local-vllm`을 지운 뒤 다시 입력한다.
+- [ ] 설정 모달을 열고 Provider/조율 모델/작업 모델 입력칸에서 값을 지운 뒤 다시 입력한다.
   - 기대: ASCII 편집이 정상이다.
 - [ ] 같은 입력칸에 임시로 `테스트`를 입력한 뒤 전체 선택/삭제한다.
   - 기대: 한글 selection/delete가 채팅 입력창과 동일하게 동작한다.
