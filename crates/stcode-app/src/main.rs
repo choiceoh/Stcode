@@ -95,11 +95,19 @@ enum ChatItem {
     },
 }
 
-/// Markdown 파싱된 한 조각. v1엔 fenced code block만 분리. inline code/list/heading
-/// 은 다음 단계.
+/// Markdown 파싱된 한 조각. line/block-level만. inline (코드/볼드/링크) 은 다음.
 enum MessageSegment {
-    /// 일반 텍스트 (줄바꿈 포함).
-    Plain(Entity<SelectableText>),
+    /// 일반 텍스트 paragraph (줄바꿈 포함).
+    Paragraph(Entity<SelectableText>),
+    /// `# heading` `## heading` `### heading`. level=1..3.
+    Heading {
+        level: u8,
+        body: Entity<SelectableText>,
+    },
+    /// `- item` 또는 `* item`. body는 bullet 제외한 본문.
+    ListItem {
+        body: Entity<SelectableText>,
+    },
     /// fenced code block. ```language\n...\n``` 의 안쪽 내용. mono font + 다른 bg.
     Code {
         body: Entity<SelectableText>,
@@ -990,12 +998,32 @@ fn render_message(
 
 fn render_segment(t: &theme::Tokens, seg: &MessageSegment, bubble_bg: u32) -> gpui::Div {
     match seg {
-        MessageSegment::Plain(entity) => div()
+        MessageSegment::Paragraph(entity) => div()
             .px_3()
             .py_2()
             .bg(rgb(bubble_bg))
             .rounded_md()
             .child(entity.clone()),
+        MessageSegment::Heading { level, body } => {
+            // H1=2xl, H2=xl, H3=lg. 색은 약간 더 밝게 강조.
+            let base = div()
+                .px_3()
+                .py_2()
+                .text_color(rgb(0xffffff));
+            match level {
+                1 => base.text_2xl(),
+                2 => base.text_xl(),
+                _ => base.text_lg(),
+            }
+            .child(body.clone())
+        }
+        MessageSegment::ListItem { body } => div()
+            .flex()
+            .gap_2()
+            .px_3()
+            .py_1()
+            .child(div().w_4().text_color(rgb(t.muted)).child("•"))
+            .child(div().flex_1().child(body.clone())),
         MessageSegment::Code { body, language } => {
             // 코드 블록: mono font + 어두운 bg + 옅은 라벨 (language). language는 부모
             // div에 .font_family로 걸면 SelectableText가 자동 상속.
@@ -1220,74 +1248,275 @@ fn finalize_last_agent_message_markdown(s: &mut SessionUiState, cx: &mut Context
     }
     // raw text 추출 — read는 immut borrow, scope 끝내고 cx.new로 mut.
     let raw = text.read(cx).content().to_string();
-    if !raw.contains("```") {
+    if !has_markdown_markers(&raw) {
         return;
     }
     let parsed = parse_markdown_segments(&raw, cx);
     *segments = Some(parsed);
 }
 
-/// `raw`를 fenced code block 기준으로 Plain/Code 세그먼트로 자른다.
-/// v1엔 ``` 만 인식. inline code/list/heading 은 다음 단계.
-fn parse_markdown_segments(raw: &str, cx: &mut Context<MainView>) -> Vec<MessageSegment> {
-    let mut segments: Vec<MessageSegment> = Vec::new();
-    let mut buf = String::new();
+/// 마크다운 marker가 하나라도 있으면 true. 파싱 비용 절약용 빠른 체크.
+fn has_markdown_markers(raw: &str) -> bool {
+    if raw.contains("```") {
+        return true;
+    }
+    for line in raw.lines() {
+        let t = line.trim_start();
+        if t.starts_with("# ")
+            || t.starts_with("## ")
+            || t.starts_with("### ")
+            || t.starts_with("- ")
+            || t.starts_with("* ")
+        {
+            return true;
+        }
+    }
+    false
+}
+
+/// 구조적 파싱 결과 — entity 만들기 전 단계. 단위 테스트 가능.
+#[derive(Debug, PartialEq, Eq)]
+enum RawSegment {
+    Paragraph(String),
+    Heading { level: u8, body: String },
+    ListItem(String),
+    Code { body: String, language: Option<String> },
+}
+
+/// `raw`를 RawSegment로 자른다 (entity 없음 → 테스트 가능).
+/// 절차:
+/// 1. ``` fence 토글 — fence 안은 통째로 Code.
+/// 2. non-code 본문은 line 단위:
+///    - `# `/`## `/`### ` → Heading
+///    - `- `/`* ` (들여쓰기 0~3) → ListItem
+///    - 빈 줄 → paragraph 끊기
+///    - 그 외 → paragraph buffer 누적
+/// inline (코드/볼드) 는 다음 단계.
+fn parse_markdown_raw(raw: &str) -> Vec<RawSegment> {
+    let mut segments: Vec<RawSegment> = Vec::new();
+    let mut text_buf = String::new();
+    let mut code_buf = String::new();
     let mut in_code = false;
     let mut code_lang: Option<String> = None;
 
-    let push_plain = |buf: &mut String,
-                      segs: &mut Vec<MessageSegment>,
-                      cx: &mut Context<MainView>| {
+    let flush_text = |buf: &mut String, segs: &mut Vec<RawSegment>| {
         if buf.trim().is_empty() {
             buf.clear();
             return;
         }
         let text = buf.trim_end_matches('\n').to_string();
-        let entity = cx.new(|cx| SelectableText::new(text, theme::TOKENS.fg, cx));
-        segs.push(MessageSegment::Plain(entity));
+        segs.push(RawSegment::Paragraph(text));
         buf.clear();
     };
 
-    let push_code = |buf: &mut String,
-                     lang: &mut Option<String>,
-                     segs: &mut Vec<MessageSegment>,
-                     cx: &mut Context<MainView>| {
-        let body_text = buf.trim_end_matches('\n').to_string();
-        let entity = cx.new(|cx| SelectableText::new(body_text, 0xc0d8e8, cx));
-        segs.push(MessageSegment::Code {
-            body: entity,
+    let push_code = |buf: &mut String, lang: &mut Option<String>, segs: &mut Vec<RawSegment>| {
+        let body = buf.trim_end_matches('\n').to_string();
+        segs.push(RawSegment::Code {
+            body,
             language: lang.take(),
         });
         buf.clear();
     };
 
     for line in raw.split_inclusive('\n') {
-        let trimmed = line.trim_end_matches('\n').trim_end_matches('\r');
-        // 줄 시작이 ``` (옵션 language) — fence
-        if let Some(rest) = trimmed.strip_prefix("```") {
+        let stripped_nl = line.trim_end_matches('\n').trim_end_matches('\r');
+
+        if let Some(rest) = stripped_nl.strip_prefix("```") {
             if in_code {
-                push_code(&mut buf, &mut code_lang, &mut segments, cx);
+                push_code(&mut code_buf, &mut code_lang, &mut segments);
                 in_code = false;
             } else {
-                push_plain(&mut buf, &mut segments, cx);
+                flush_text(&mut text_buf, &mut segments);
                 let lang = rest.trim().to_string();
                 code_lang = if lang.is_empty() { None } else { Some(lang) };
                 in_code = true;
             }
             continue;
         }
-        buf.push_str(line);
+        if in_code {
+            code_buf.push_str(line);
+            continue;
+        }
+
+        if let Some(level) = heading_level(stripped_nl) {
+            flush_text(&mut text_buf, &mut segments);
+            let body = stripped_nl[(level as usize + 1).min(stripped_nl.len())..]
+                .trim_start()
+                .to_string();
+            segments.push(RawSegment::Heading { level, body });
+            continue;
+        }
+
+        if let Some(item) = list_item_body(stripped_nl) {
+            flush_text(&mut text_buf, &mut segments);
+            segments.push(RawSegment::ListItem(item));
+            continue;
+        }
+
+        if stripped_nl.trim().is_empty() {
+            flush_text(&mut text_buf, &mut segments);
+            continue;
+        }
+
+        text_buf.push_str(line);
     }
 
-    // 끝: 남은 buffer flush.
     if in_code {
-        // 미닫힌 code block — 그래도 code로 처리.
-        push_code(&mut buf, &mut code_lang, &mut segments, cx);
+        push_code(&mut code_buf, &mut code_lang, &mut segments);
     } else {
-        push_plain(&mut buf, &mut segments, cx);
+        flush_text(&mut text_buf, &mut segments);
     }
 
     segments
+}
+
+/// RawSegment 들에서 SelectableText entity를 만들어 MessageSegment 로 변환.
+fn parse_markdown_segments(raw: &str, cx: &mut Context<MainView>) -> Vec<MessageSegment> {
+    parse_markdown_raw(raw)
+        .into_iter()
+        .map(|raw_seg| match raw_seg {
+            RawSegment::Paragraph(text) => {
+                let entity = cx.new(|cx| SelectableText::new(text, theme::TOKENS.fg, cx));
+                MessageSegment::Paragraph(entity)
+            }
+            RawSegment::Heading { level, body } => {
+                let entity = cx.new(|cx| SelectableText::new(body, theme::TOKENS.fg, cx));
+                MessageSegment::Heading { level, body: entity }
+            }
+            RawSegment::ListItem(body) => {
+                let entity = cx.new(|cx| SelectableText::new(body, theme::TOKENS.fg, cx));
+                MessageSegment::ListItem { body: entity }
+            }
+            RawSegment::Code { body, language } => {
+                let entity = cx.new(|cx| SelectableText::new(body, 0xc0d8e8, cx));
+                MessageSegment::Code { body: entity, language }
+            }
+        })
+        .collect()
+}
+
+/// `# `/`## `/`### ` 만 인식. 더 깊은 헤딩은 무시.
+fn heading_level(line: &str) -> Option<u8> {
+    if line.starts_with("### ") {
+        Some(3)
+    } else if line.starts_with("## ") {
+        Some(2)
+    } else if line.starts_with("# ") {
+        Some(1)
+    } else {
+        None
+    }
+}
+
+/// 들여쓰기 0~3 + `- ` 또는 `* ` 로 시작하면 list item.
+fn list_item_body(line: &str) -> Option<String> {
+    let trimmed = line.trim_start();
+    let indent = line.len() - trimmed.len();
+    if indent > 3 {
+        return None;
+    }
+    if let Some(rest) = trimmed.strip_prefix("- ") {
+        return Some(rest.to_string());
+    }
+    if let Some(rest) = trimmed.strip_prefix("* ") {
+        return Some(rest.to_string());
+    }
+    None
+}
+
+#[cfg(test)]
+mod markdown_tests {
+    use super::*;
+
+    #[test]
+    fn empty_input() {
+        assert_eq!(parse_markdown_raw(""), vec![]);
+    }
+
+    #[test]
+    fn plain_paragraph() {
+        let segs = parse_markdown_raw("hello world");
+        assert_eq!(segs, vec![RawSegment::Paragraph("hello world".into())]);
+    }
+
+    #[test]
+    fn fenced_code_with_lang() {
+        let segs = parse_markdown_raw("```python\nprint('hi')\n```");
+        assert_eq!(
+            segs,
+            vec![RawSegment::Code {
+                body: "print('hi')".into(),
+                language: Some("python".into())
+            }]
+        );
+    }
+
+    #[test]
+    fn heading_levels() {
+        let segs = parse_markdown_raw("# h1\n## h2\n### h3");
+        assert_eq!(
+            segs,
+            vec![
+                RawSegment::Heading { level: 1, body: "h1".into() },
+                RawSegment::Heading { level: 2, body: "h2".into() },
+                RawSegment::Heading { level: 3, body: "h3".into() },
+            ]
+        );
+    }
+
+    #[test]
+    fn list_dash_and_star() {
+        let segs = parse_markdown_raw("- one\n* two\n  - nested");
+        assert_eq!(
+            segs,
+            vec![
+                RawSegment::ListItem("one".into()),
+                RawSegment::ListItem("two".into()),
+                RawSegment::ListItem("nested".into()),
+            ]
+        );
+    }
+
+    #[test]
+    fn paragraph_break_on_blank_line() {
+        let segs = parse_markdown_raw("para 1\n\npara 2");
+        assert_eq!(
+            segs,
+            vec![
+                RawSegment::Paragraph("para 1".into()),
+                RawSegment::Paragraph("para 2".into()),
+            ]
+        );
+    }
+
+    #[test]
+    fn mixed_kitchen_sink() {
+        let raw = "# 안녕\n\n첫 단락.\n\n- 항목 1\n- 항목 2\n\n```rs\nfn main() {}\n```\n\n끝.";
+        let segs = parse_markdown_raw(raw);
+        assert_eq!(
+            segs,
+            vec![
+                RawSegment::Heading { level: 1, body: "안녕".into() },
+                RawSegment::Paragraph("첫 단락.".into()),
+                RawSegment::ListItem("항목 1".into()),
+                RawSegment::ListItem("항목 2".into()),
+                RawSegment::Code { body: "fn main() {}".into(), language: Some("rs".into()) },
+                RawSegment::Paragraph("끝.".into()),
+            ]
+        );
+    }
+
+    #[test]
+    fn unclosed_code_block_treated_as_code() {
+        let segs = parse_markdown_raw("```\nhello\nworld");
+        assert_eq!(
+            segs,
+            vec![RawSegment::Code {
+                body: "hello\nworld".into(),
+                language: None
+            }]
+        );
+    }
 }
 
 // ─── ChatItem 헬퍼 ──────────────────────────────────────
