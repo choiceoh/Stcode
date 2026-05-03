@@ -31,7 +31,8 @@ pub enum UiCommand {
         session_id: SessionId,
         path: PathBuf,
         provider: String,
-        model: String,
+        main_model: String,
+        sub_model: String,
     },
     /// 특정 세션에 사용자 텍스트 전달.
     SendText { session_id: SessionId, text: String },
@@ -269,7 +270,13 @@ async fn handler_loop(
             cmd_opt = cmd_rx.recv() => {
                 let Some(cmd) = cmd_opt else { break; };
                 match cmd {
-                    UiCommand::NewSession { session_id, path, provider, model } => {
+                    UiCommand::NewSession {
+                        session_id,
+                        path,
+                        provider,
+                        main_model,
+                        sub_model,
+                    } => {
                         let prepared = match prepare_session_workspace(&session_id, &path) {
                             Ok(prepared) => prepared,
                             Err(e) => {
@@ -281,7 +288,14 @@ async fn handler_loop(
                             }
                         };
                         let workspace_mode = prepared.workspace_mode();
-                        match start_session(&prepared.runtime_path, &provider, &model).await {
+                        match start_session(
+                            &prepared.runtime_path,
+                            &provider,
+                            &main_model,
+                            &sub_model,
+                        )
+                        .await
+                        {
                             Ok(thread_session) => {
                                 let thread_id = thread_session.thread_id.clone();
                                 let (s_cmd_tx, s_cmd_rx) = mpsc::unbounded_channel();
@@ -781,9 +795,11 @@ fn workspace_cleanup_message(cleanup: &stcode_vibe::WorktreeCleanup) -> String {
 async fn start_session(
     path: &PathBuf,
     provider: &str,
-    model: &str,
+    main_model: &str,
+    sub_model: &str,
 ) -> anyhow::Result<ThreadSession> {
-    let mut opts = SpawnOptions::with_provider_model(provider, model);
+    let mut opts = SpawnOptions::with_provider_model(provider, main_model);
+    opts = configure_subagent_model_routing(opts, sub_model)?;
     opts = opts
         .with_env("STCODE_VLLM_COMPAT", "1")
         .push("model_reasoning_effort", "minimal");
@@ -809,6 +825,107 @@ async fn start_session(
         opts,
     )
     .await
+}
+
+fn configure_subagent_model_routing(
+    opts: SpawnOptions,
+    sub_model: &str,
+) -> anyhow::Result<SpawnOptions> {
+    let role_file = default_worker_role_file(sub_model)?;
+    configure_subagent_model_routing_with_role_file(opts, &role_file, sub_model)
+}
+
+fn configure_subagent_model_routing_with_role_file(
+    opts: SpawnOptions,
+    role_file: &Path,
+    sub_model: &str,
+) -> anyhow::Result<SpawnOptions> {
+    write_worker_role_file(role_file, sub_model)?;
+    let role_path = role_file.to_string_lossy();
+    Ok(opts
+        .push("agents.default.description", toml_string("Stcode 작업 에이전트"))
+        .push("agents.default.config_file", toml_string(&role_path))
+        .push("features.multi_agent_v2.usage_hint_enabled", "true")
+        .push(
+            "features.multi_agent_v2.root_agent_usage_hint_text",
+            toml_string(&root_subagent_routing_hint(sub_model)),
+        )
+        .push(
+            "features.multi_agent_v2.subagent_usage_hint_text",
+            toml_string("Stcode 작업 에이전트입니다. 위임받은 작업을 직접 처리하고 결과만 간결하게 보고하세요."),
+        ))
+}
+
+fn default_worker_role_file(sub_model: &str) -> anyhow::Result<PathBuf> {
+    let settings_path = stcode_vibe::settings::settings_path()
+        .ok_or_else(|| anyhow::anyhow!("Stcode 설정 저장 위치를 찾을 수 없어요"))?;
+    let config_dir = settings_path
+        .parent()
+        .ok_or_else(|| anyhow::anyhow!("Stcode 설정 폴더를 찾을 수 없어요"))?;
+    Ok(config_dir
+        .join("codex-agent-roles")
+        .join(format!("default-worker-{}.toml", model_slug(sub_model))))
+}
+
+fn write_worker_role_file(role_file: &Path, sub_model: &str) -> anyhow::Result<()> {
+    if let Some(parent) = role_file.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let content = worker_role_file_content(sub_model);
+    match std::fs::read_to_string(role_file) {
+        Ok(existing) if existing == content => return Ok(()),
+        _ => {}
+    }
+    std::fs::write(role_file, content)?;
+    Ok(())
+}
+
+fn worker_role_file_content(sub_model: &str) -> String {
+    let instructions = "Stcode 작업 에이전트입니다. 위임받은 작업을 직접 처리하고, 필요한 파일을 고친 뒤 사용자가 이해할 수 있는 결과만 간결하게 보고하세요.";
+    format!(
+        "developer_instructions = {}\nmodel = {}\n",
+        toml_string(instructions),
+        toml_string(sub_model)
+    )
+}
+
+fn root_subagent_routing_hint(sub_model: &str) -> String {
+    format!(
+        "Stcode가 서브 에이전트 작업 모델을 `{sub_model}`로 관리합니다. 서브 에이전트를 만들 때 사용자가 모델을 고르게 하지 말고 기본 agent_type을 사용하세요. MultiAgentV2 spawn_agent에서는 전체 대화 복제가 꼭 필요하지 않으면 fork_turns를 \"none\" 또는 필요한 최근 turn 수로 지정해 기본 작업 모델이 적용되게 하세요."
+    )
+}
+
+fn toml_string(value: &str) -> String {
+    serde_json::to_string(value).expect("string serialization cannot fail")
+}
+
+fn model_slug(model: &str) -> String {
+    let mut slug = model
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.') {
+                ch
+            } else {
+                '-'
+            }
+        })
+        .take(40)
+        .collect::<String>()
+        .trim_matches('-')
+        .to_string();
+    if slug.is_empty() {
+        slug = "model".to_string();
+    }
+    format!("{slug}-{:016x}", stable_hash(model))
+}
+
+fn stable_hash(input: &str) -> u64 {
+    let mut hash = 0xcbf29ce484222325u64;
+    for byte in input.as_bytes() {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    hash
 }
 
 #[cfg(test)]
@@ -854,6 +971,44 @@ mod tests {
             last_revert_to: None,
             cmd_tx,
         }
+    }
+
+    fn config_override<'a>(opts: &'a SpawnOptions, key: &str) -> Option<&'a str> {
+        opts.config_overrides
+            .iter()
+            .find(|(candidate, _)| candidate == key)
+            .map(|(_, value)| value.as_str())
+    }
+
+    #[test]
+    fn subagent_model_routing_writes_default_worker_role() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let role_file = tmp.path().join("worker.toml");
+        let opts = SpawnOptions::with_provider_model("local-vllm", "planner");
+
+        let opts =
+            configure_subagent_model_routing_with_role_file(opts, &role_file, "worker/model")
+                .expect("configure subagent routing");
+
+        let role_contents = fs::read_to_string(&role_file).expect("read worker role");
+        assert!(role_contents.contains("model = \"worker/model\""));
+        assert!(role_contents.contains("developer_instructions = "));
+        assert_eq!(config_override(&opts, "model_provider"), Some("local-vllm"));
+        assert_eq!(config_override(&opts, "model"), Some("planner"));
+        let expected_role_file = toml_string(role_file.to_str().expect("utf8 role path"));
+        assert_eq!(
+            config_override(&opts, "agents.default.config_file"),
+            Some(expected_role_file.as_str())
+        );
+        assert_eq!(
+            config_override(&opts, "features.multi_agent_v2.usage_hint_enabled"),
+            Some("true")
+        );
+        assert!(
+            config_override(&opts, "features.multi_agent_v2.root_agent_usage_hint_text")
+                .expect("root hint")
+                .contains("worker/model")
+        );
     }
 
     #[test]

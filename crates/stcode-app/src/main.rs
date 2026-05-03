@@ -328,7 +328,11 @@ impl MainView {
             session_id,
             path,
             provider: self.settings.provider.clone(),
-            model: self.settings.model_for_role(AgentModelRole::Main).to_string(),
+            main_model: self
+                .settings
+                .model_for_role(AgentModelRole::Main)
+                .to_string(),
+            sub_model: self.settings.model_for_role(AgentModelRole::Sub).to_string(),
         });
         cx.notify();
     }
