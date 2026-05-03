@@ -7,7 +7,7 @@ use crate::MainView;
 use crate::chat_input::ChatInput;
 use crate::selectable_text::SelectableText;
 use crate::theme;
-use stcode_codex::bridge::{SessionId, ToolKind};
+use stcode_codex::bridge::{SessionId, SessionWorkspaceInfo, ToolKind, WorkspaceMode};
 
 pub(crate) enum Screen {
     Welcome,
@@ -22,14 +22,20 @@ pub(crate) struct WorkspaceState {
     pub(crate) order: Vec<SessionId>,
     /// 현재 사이드바에서 선택된 세션. None은 모든 세션이 닫힌 상태.
     pub(crate) active: Option<SessionId>,
+    /// 앱 실행마다 달라지는 내부 세션 id 접두어. 반복 실행 시 작업공간 이름 충돌을 막는다.
+    pub(crate) session_prefix: String,
     /// 다음 세션 id 발급용 카운터.
     pub(crate) next_id: u32,
 }
 
 pub(crate) struct SessionUiState {
     pub(crate) project: PathBuf,
+    pub(crate) thread_id: Option<String>,
+    pub(crate) workspace_mode: Option<WorkspaceMode>,
+    pub(crate) workspace: Option<SessionWorkspaceInfo>,
     pub(crate) messages: Vec<ChatItem>,
     pub(crate) thread_started: bool,
+    pub(crate) session_failed: bool,
     pub(crate) turn_in_flight: bool,
     pub(crate) interrupt_requested: bool,
     pub(crate) turn_reasoning_chars: usize,
@@ -51,6 +57,13 @@ pub(crate) struct SessionSummary {
     pub(crate) tools_failed: usize,
 }
 
+#[derive(Default, Clone, Copy)]
+pub(crate) struct WorkspaceStats {
+    pub(crate) total: usize,
+    pub(crate) running: usize,
+    pub(crate) failed: usize,
+}
+
 impl SessionUiState {
     pub(crate) fn new(project: PathBuf, cx: &mut Context<MainView>) -> Self {
         let intro = ChatItem::message(Speaker::System, "세션을 여는 중…", cx);
@@ -64,8 +77,12 @@ impl SessionUiState {
         });
         Self {
             project,
+            thread_id: None,
+            workspace_mode: None,
+            workspace: None,
             messages: vec![intro],
             thread_started: false,
+            session_failed: false,
             turn_in_flight: false,
             interrupt_requested: false,
             turn_reasoning_chars: 0,

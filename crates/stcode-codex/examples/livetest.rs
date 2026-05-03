@@ -89,21 +89,25 @@ async fn main() -> anyhow::Result<()> {
     );
     let deadline = tokio::time::Instant::now() + timeout;
     let mut completed = false;
+    let mut failure: Option<String> = None;
 
     loop {
         let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
         if remaining.is_zero() {
             println!("⏱ TIMEOUT after {:?}", timeout);
+            failure = Some(format!("turn timed out after {:?}", timeout));
             break;
         }
         let ev = match tokio::time::timeout(remaining, session.next_event()).await {
             Ok(Some(ev)) => ev,
             Ok(None) => {
                 println!("⛔ codex disconnected (channel closed)");
+                failure = Some("codex disconnected before turn completed".into());
                 break;
             }
             Err(_) => {
                 println!("⏱ TIMEOUT (no event for {:?})", timeout);
+                failure = Some(format!("turn timed out after {:?}", timeout));
                 break;
             }
         };
@@ -200,5 +204,11 @@ async fn main() -> anyhow::Result<()> {
     }
 
     session.shutdown().await;
+    if let Some(failure) = failure {
+        anyhow::bail!("{failure}");
+    }
+    if !completed {
+        anyhow::bail!("turn did not complete successfully");
+    }
     Ok(())
 }

@@ -13,12 +13,12 @@ pub struct Tokens {
 }
 
 pub const TOKENS: Tokens = Tokens {
-    bg: 0xfbfbfc,
+    bg: 0xffffff,
     surface: 0xffffff,
-    sidebar: 0xf6f6f7,
-    sidebar_active: 0xe9e9ec,
-    fg: 0x1d1d20,
-    muted: 0x686870,
-    accent: 0xff6a1a,
-    border: 0xc9c9cf,
+    sidebar: 0xf8f8f9,
+    sidebar_active: 0xebebef,
+    fg: 0x17171a,
+    muted: 0x6b6b73,
+    accent: 0xf25f18,
+    border: 0xe0e0e5,
 };

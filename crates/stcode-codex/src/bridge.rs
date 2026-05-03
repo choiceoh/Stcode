@@ -77,6 +77,7 @@ pub enum UiEvent {
         project: PathBuf,
         thread_id: String,
         workspace_mode: WorkspaceMode,
+        workspace: SessionWorkspaceInfo,
     },
     /// 세션 시작 실패.
     SessionFailed {
@@ -152,6 +153,18 @@ pub enum WorkspaceMode {
     Isolated,
     /// 빈 폴더처럼 별도 작업공간을 만들 수 없어 선택한 경로에서 바로 시작.
     Direct,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SessionWorkspaceInfo {
+    /// 사용자가 고른 원본 프로젝트 폴더.
+    pub source_path: PathBuf,
+    /// Codex가 실제로 작업하는 폴더. 격리 세션이면 세션 전용 작업공간이다.
+    pub runtime_path: PathBuf,
+    /// 세션 작업 기록 이름. direct 모드에서는 None.
+    pub branch: Option<String>,
+    /// 세션 시작 기준점. direct 모드에서는 None.
+    pub base_oid: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -263,12 +276,22 @@ async fn handler_loop(
     // 모든 세션 task가 이리로 (sid, event) 를 던진다.
     let (unified_evt_tx, mut unified_evt_rx) =
         mpsc::unbounded_channel::<(SessionId, SessionTaskEvent)>();
+    let mut shutting_down = false;
 
     loop {
         tokio::select! {
             biased;
-            cmd_opt = cmd_rx.recv() => {
-                let Some(cmd) = cmd_opt else { break; };
+            cmd_opt = cmd_rx.recv(), if !shutting_down => {
+                let Some(cmd) = cmd_opt else {
+                    shutting_down = true;
+                    for s in sessions.values() {
+                        request_session_shutdown(s, true);
+                    }
+                    if sessions.is_empty() {
+                        break;
+                    }
+                    continue;
+                };
                 match cmd {
                     UiCommand::NewSession {
                         session_id,
@@ -288,6 +311,7 @@ async fn handler_loop(
                             }
                         };
                         let workspace_mode = prepared.workspace_mode();
+                        let workspace = prepared.workspace_info(&path);
                         match start_session(
                             &prepared.runtime_path,
                             &provider,
@@ -326,6 +350,7 @@ async fn handler_loop(
                                     project: path,
                                     thread_id,
                                     workspace_mode,
+                                    workspace,
                                 });
                             }
                             Err(e) => {
@@ -411,14 +436,27 @@ async fn handler_loop(
                     }
                     UiCommand::CloseSession { session_id } => {
                         if let Some(s) = sessions.get(&session_id) {
-                            request_session_shutdown(&s, true);
+                            request_session_shutdown(s, true);
                         }
                     }
-                    UiCommand::Shutdown => break,
+                    UiCommand::Shutdown => {
+                        shutting_down = true;
+                        for s in sessions.values() {
+                            request_session_shutdown(s, true);
+                        }
+                        if sessions.is_empty() {
+                            break;
+                        }
+                    }
                 }
             }
             event = unified_evt_rx.recv() => {
-                let Some((sid, ev)) = event else { continue; };
+                let Some((sid, ev)) = event else {
+                    if shutting_down {
+                        break;
+                    }
+                    continue;
+                };
                 match ev {
                     SessionTaskEvent::Thread(ev) => {
                         handle_thread_event(sid, ev, &evt_tx, &mut sessions).await;
@@ -430,13 +468,17 @@ async fn handler_loop(
                         let _ = evt_tx.send(UiEvent::SessionClosed { session_id: sid });
                     }
                 }
+                if shutting_down && sessions.is_empty() {
+                    break;
+                }
             }
         }
     }
 
-    // 정리: 모든 세션에 Shutdown 신호.
-    for (_, s) in sessions.drain() {
+    // 비정상 종료 fallback: task 종료 이벤트가 끊겨도 깨끗한 작업공간은 정리한다.
+    for (sid, s) in sessions.drain() {
         request_session_shutdown(&s, true);
+        cleanup_session_workspace(&sid, &s, &evt_tx);
     }
 }
 
@@ -688,6 +730,15 @@ impl PreparedSessionWorkspace {
             WorkspaceMode::Direct
         }
     }
+
+    fn workspace_info(&self, source_path: &Path) -> SessionWorkspaceInfo {
+        SessionWorkspaceInfo {
+            source_path: source_path.to_path_buf(),
+            runtime_path: self.runtime_path.clone(),
+            branch: self.worktree.as_ref().map(|w| w.branch.clone()),
+            base_oid: self.worktree.as_ref().map(|w| w.base_oid.clone()),
+        }
+    }
 }
 
 fn prepare_session_workspace(
@@ -800,9 +851,12 @@ async fn start_session(
 ) -> anyhow::Result<ThreadSession> {
     let mut opts = SpawnOptions::with_provider_model(provider, main_model);
     opts = configure_subagent_model_routing(opts, sub_model)?;
+    opts = configure_local_model_catalog(opts, provider, main_model, sub_model)?;
     opts = opts
         .with_env("STCODE_VLLM_COMPAT", "1")
-        .push("model_reasoning_effort", "minimal");
+        .push("model_reasoning_effort", "minimal")
+        .push("features.plugins", "false")
+        .push("features.plugin_hooks", "false");
     // vLLM은 ws 미지원 — provider가 vLLM 계열일 때만 ws 끄기.
     if provider.contains("vllm") {
         opts = opts.push(
@@ -856,6 +910,22 @@ fn configure_subagent_model_routing_with_role_file(
         ))
 }
 
+fn configure_local_model_catalog(
+    opts: SpawnOptions,
+    provider: &str,
+    main_model: &str,
+    sub_model: &str,
+) -> anyhow::Result<SpawnOptions> {
+    if !provider.contains("vllm") {
+        return Ok(opts);
+    }
+    let catalog_path = write_local_model_catalog(&[main_model, sub_model])?;
+    Ok(opts.push(
+        "model_catalog_json",
+        toml_string(&catalog_path.to_string_lossy()),
+    ))
+}
+
 fn default_worker_role_file(sub_model: &str) -> anyhow::Result<PathBuf> {
     let settings_path = stcode_vibe::settings::settings_path()
         .ok_or_else(|| anyhow::anyhow!("Stcode 설정 저장 위치를 찾을 수 없어요"))?;
@@ -893,6 +963,79 @@ fn root_subagent_routing_hint(sub_model: &str) -> String {
     format!(
         "Stcode가 서브 에이전트 작업 모델을 `{sub_model}`로 관리합니다. 서브 에이전트를 만들 때 사용자가 모델을 고르게 하지 말고 기본 agent_type을 사용하세요. MultiAgentV2 spawn_agent에서는 전체 대화 복제가 꼭 필요하지 않으면 fork_turns를 \"none\" 또는 필요한 최근 turn 수로 지정해 기본 작업 모델이 적용되게 하세요."
     )
+}
+
+fn write_local_model_catalog(models: &[&str]) -> anyhow::Result<PathBuf> {
+    let mut unique_models = Vec::<String>::new();
+    for model in models {
+        let model = model.trim();
+        if !model.is_empty() && !unique_models.iter().any(|m| m == model) {
+            unique_models.push(model.to_string());
+        }
+    }
+    if unique_models.is_empty() {
+        anyhow::bail!("local model catalog requires at least one model");
+    }
+    unique_models.sort();
+
+    let fingerprint = stable_hash(&unique_models.join("\n"));
+    let dir = std::env::temp_dir().join("stcode-model-catalog");
+    std::fs::create_dir_all(&dir)?;
+    let path = dir.join(format!("local-vllm-{fingerprint:016x}.json"));
+    let catalog = serde_json::json!({
+        "models": unique_models
+            .iter()
+            .map(|model| local_model_info(model))
+            .collect::<Vec<_>>()
+    });
+    let content = serde_json::to_string_pretty(&catalog)?;
+    match std::fs::read_to_string(&path) {
+        Ok(existing) if existing == content => {}
+        _ => std::fs::write(&path, content)?,
+    }
+    Ok(path)
+}
+
+fn local_model_info(model: &str) -> serde_json::Value {
+    let instructions = "You are Codex, a coding agent working inside Stcode. Follow the user's natural-language task, make concrete changes when needed, and report results in user-facing language.";
+    serde_json::json!({
+        "slug": model,
+        "display_name": model,
+        "description": "Local vLLM model managed by Stcode",
+        "default_reasoning_level": "minimal",
+        "supported_reasoning_levels": [
+            {"effort": "minimal", "description": "Fast local reasoning"},
+            {"effort": "low", "description": "Light local reasoning"},
+            {"effort": "medium", "description": "Balanced local reasoning"},
+            {"effort": "high", "description": "Deeper local reasoning"}
+        ],
+        "shell_type": "shell_command",
+        "visibility": "list",
+        "supported_in_api": true,
+        "priority": 0,
+        "additional_speed_tiers": [],
+        "availability_nux": null,
+        "upgrade": null,
+        "base_instructions": instructions,
+        "model_messages": {
+            "instructions_template": instructions,
+            "instructions_variables": null
+        },
+        "supports_reasoning_summaries": false,
+        "default_reasoning_summary": "none",
+        "support_verbosity": false,
+        "default_verbosity": null,
+        "apply_patch_tool_type": null,
+        "web_search_tool_type": "text",
+        "truncation_policy": {"mode": "tokens", "limit": 10000},
+        "supports_parallel_tool_calls": true,
+        "supports_image_detail_original": false,
+        "context_window": 262144,
+        "max_context_window": 262144,
+        "experimental_supported_tools": [],
+        "input_modalities": ["text"],
+        "supports_search_tool": false
+    })
 }
 
 fn toml_string(value: &str) -> String {
@@ -1012,6 +1155,35 @@ mod tests {
     }
 
     #[test]
+    fn local_vllm_model_catalog_override_is_written() {
+        let opts = SpawnOptions::with_provider_model("local-vllm", "planner");
+        let opts = configure_local_model_catalog(opts, "local-vllm", "planner", "worker")
+            .expect("configure model catalog");
+        let catalog_override =
+            config_override(&opts, "model_catalog_json").expect("model catalog override");
+        let catalog_path: String =
+            serde_json::from_str(catalog_override).expect("catalog path is toml string");
+        let catalog_text = fs::read_to_string(catalog_path).expect("read catalog");
+        let catalog: serde_json::Value =
+            serde_json::from_str(&catalog_text).expect("catalog json parses");
+        let models = catalog["models"].as_array().expect("models array");
+
+        assert_eq!(models.len(), 2);
+        assert!(models.iter().any(|m| m["slug"] == "planner"));
+        assert!(models.iter().any(|m| m["slug"] == "worker"));
+        assert!(catalog_text.contains("\"model_messages\""));
+    }
+
+    #[test]
+    fn non_vllm_provider_does_not_use_local_catalog() {
+        let opts = SpawnOptions::with_provider_model("openai", "gpt-5.5");
+        let opts = configure_local_model_catalog(opts, "openai", "gpt-5.5", "gpt-5.5")
+            .expect("configure model catalog");
+
+        assert_eq!(config_override(&opts, "model_catalog_json"), None);
+    }
+
+    #[test]
     fn prepare_session_workspace_uses_worktree_for_committed_repo() {
         let tmp = tempfile::tempdir().expect("tempdir");
         let repo = tmp.path().join("repo");
@@ -1060,6 +1232,28 @@ mod tests {
             .workspace_mode(),
             WorkspaceMode::Direct
         );
+    }
+
+    #[test]
+    fn prepared_workspace_info_exposes_runtime_workspace() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let repo = tmp.path().join("repo");
+        fs::create_dir(&repo).expect("repo dir");
+        init_repo(&repo);
+        let worktrees_root = tmp.path().join("worktrees");
+
+        let prepared = prepare_session_workspace_with_root(&"s-ui".into(), &repo, &worktrees_root)
+            .expect("prepare workspace");
+        let info = prepared.workspace_info(&repo);
+
+        assert_eq!(info.source_path, repo);
+        assert_ne!(info.runtime_path, info.source_path);
+        assert_eq!(info.branch.as_deref(), Some("stcode/s-ui"));
+        assert!(info.base_oid.is_some());
+
+        if let Some(worktree) = prepared.worktree {
+            stcode_vibe::cleanup_session_worktree(&worktree).expect("cleanup worktree");
+        }
     }
 
     #[test]

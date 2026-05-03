@@ -9,7 +9,8 @@
 
 use std::env;
 use std::path::PathBuf;
-use std::time::Duration;
+use std::process;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use stcode_codex::bridge::{ApprovalDecision, Bridge, SessionId, UiCommand, UiEvent};
 
@@ -51,7 +52,7 @@ async fn run_single() -> anyhow::Result<()> {
 
     let Bridge { cmd_tx, mut evt_rx } = Bridge::spawn();
 
-    let sid: SessionId = "s1".into();
+    let sid = unique_session_id("single");
     cmd_tx.send(UiCommand::NewSession {
         session_id: sid.clone(),
         path: cwd,
@@ -82,13 +83,13 @@ async fn run_single() -> anyhow::Result<()> {
             }
             Ok(Some(UiEvent::SessionFailed { session_id, error })) if session_id == sid => {
                 println!("  Failed: {error}");
-                return Ok(());
+                anyhow::bail!("session start failed: {error}");
             }
             Ok(Some(other)) => println!("  (waiting Started, got {other:?})"),
-            Ok(None) => return Ok(()),
+            Ok(None) => anyhow::bail!("event stream closed before session start"),
             Err(_) => {
                 println!("⏱ TIMEOUT");
-                return Ok(());
+                anyhow::bail!("session start timed out after {:?}", timeout);
             }
         }
     }
@@ -99,10 +100,13 @@ async fn run_single() -> anyhow::Result<()> {
     })?;
 
     let mut accumulated = String::new();
+    let mut turn_ok = false;
+    let mut failure: Option<String> = None;
     loop {
         let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
         if remaining.is_zero() {
             println!("⏱ TIMEOUT");
+            failure = Some(format!("turn timed out after {:?}", timeout));
             break;
         }
         match tokio::time::timeout(remaining, evt_rx.recv()).await {
@@ -133,16 +137,25 @@ async fn run_single() -> anyhow::Result<()> {
             Ok(Some(UiEvent::Reverted { ok, .. })) => println!("  Reverted: ok={ok}"),
             Ok(Some(UiEvent::TurnDone { ok, error_text, .. })) => {
                 println!("  TurnDone: ok={ok} err={error_text:?}");
+                turn_ok = ok;
+                if !ok {
+                    failure = Some(error_text.unwrap_or_else(|| "turn failed".into()));
+                }
                 break;
             }
             Ok(Some(UiEvent::Error(text))) => {
                 println!("  Error: {text}");
+                failure = Some(text);
                 break;
             }
             Ok(Some(_)) => {} // 노이즈
-            Ok(None) => break,
+            Ok(None) => {
+                failure = Some("event stream closed before turn completed".into());
+                break;
+            }
             Err(_) => {
                 println!("⏱ TIMEOUT");
+                failure = Some(format!("turn timed out after {:?}", timeout));
                 break;
             }
         }
@@ -154,7 +167,23 @@ async fn run_single() -> anyhow::Result<()> {
     if !preview.is_empty() {
         println!("  text_preview     : {preview:?}");
     }
+    if !close_session_and_wait(
+        &cmd_tx,
+        &mut evt_rx,
+        &sid,
+        tokio::time::Instant::now() + Duration::from_secs(30),
+    )
+    .await?
+    {
+        failure = Some("session cleanup was not confirmed".into());
+    }
     cmd_tx.send(UiCommand::Shutdown)?;
+    if let Some(failure) = failure {
+        anyhow::bail!("{failure}");
+    }
+    if !turn_ok {
+        anyhow::bail!("turn did not complete successfully");
+    }
     Ok(())
 }
 
@@ -171,14 +200,14 @@ async fn run_parallel() -> anyhow::Result<()> {
         .unwrap_or_else(|_| env::current_dir().expect("cwd"));
 
     println!("== Stcode bridge livetest (병렬 2 세션) ==");
-    println!("  s1 cwd    : {}", cwd_a.display());
-    println!("  s1 prompt : {prompt_a}");
-    println!("  s2 cwd    : {}", cwd_b.display());
-    println!("  s2 prompt : {prompt_b}");
-
     let Bridge { cmd_tx, mut evt_rx } = Bridge::spawn();
-    let sid_a: SessionId = "s1".into();
-    let sid_b: SessionId = "s2".into();
+    let sid_a = unique_session_id("a");
+    let sid_b = unique_session_id("b");
+
+    println!("  {sid_a} cwd    : {}", cwd_a.display());
+    println!("  {sid_a} prompt : {prompt_a}");
+    println!("  {sid_b} cwd    : {}", cwd_b.display());
+    println!("  {sid_b} prompt : {prompt_b}");
 
     cmd_tx.send(UiCommand::NewSession {
         session_id: sid_a.clone(),
@@ -209,18 +238,26 @@ async fn run_parallel() -> anyhow::Result<()> {
     let mut sent_b = false;
     let mut done_a = false;
     let mut done_b = false;
+    let mut ok_a = false;
+    let mut ok_b = false;
+    let mut failures = Vec::<String>::new();
 
     while !(done_a && done_b) {
         let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
         if remaining.is_zero() {
             println!("⏱ TIMEOUT — done_a={done_a}, done_b={done_b}");
+            failures.push(format!("parallel run timed out after {:?}", timeout));
             break;
         }
         let ev = match tokio::time::timeout(remaining, evt_rx.recv()).await {
             Ok(Some(ev)) => ev,
-            Ok(None) => break,
+            Ok(None) => {
+                failures.push("event stream closed before both sessions completed".into());
+                break;
+            }
             Err(_) => {
                 println!("⏱ TIMEOUT");
+                failures.push(format!("parallel run timed out after {:?}", timeout));
                 break;
             }
         };
@@ -252,13 +289,22 @@ async fn run_parallel() -> anyhow::Result<()> {
                 println!("  [{session_id}] TurnDone ok={ok}");
                 if session_id == &sid_a {
                     done_a = true;
+                    ok_a = *ok;
+                    if !ok {
+                        failures.push(format!("{sid_a} turn failed"));
+                    }
                 }
                 if session_id == &sid_b {
                     done_b = true;
+                    ok_b = *ok;
+                    if !ok {
+                        failures.push(format!("{sid_b} turn failed"));
+                    }
                 }
             }
             UiEvent::SessionFailed { session_id, error } => {
                 println!("  [{session_id}] Failed: {error}");
+                failures.push(format!("{session_id} session failed: {error}"));
                 if session_id == &sid_a {
                     done_a = true;
                 }
@@ -266,26 +312,103 @@ async fn run_parallel() -> anyhow::Result<()> {
                     done_b = true;
                 }
             }
-            UiEvent::Error(t) => println!("  Error: {t}"),
+            UiEvent::Error(t) => {
+                println!("  Error: {t}");
+                failures.push(t.clone());
+            }
             _ => {}
         }
-        // 양쪽 다 시작됐으면 두 prompt를 같은 시점에 발사 — 진짜 병렬 진행 검증.
-        if started_a && started_b && !(sent_a && sent_b) {
+        // 시작된 세션부터 prompt를 보낸다. 한쪽 준비 실패가 다른 세션 검증을 막으면 안 된다.
+        if started_a && !sent_a {
             cmd_tx.send(UiCommand::SendText {
                 session_id: sid_a.clone(),
                 text: prompt_a.clone(),
             })?;
+            sent_a = true;
+            println!("  [{sid_a}] prompt 발사");
+        }
+        if started_b && !sent_b {
             cmd_tx.send(UiCommand::SendText {
                 session_id: sid_b.clone(),
                 text: prompt_b.clone(),
             })?;
-            sent_a = true;
             sent_b = true;
-            println!("  → 양쪽 prompt 발사");
+            println!("  [{sid_b}] prompt 발사");
         }
     }
 
     println!("=== summary === done_a={done_a} done_b={done_b}");
+    let cleanup_deadline = tokio::time::Instant::now() + Duration::from_secs(60);
+    if started_a {
+        if !close_session_and_wait(&cmd_tx, &mut evt_rx, &sid_a, cleanup_deadline).await? {
+            failures.push(format!("{sid_a} cleanup was not confirmed"));
+        }
+    }
+    if started_b {
+        if !close_session_and_wait(&cmd_tx, &mut evt_rx, &sid_b, cleanup_deadline).await? {
+            failures.push(format!("{sid_b} cleanup was not confirmed"));
+        }
+    }
     cmd_tx.send(UiCommand::Shutdown)?;
+    if !done_a {
+        failures.push(format!("{sid_a} did not complete"));
+    }
+    if !done_b {
+        failures.push(format!("{sid_b} did not complete"));
+    }
+    if !ok_a {
+        failures.push(format!("{sid_a} did not finish successfully"));
+    }
+    if !ok_b {
+        failures.push(format!("{sid_b} did not finish successfully"));
+    }
+    if !failures.is_empty() {
+        anyhow::bail!("livetest failed: {}", failures.join("; "));
+    }
     Ok(())
+}
+
+fn unique_session_id(label: &str) -> SessionId {
+    let millis = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or_default();
+    format!("lt-{label}-{:x}-{millis:x}", process::id()).into()
+}
+
+async fn close_session_and_wait(
+    cmd_tx: &tokio::sync::mpsc::UnboundedSender<UiCommand>,
+    evt_rx: &mut tokio::sync::mpsc::UnboundedReceiver<UiEvent>,
+    sid: &SessionId,
+    deadline: tokio::time::Instant,
+) -> anyhow::Result<bool> {
+    cmd_tx.send(UiCommand::CloseSession {
+        session_id: sid.clone(),
+    })?;
+    loop {
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        if remaining.is_zero() {
+            println!("  [{sid}] close timeout");
+            return Ok(false);
+        }
+        match tokio::time::timeout(remaining, evt_rx.recv()).await {
+            Ok(Some(UiEvent::WorkspaceCleanup {
+                session_id,
+                message,
+            })) if &session_id == sid => {
+                println!("  [{sid}] Cleanup: {}", message.replace('\n', " / "));
+            }
+            Ok(Some(UiEvent::SessionClosed { session_id })) if &session_id == sid => {
+                println!("  [{sid}] Closed");
+                return Ok(true);
+            }
+            Ok(Some(UiEvent::Error(text))) => println!("  Error: {text}"),
+            Ok(Some(_)) => {}
+            Ok(None) => return Ok(false),
+            Err(_) => {
+                println!("  [{sid}] close timeout");
+                return Ok(false);
+            }
+        }
+    }
 }
