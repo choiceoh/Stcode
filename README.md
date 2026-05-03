@@ -9,7 +9,7 @@ The product direction is simple:
 - keep the code, Git state, and safety checks visible without making the user learn them
 - use Zed 1.0's editor, input, agent UI, terminal, project, and GPUI foundations as the base
 
-This repository currently starts from the Zed v1.0.0 source tree and is being carved down into a focused Stcode app. The first baseline keeps the heavy pieces that make chat input, editor behavior, agent panels, workspace state, and terminal-backed execution feel real, while removing upstream Zed website, release, extension sample, and infrastructure material that does not serve Stcode.
+This repository currently starts from the Zed v1.0.0 source tree and is being carved down into a focused Stcode app. The baseline keeps the heavy pieces that make chat input, editor behavior, agent panels, workspace state, and terminal-backed execution feel real, while removing upstream Zed website, release, extension sample, hosted collaboration server, and infrastructure material that does not serve Stcode.
 
 ## Product Shape
 
@@ -25,6 +25,8 @@ The application should make these things first-class:
 - automatic Git/worktree handling for branches, commits, PRs, and merges
 - enough editor and terminal power for agents to work seriously, without exposing every IDE surface to the user
 
+The editor remains part of Stcode, but its role changes. It is not the main surface for a non-coder to operate by hand; it is the agent workbench. Agents still need real buffers, cursor behavior, selections, diagnostics, search, diffs, terminals, and project context to make reliable changes.
+
 ## Current Baseline
 
 The current codebase is intentionally broad because it was imported from Zed 1.0 before pruning. The important retained areas are:
@@ -32,7 +34,7 @@ The current codebase is intentionally broad because it was imported from Zed 1.0
 - `crates/agent_ui`: agent-facing UI surface
 - `crates/agent`: agent orchestration and tool flow
 - `crates/ui_input`: production text input behavior
-- `crates/editor`: editor buffer and interaction behavior
+- `crates/editor`: editor buffer and interaction behavior used by agents and review surfaces
 - `crates/workspace`, `crates/project`, `crates/worktree`: workspace and project state
 - `crates/git`, `crates/git_ui`: Git integration that can later be simplified for non-coders
 - `crates/terminal`, `crates/terminal_view`: execution surface for agents

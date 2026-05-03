@@ -23,6 +23,8 @@ Keep code if it supports one of these current pillars:
 
 Remove or isolate code when it is only for upstream Zed operations such as public docs, release automation, hosted services, extension samples, sponsorship, cloud deployment, or broad IDE surfaces that Stcode does not expose.
 
+Do not remove the editor runtime simply because the user is not expected to edit code manually. In Stcode, the editor is the working surface for AI agents: it gives them real buffers, selections, diagnostics, diffs, and review context. The pruning target is the general-purpose IDE shell around that engine, not the engine itself.
+
 ## Checks
 
 Run focused checks for the area touched. For the current baseline, the most useful smoke check is:
