@@ -146,9 +146,7 @@ pub fn auto_commit_turn(
 /// (현실적으론 첫 turn 되돌리기는 거의 없음). v1엔 None인 경우 에러로.
 pub fn revert_to(path: &Path, oid: Option<&str>) -> Result<(), GitError> {
     let oid_str = oid.ok_or_else(|| {
-        GitError::Reset(git2::Error::from_str(
-            "첫 turn 이전으로는 되돌릴 수 없어요",
-        ))
+        GitError::Reset(git2::Error::from_str("첫 turn 이전으로는 되돌릴 수 없어요"))
     })?;
     let repo = Repository::open(path).map_err(GitError::Open)?;
     let oid_parsed = git2::Oid::from_str(oid_str).map_err(GitError::LookupRevert)?;
@@ -201,3 +199,103 @@ fn signature_for(repo: &Repository) -> Signature<'static> {
     Signature::now("Stcode", "stcode@local").expect("정적 signature 생성 실패")
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    fn write_file(path: &Path, body: &str) {
+        fs::write(path, body).expect("test file write");
+    }
+
+    #[test]
+    fn ensure_repo_initializes_non_git_dir() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let path = tmp.path();
+
+        assert!(!path.join(".git").exists());
+        assert!(ensure_repo(path).expect("init repo"));
+        assert!(path.join(".git").exists());
+        assert!(!ensure_repo(path).expect("already repo"));
+        assert_eq!(current_head(path).expect("head"), None);
+    }
+
+    #[test]
+    fn auto_commit_skips_when_worktree_is_clean() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let path = tmp.path();
+        ensure_repo(path).expect("init repo");
+
+        let commit = auto_commit_turn(path, "아무 것도 안 바꿈", None).expect("auto commit");
+
+        assert!(commit.is_none());
+        assert_eq!(current_head(path).expect("head"), None);
+    }
+
+    #[test]
+    fn auto_commit_tracks_untracked_and_modified_files() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let path = tmp.path();
+        ensure_repo(path).expect("init repo");
+
+        write_file(&path.join("hello.txt"), "one\n");
+        let first = auto_commit_turn(path, "파일 만들어", None)
+            .expect("first commit")
+            .expect("commit created");
+        assert_eq!(first.summary, "stcode: 파일 만들어");
+        assert_eq!(first.revert_to, None);
+        assert_eq!(
+            current_head(path).expect("head"),
+            Some(first.commit_oid.clone())
+        );
+
+        write_file(&path.join("hello.txt"), "two\n");
+        let prev = current_head(path).expect("head").expect("prev head");
+        let second = auto_commit_turn(path, "파일 바꿔", Some(&prev))
+            .expect("second commit")
+            .expect("commit created");
+
+        assert_eq!(second.summary, "stcode: 파일 바꿔");
+        assert_eq!(second.revert_to, Some(prev));
+        assert_eq!(current_head(path).expect("head"), Some(second.commit_oid));
+    }
+
+    #[test]
+    fn revert_to_previous_head_restores_tracked_content() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let path = tmp.path();
+        ensure_repo(path).expect("init repo");
+
+        let file = path.join("hello.txt");
+        write_file(&file, "one\n");
+        let first = auto_commit_turn(path, "처음", None)
+            .expect("first commit")
+            .expect("commit created");
+
+        write_file(&file, "two\n");
+        let second = auto_commit_turn(path, "두번째", Some(&first.commit_oid))
+            .expect("second commit")
+            .expect("commit created");
+
+        revert_to(path, second.revert_to.as_deref()).expect("revert");
+
+        assert_eq!(fs::read_to_string(&file).expect("read file"), "one\n");
+        assert_eq!(current_head(path).expect("head"), Some(first.commit_oid));
+    }
+
+    #[test]
+    fn reverting_before_first_turn_returns_friendly_error() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let path = tmp.path();
+        ensure_repo(path).expect("init repo");
+
+        write_file(&path.join("hello.txt"), "one\n");
+        let first = auto_commit_turn(path, "처음", None)
+            .expect("first commit")
+            .expect("commit created");
+
+        let err = revert_to(path, first.revert_to.as_deref()).expect_err("first turn revert fails");
+
+        assert!(err.to_string().contains("첫 turn 이전"));
+    }
+}

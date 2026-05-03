@@ -4,15 +4,28 @@
 use std::ops::Range;
 
 use gpui::{
-    actions, div, fill, point, prelude::*, px, relative, rgba, App, Bounds, ClipboardItem,
+    actions, div, fill, font, point, prelude::*, px, relative, rgba, App, Bounds, ClipboardItem,
     Context, CursorStyle, ElementId, ElementInputHandler, Entity, EntityInputHandler,
     FocusHandle, Focusable, GlobalElementId, InspectorElementId, IntoElement, KeyBinding,
     LayoutId, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, PaintQuad,
     ParentElement, Pixels, Point, Render, SharedString, Style, Styled, TextRun, UTF16Selection,
-    Window, WrappedLine,
+    UnderlineStyle, Window, WrappedLine,
 };
 
 actions!(selectable_text, [Copy, SelectAll]);
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum InlineKind {
+    Code,
+    Bold,
+    Link,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct InlineSpan {
+    pub range: Range<usize>,
+    pub kind: InlineKind,
+}
 
 /// 메인에서 한 번 호출 — Cmd+C / Cmd+A 키바인딩 등록.
 pub fn init(cx: &mut App) {
@@ -32,6 +45,7 @@ pub struct SelectableText {
     last_height: Option<Pixels>,
     is_selecting: bool,
     text_color: u32,
+    inline_spans: Vec<InlineSpan>,
 }
 
 impl SelectableText {
@@ -46,6 +60,42 @@ impl SelectableText {
             last_height: None,
             is_selecting: false,
             text_color: color,
+            inline_spans: Vec::new(),
+        }
+    }
+
+    pub fn new_inline(
+        content: impl Into<SharedString>,
+        color: u32,
+        inline_spans: Vec<InlineSpan>,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let content = content.into();
+        let len = content.len();
+        let mut inline_spans = inline_spans
+            .into_iter()
+            .filter(|span| span.range.start < span.range.end && span.range.end <= len)
+            .collect::<Vec<_>>();
+        inline_spans.sort_by_key(|span| (span.range.start, span.range.end));
+        let mut last_end = 0;
+        inline_spans.retain(|span| {
+            if span.range.start < last_end {
+                return false;
+            }
+            last_end = span.range.end;
+            true
+        });
+        Self {
+            content,
+            focus_handle: cx.focus_handle(),
+            selected_range: 0..0,
+            selection_reversed: false,
+            last_layout: None,
+            last_bounds: None,
+            last_height: None,
+            is_selecting: false,
+            text_color: color,
+            inline_spans,
         }
     }
 
@@ -60,6 +110,7 @@ impl SelectableText {
             self.selected_range = 0..0;
             self.selection_reversed = false;
         }
+        self.inline_spans.clear();
         cx.notify();
     }
 
@@ -68,6 +119,7 @@ impl SelectableText {
         s.push_str(&self.content);
         s.push_str(text);
         self.content = SharedString::from(s);
+        self.inline_spans.clear();
         cx.notify();
     }
 
@@ -88,21 +140,21 @@ impl SelectableText {
     }
 
     fn move_to(&mut self, offset: usize, cx: &mut Context<Self>) {
+        let offset = offset.min(self.content.len());
         self.selected_range = offset..offset;
         self.selection_reversed = false;
         cx.notify();
     }
 
     fn select_to(&mut self, offset: usize, cx: &mut Context<Self>) {
-        if self.selection_reversed {
-            self.selected_range.start = offset;
-        } else {
-            self.selected_range.end = offset;
-        }
-        if self.selected_range.end < self.selected_range.start {
-            self.selection_reversed = !self.selection_reversed;
-            self.selected_range = self.selected_range.end..self.selected_range.start;
-        }
+        let (range, reversed) = drag_selection_to(
+            self.selected_range.clone(),
+            self.selection_reversed,
+            offset,
+            self.content.len(),
+        );
+        self.selected_range = range;
+        self.selection_reversed = reversed;
         cx.notify();
     }
 
@@ -145,6 +197,98 @@ impl SelectableText {
             self.select_to(idx, cx);
         }
     }
+}
+
+fn drag_selection_to(
+    mut range: Range<usize>,
+    mut reversed: bool,
+    offset: usize,
+    content_len: usize,
+) -> (Range<usize>, bool) {
+    let offset = offset.min(content_len);
+    if reversed {
+        range.start = offset;
+    } else {
+        range.end = offset;
+    }
+    if range.end < range.start {
+        reversed = !reversed;
+        range = range.end..range.start;
+    }
+    (range, reversed)
+}
+
+fn text_runs_for_inline(
+    len: usize,
+    base_font: gpui::Font,
+    base_color: u32,
+    spans: &[InlineSpan],
+) -> Vec<TextRun> {
+    let base_color = gpui::rgb(base_color).into();
+    if len == 0 {
+        return vec![TextRun {
+            len: 1,
+            font: base_font,
+            color: base_color,
+            background_color: None,
+            underline: None,
+            strikethrough: None,
+        }];
+    }
+
+    let mut runs = Vec::new();
+    let mut cursor = 0;
+    for span in spans {
+        if span.range.start > cursor {
+            runs.push(TextRun {
+                len: span.range.start - cursor,
+                font: base_font.clone(),
+                color: base_color,
+                background_color: None,
+                underline: None,
+                strikethrough: None,
+            });
+        }
+        let (font, color, background_color, underline) = match span.kind {
+            InlineKind::Code => (
+                font("Menlo"),
+                gpui::rgb(0xc0d8e8).into(),
+                Some(gpui::rgb(0x263140).into()),
+                None,
+            ),
+            InlineKind::Bold => (base_font.clone().bold(), base_color, None, None),
+            InlineKind::Link => (
+                base_font.clone(),
+                gpui::rgb(0x8bb8ff).into(),
+                None,
+                Some(UnderlineStyle {
+                    thickness: px(1.),
+                    color: Some(gpui::rgb(0x8bb8ff).into()),
+                    wavy: false,
+                }),
+            ),
+        };
+        runs.push(TextRun {
+            len: span.range.end - span.range.start,
+            font,
+            color,
+            background_color,
+            underline,
+            strikethrough: None,
+        });
+        cursor = span.range.end;
+    }
+    if cursor < len {
+        runs.push(TextRun {
+            len: len - cursor,
+            font: base_font,
+            color: base_color,
+            background_color: None,
+            underline: None,
+            strikethrough: None,
+        });
+    }
+    runs
 }
 
 impl Focusable for SelectableText {
@@ -295,6 +439,7 @@ impl gpui::Element for TextElement {
         let raw_content = entity.content.clone();
         let selected = entity.selected_range.clone();
         let color = entity.text_color;
+        let inline_spans = entity.inline_spans.clone();
         let _ = entity;
 
         // 빈 문자열은 공백 1자로 (layout 0 height 방지).
@@ -306,18 +451,11 @@ impl gpui::Element for TextElement {
 
         let style = window.text_style();
         let line_height = window.line_height();
-        let run = TextRun {
-            len: content.len(),
-            font: style.font(),
-            color: gpui::rgb(color).into(),
-            background_color: None,
-            underline: None,
-            strikethrough: None,
-        };
+        let runs = text_runs_for_inline(content.len(), style.font(), color, &inline_spans);
         let font_size = style.font_size.to_pixels(window.rem_size());
         let lines = window
             .text_system()
-            .shape_text(content, font_size, &[run], Some(bounds.size.width), None)
+            .shape_text(content, font_size, &runs, Some(bounds.size.width), None)
             .unwrap_or_default();
         let line = lines.into_iter().next();
 
@@ -421,5 +559,50 @@ impl gpui::Element for TextElement {
             this.last_layout = Some(line);
             this.last_bounds = Some(bounds);
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn drag_selection_extends_forward() {
+        let (range, reversed) = drag_selection_to(3..3, false, 8, 20);
+
+        assert_eq!(range, 3..8);
+        assert!(!reversed);
+    }
+
+    #[test]
+    fn drag_selection_crosses_anchor_and_becomes_reversed() {
+        let (range, reversed) = drag_selection_to(8..8, false, 3, 20);
+
+        assert_eq!(range, 3..8);
+        assert!(reversed);
+    }
+
+    #[test]
+    fn reversed_drag_moves_selection_start() {
+        let (range, reversed) = drag_selection_to(3..8, true, 5, 20);
+
+        assert_eq!(range, 5..8);
+        assert!(reversed);
+    }
+
+    #[test]
+    fn reversed_drag_crosses_back_to_forward() {
+        let (range, reversed) = drag_selection_to(3..8, true, 10, 20);
+
+        assert_eq!(range, 8..10);
+        assert!(!reversed);
+    }
+
+    #[test]
+    fn drag_selection_clamps_to_content_len() {
+        let (range, reversed) = drag_selection_to(3..3, false, 30, 10);
+
+        assert_eq!(range, 3..10);
+        assert!(!reversed);
     }
 }

@@ -1,83 +1,118 @@
-# 백로그 — Claude Code Desktop 수준까지의 거리
+# 백로그 — v0.1.0 이후 안정화 로드맵
 
-현재(M1.x) 상태에서 production 데스크톱 코딩 에이전트(Claude Code Desktop / Codex Desktop) 수준까지 남은 작업.
+현재(v0.1.0)는 사내 첫 배포 골든 패스가 끝까지 동작하는 상태다. 이제 우선순위는
+큰 기능 확장보다 **검증 루프, 자동 작업 안전망, 긴 작업 제어, 배포 유지보수**다.
 
-## 즉시 (P0) — 응답 흐름 fix
+## 제품 방향
 
-- [ ] **`item/agentMessage/delta` 0건 문제 진단**
-  - codex 자체의 SSE → 노티 변환 흐름 추적
-  - vLLM이 `output_text.delta` 보내지만 codex가 message item으로 인식 못 함 (현재 가설)
-  - reasoning vs message item 구분이 codex에서 어떻게 되는지 확인
-  - 임시: `STCODE_REVEAL_REASONING=1` ENV로 reasoning을 본문 노출 (final answer가 그 끝에 포함되는 케이스)
+Stcode는 코드를 1도 모르는 작업자가 10개 안팎의 에이전트를 병렬 자동으로 수시간
+연속으로 굴리는 멀티 에이전트 바이브코딩 콘솔이다. IDE가 아니며, 코드를 읽고 판단하는
+개발자용 화면을 만들지 않는다. 백로그 우선순위는 코드 독해 편의가 아니라 다중 세션
+운영성, 상태 표시, 중단/되돌리기, 친화적 결과 요약을 기준으로 정한다. 변경 확인도
+diff/patch 검토가 아니라 결과 요약과 turn 단위 되돌리기로 해결한다.
+병렬 작업 특성상 GitHub를 많이 쓰지만, 사용자는 Git을 몰라도 된다. 세션 시작/종료에
+맞춰 작업용 워크트리와 브랜치를 시스템이 만들고 정리해야 한다.
+메인 에이전트와 서브 에이전트는 시스템 레벨에서 서로 다른 모델을 지정할 수 있어야 하며,
+사용자에게 매번 모델 선택을 요구하지 않고 역할별 기본값으로 자동 라우팅해야 한다.
 
-## M2 — 도구 가시성 + 승인 (P1)
+## 완료된 기반
 
-- [ ] `item/commandExecution/outputDelta` 처리 — UI에 "⚙ npm install 실행 중..." 박스
-- [ ] `item/fileChange/*` 처리 — UI에 "📄 파일 수정됨" 한 줄 알림
-- [ ] `item/commandExecution/requestApproval` server→client request 처리
-  - 모달 다이얼로그 (한 번만/세션 내내/거절)
-  - server에 응답 RPC
-- [ ] `item/fileChange/requestApproval` 동일 처리
-- [ ] `item/plan/*` — 체크리스트 표시
+- 자동 모드: `ApprovalPolicy::Never` + `SandboxMode::DangerFullAccess`.
+- inbound command/file approval request 자동 `AcceptForSession`.
+- 병렬 멀티 세션: 세션별 tokio task + 사이드바 라우팅.
+- Tool Cards: `commandExecution`, `fileChange`, `mcpToolCall`, `webSearch`.
+- Reasoning 패널과 본 답변 bubble 분리.
+- 기본 Markdown 표시: heading, list, plain preformatted block.
+- turn 단위 git 안전망: 자동 init, HEAD snapshot, 자동 commit, 되돌리기.
+- friendly 에러 메시지 매핑.
+- provider/model 설정 저장.
+- macOS `.app` 번들 + ad-hoc codesign.
+- `livetest` / `livetest_bridge` 기반 헤드리스 검증.
 
-## M3 — 바이브 안전 레이어 (P1)
+## P0 — 자동 워크트리/브랜치 관리
 
-- [ ] turn 시작 시 git stash 체크포인트
-- [ ] turn 완료 시 자동 git commit
-- [ ] "되돌리기" 버튼 — 마지막 commit reset
-- [ ] codex 에러 → 한국어 친화 메시지 매핑 테이블
-  - `Unauthorized` / `RateLimitExceeded` / `BadRequest` 등
-- [ ] API 키 macOS Keychain 저장 (`security-framework`)
+- [ ] 세션 시작 시 프로젝트 원본 폴더를 건드리지 않고 작업용 워크트리를 자동 생성.
+- [ ] 세션마다 추적 가능한 작업 브랜치를 자동 생성하고 세션 id와 연결.
+- [ ] 세션 종료 시 완료/폐기/중단 상태에 맞춰 사용하지 않는 워크트리 자동 정리.
+- [ ] PR merge 또는 작업 폐기 후 더 이상 필요 없는 로컬 브랜치 자동 정리.
+- [ ] 사용자는 Git 명령, 브랜치 이름, 워크트리 경로를 몰라도 되게 하고, 화면에는 "작업공간 준비됨", "정리됨", "되돌릴 수 있음"처럼 친화적으로 표시.
 
-## UX 다듬기 (P1)
+## P1 — 시스템 모델 라우팅
 
-- [ ] **인풋 multi-line 진짜 wrap** — 현재 단일 라인 base, 화면 밖 짤림. shape_text + WrappedLine 진짜 적용
-- [ ] **메시지 본문 multi-line wrap** — SelectableText도 같은 작업
-- [ ] **자동 scroll to bottom** — 메시지 추가 시 (이미 적용됨, 동작 검증)
-- [ ] **drag selection 다듬기** — multi-line selection 한 번에 지나가는 케이스
-- [ ] **friendly empty state** — Welcome 화면 풍부 (최근 프로젝트, 설명 등)
-- [ ] **메시지 Markdown 렌더** — codex 응답이 마크다운인 경우 (현재는 plain text)
-- [ ] **코드 블록 syntax highlight** — 응답 중 ```rust ... ``` 등
+- [ ] 메인 에이전트 기본 모델과 서브 에이전트 기본 모델을 별도로 저장.
+- [ ] 세션 시작 시 시스템 설정에 따라 조율용 메인 모델과 실행용 서브 모델을 자동 주입.
+- [ ] 작업 유형별 override를 허용하되, 사용자가 매번 모델을 고르게 하지 않는다.
+- [ ] 화면에는 모델명을 기술 설정처럼 과하게 노출하지 않고, 필요할 때만 "조율 모델", "작업 모델" 정도로 확인 가능하게 표시.
 
-## 설정 화면 (P2)
+## P0 — 검증 루프와 안전망
 
-- [ ] Provider 선택 (local-vllm / openai)
-- [ ] Model 선택 (qwen3.6-35b-a3b 등 후보)
-- [ ] Reasoning effort (minimal/low/medium/high)
-- [ ] Sandbox mode (read-only / workspace-write / danger-full-access)
-- [ ] Approval policy (untrusted / onFailure / onRequest / never)
-- [ ] reveal reasoning toggle (현재 ENV 기반)
+- [x] `cargo test --workspace`가 통과하도록 `livetest` 이벤트 매칭 갱신.
+- [x] `stcode-vibe::git_safety` temp repo 단위 테스트 추가.
+  - non-git 폴더 자동 init.
+  - 변경 없음이면 commit skip.
+  - untracked/modified 파일 자동 commit.
+  - 직전 HEAD로 hard reset 되돌리기.
+  - 첫 turn 이전 되돌리기 실패 메시지.
+- [x] `livetest_bridge`를 기본 smoke command로 문서화.
+- [x] `scripts/build-app.sh --debug --no-codesign` smoke를 릴리즈 전 체크리스트에 추가.
 
-## 멀티 세션 (P2)
+## P1 — 긴 작업 제어
 
-- [ ] 좌측 사이드바에 세션 리스트 (cmd+shift+P "최근 프로젝트")
-- [ ] 세션 별 thread state 보존 (현재는 한 윈도우 한 thread)
-- [ ] 세션 검색
+- [x] 진행 중 turn 중단 버튼을 GUI에 노출.
+  - bridge `UiCommand::InterruptTurn` → `ThreadSession::interrupt()` 연결.
+  - 헤더에 "중단" 버튼 표시, 클릭 후 "중단 요청됨" 상태로 전환.
+  - turn 완료 이벤트가 오면 `turn_in_flight=false`로 정리.
+- [x] 세션 close 시 진행 중 task 종료/interrupt 동작을 명시적으로 검증.
+  - `CloseSession`/전체 shutdown이 세션 task에 interrupt-aware shutdown을 보냄.
+  - 세션 task는 shutdown 직전 `turn/interrupt`를 먼저 시도한 뒤 codex process를 정리.
+  - 내부 단위 테스트로 interrupt flag 전달을 잠금.
+- [x] 무한 reasoning 탐지용 상태 표시 개선.
+  - reasoning delta는 오는데 답변 delta가 없으면 `생각 중`으로 표시.
+  - reasoning이 길어지면 `생각이 길어지는 중`으로 바뀌어 중단 판단을 돕는다.
+  - 답변 delta가 시작되면 `답변 작성 중`으로 전환.
 
-## 인증 (P2)
+## P1 — 실사용 UX 안정화
 
-- [ ] codex `account/read` 호출 — 인증 상태 확인
-- [ ] `account/login/start` — ChatGPT OAuth 흐름 (브라우저 열기)
-- [ ] API 키 직접 입력 폼
+- [x] 한글 IME edge case 수동 재현 체크리스트 작성.
+  - `docs/ime-checklist.md`에 조합, 편집, selection, clipboard, Enter 전송 경계를 정리.
+- [x] multi-line selection 드래그 경계 테스트 보강.
+  - `SelectableText` drag range/reversed 전환 단위 테스트 추가.
+  - `docs/selection-checklist.md`에 실제 multi-line drag/복사 수동 QA 정리.
+- [x] inline Markdown marker 정리(bold, link, monospace text).
+  - `SelectableText`에 inline span 기반 TextRun 스타일링 추가.
+  - backtick, `**bold**`, `[label](url)` markers를 turn 완료 후 표시 텍스트/스타일로 변환.
+  - 선택/복사는 marker가 제거된 표시 텍스트 기준으로 유지.
+- [ ] 최근 프로젝트 / 최근 세션 목록.
 
-## 배포 (P3)
+## P2 — 설정과 배포 유지보수
 
-- [ ] macOS `.app` 번들 (cargo-bundle)
-- [ ] ad-hoc 코드사이닝
-- [ ] codex fork 자동 빌드/번들 (사용자가 수동 clone+build 안 해도 되게)
-- [ ] release 자동화 (GitHub Actions)
+- [ ] Reasoning effort 설정화.
+- [ ] Sandbox/approval policy는 고급 설정으로만 노출 여부 결정.
+- [ ] OpenAI provider 사용 시 API 키 입력/저장 흐름.
+- [ ] macOS Keychain 저장 검토.
+- [ ] codex fork 추적 정책 문서화.
+- [ ] fork patch를 별도 repo/submodule로 관리할지 결정.
+- [ ] release zip 생성 자동화.
 
-## codex fork 유지보수 (P3)
+## 구현하지 않을 것
 
-- [ ] codex upstream 추적 정책 (어느 시점 pin? 주기적 rebase?)
-- [ ] fork patch를 git submodule 또는 별도 fork repo로 (`choiceoh/codex`)
-- [ ] CI: fork patch unit tests
+- 파일 트리, diff/patch viewer, 코드 에디터 패널.
+- 코드블록 syntax highlight.
+- AST/semantic code navigation, LSP.
+- 터미널 패널, 디버거.
 
-## graphify 회귀 (P3)
+## P3 — 나중에 미룰 것
 
-- [ ] `graphify update .` 자동화 — code 변경 후 자동
-- [ ] `.notify()` 같은 노드 dedup artifact 우회 (graphify upstream issue 또는 우리 측 ID 보강)
+- Windows/Linux 지원.
+- 다중 사용자, 플러그인, 마켓플레이스.
 
----
+## 기본 검증 순서
 
-**Claude Code Desktop 수준까지 추정 기간**: 1~2주 풀타임 작업 (P0~P1 끝내고 P2 일부). M2 + M3 + UX 다듬기가 핵심.
+```bash
+cargo test --workspace
+cargo run -p stcode-codex --example livetest_bridge -- "한 줄로 답해"
+bash scripts/build-app.sh --debug --no-codesign
+```
+
+로컬 vLLM/codex fork가 필요한 검증은 환경이 준비된 머신에서만 수행한다. 순수 단위 테스트는
+항상 먼저 통과시킨다.

@@ -105,10 +105,6 @@ impl ChatInput {
         cx.notify();
     }
 
-    pub fn focus(&self, window: &mut Window, cx: &mut App) {
-        window.focus(&self.focus_handle, cx);
-    }
-
     fn cursor_offset(&self) -> usize {
         if self.selection_reversed {
             self.selected_range.start

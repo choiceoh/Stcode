@@ -45,6 +45,8 @@ pub enum UiCommand {
     },
     /// 마지막 turn 변경을 hard reset으로 되돌린다.
     RevertLastTurn { session_id: SessionId },
+    /// 진행 중인 turn을 중단한다.
+    InterruptTurn { session_id: SessionId },
     /// 특정 세션 종료.
     CloseSession { session_id: SessionId },
     /// 정리 후 tokio 스레드 종료.
@@ -216,11 +218,18 @@ struct ManagedSession {
     cmd_tx: mpsc::UnboundedSender<SessionInternalCmd>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 enum SessionInternalCmd {
     SendText(String),
     RespondApproval(i64, ApprovalDecision),
-    Shutdown,
+    InterruptTurn,
+    Shutdown { interrupt_turn: bool },
+}
+
+fn request_session_shutdown(s: &ManagedSession, interrupt_turn: bool) {
+    let _ = s
+        .cmd_tx
+        .send(SessionInternalCmd::Shutdown { interrupt_turn });
 }
 
 // ─── handler_loop ────────────────────────────────────────
@@ -339,9 +348,18 @@ async fn handler_loop(
                             }
                         }
                     }
+                    UiCommand::InterruptTurn { session_id } => {
+                        if let Some(s) = sessions.get(&session_id) {
+                            let _ = s.cmd_tx.send(SessionInternalCmd::InterruptTurn);
+                        } else {
+                            let _ = evt_tx.send(UiEvent::Error(format!(
+                                "알 수 없는 세션: {session_id}"
+                            )));
+                        }
+                    }
                     UiCommand::CloseSession { session_id } => {
                         if let Some(s) = sessions.remove(&session_id) {
-                            let _ = s.cmd_tx.send(SessionInternalCmd::Shutdown);
+                            request_session_shutdown(&s, true);
                             let _ = evt_tx.send(UiEvent::SessionClosed { session_id });
                         }
                     }
@@ -357,7 +375,7 @@ async fn handler_loop(
 
     // 정리: 모든 세션에 Shutdown 신호.
     for (_, s) in sessions.drain() {
-        let _ = s.cmd_tx.send(SessionInternalCmd::Shutdown);
+        request_session_shutdown(&s, true);
     }
 }
 
@@ -388,7 +406,19 @@ async fn session_task(
                             tracing::warn!("[{session_id}] approval 응답 실패: {e}");
                         }
                     }
-                    SessionInternalCmd::Shutdown => break,
+                    SessionInternalCmd::InterruptTurn => {
+                        if let Err(e) = session.interrupt().await {
+                            tracing::warn!("[{session_id}] turn 중단 실패: {e}");
+                        }
+                    }
+                    SessionInternalCmd::Shutdown { interrupt_turn } => {
+                        if interrupt_turn {
+                            if let Err(e) = session.interrupt().await {
+                                tracing::debug!("[{session_id}] shutdown 전 turn 중단 실패: {e}");
+                            }
+                        }
+                        break;
+                    }
                 }
             }
             ev_opt = session.next_event() => {
@@ -611,4 +641,47 @@ async fn start_session(
         opts,
     )
     .await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn managed_session_for_test(
+        cmd_tx: mpsc::UnboundedSender<SessionInternalCmd>,
+    ) -> ManagedSession {
+        ManagedSession {
+            path: PathBuf::from("/tmp/stcode-test"),
+            pending_prompt: None,
+            pending_snapshot: None,
+            last_revert_to: None,
+            cmd_tx,
+        }
+    }
+
+    #[test]
+    fn shutdown_request_can_ask_session_task_to_interrupt_turn_first() {
+        let (cmd_tx, mut cmd_rx) = mpsc::unbounded_channel();
+        let session = managed_session_for_test(cmd_tx);
+
+        request_session_shutdown(&session, true);
+
+        match cmd_rx.try_recv() {
+            Ok(SessionInternalCmd::Shutdown { interrupt_turn }) => assert!(interrupt_turn),
+            other => panic!("expected interrupting shutdown, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn shutdown_request_can_skip_interrupt_when_requested() {
+        let (cmd_tx, mut cmd_rx) = mpsc::unbounded_channel();
+        let session = managed_session_for_test(cmd_tx);
+
+        request_session_shutdown(&session, false);
+
+        match cmd_rx.try_recv() {
+            Ok(SessionInternalCmd::Shutdown { interrupt_turn }) => assert!(!interrupt_turn),
+            other => panic!("expected plain shutdown, got {other:?}"),
+        }
+    }
 }
