@@ -1,5 +1,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::process;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use gpui::{
     App, Bounds, Context, IntoElement, ParentElement, Render, Styled, Window, WindowBounds,
@@ -163,6 +165,7 @@ impl MainView {
                 sessions: HashMap::new(),
                 order: Vec::new(),
                 active: None,
+                session_prefix: session_run_prefix(),
                 next_id: 0,
             });
         }
@@ -170,7 +173,7 @@ impl MainView {
             return;
         };
         ws.next_id += 1;
-        let session_id: SessionId = format!("s{}", ws.next_id);
+        let session_id = next_session_id(&ws.session_prefix, ws.next_id);
         let state = SessionUiState::new(path.clone(), cx);
         ws.sessions.insert(session_id.clone(), state);
         ws.order.push(session_id.clone());
@@ -327,8 +330,9 @@ impl MainView {
             UiEvent::SessionStarted {
                 session_id,
                 project: _,
-                thread_id: _,
+                thread_id,
                 workspace_mode,
+                workspace,
             } => {
                 let intro = ChatItem::message(
                     Speaker::System,
@@ -337,6 +341,10 @@ impl MainView {
                 );
                 self.with_session(&session_id, |s| {
                     s.thread_started = true;
+                    s.session_failed = false;
+                    s.thread_id = Some(thread_id);
+                    s.workspace_mode = Some(workspace_mode);
+                    s.workspace = Some(workspace);
                     s.messages.clear();
                     s.messages.push(intro);
                 });
@@ -345,7 +353,10 @@ impl MainView {
                 let friendly = friendly_translate(&error);
                 let m =
                     ChatItem::message(Speaker::System, format!("세션 시작 실패\n{friendly}"), cx);
-                self.with_session(&session_id, |s| s.messages.push(m));
+                self.with_session(&session_id, |s| {
+                    s.session_failed = true;
+                    s.messages.push(m);
+                });
             }
             UiEvent::SessionClosed { session_id } => {
                 // 사이드바에서 close_session으로 이미 정리됨 — 이벤트는 확인용.
@@ -569,16 +580,28 @@ impl MainView {
 
 // ─── Render ──────────────────────────────────────────────
 
+fn session_run_prefix() -> String {
+    let millis = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or_default();
+    format!("s{:x}-{:x}", process::id(), millis)
+}
+
+fn next_session_id(prefix: &str, next_id: u32) -> SessionId {
+    format!("{prefix}-{next_id}")
+}
+
 impl Render for MainView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let t = &theme::TOKENS;
-        let display_model = "5.5 매우 높음";
+        let display_model = render::model_route_label(&self.settings);
         let body = match &self.screen {
             Screen::Welcome => {
-                render::render_welcome(t, display_model, &self.settings.recent_projects, cx)
+                render::render_welcome(t, &display_model, &self.settings.recent_projects, cx)
             }
             Screen::Workspace(ws) => {
-                render::render_workspace(t, ws, display_model, &self.settings.recent_projects, cx)
+                render::render_workspace(t, ws, &display_model, &self.settings.recent_projects, cx)
             }
         };
         let approval_modal = self

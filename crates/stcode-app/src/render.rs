@@ -7,7 +7,7 @@ use gpui::{
 
 use crate::app_state::{
     ChatItem, MessageSegment, PendingApproval, SessionSummary, SessionUiState, SettingsDraft,
-    Speaker, ToolStatus, WorkspaceState,
+    Speaker, ToolStatus, WorkspaceState, WorkspaceStats,
 };
 use crate::chat_input::ChatInput;
 use crate::selectable_text::SelectableText;
@@ -24,14 +24,13 @@ pub(crate) fn session_started_message(workspace_mode: WorkspaceMode) -> &'static
     }
 }
 
-#[cfg(test)]
 pub(crate) fn model_route_label(settings: &Settings) -> String {
     let main = settings.model_for_role(AgentModelRole::Main);
     let sub = settings.model_for_role(AgentModelRole::Sub);
     if main == sub {
-        format!("조율/작업 {main}")
+        "조율/작업 모델".into()
     } else {
-        format!("조율 {main} · 작업 {sub}")
+        "조율 모델 · 작업 모델".into()
     }
 }
 
@@ -46,54 +45,52 @@ fn status_pill(t: &theme::Tokens, label: &'static str) -> gpui::Div {
     div()
         .px_2()
         .py_1()
-        .bg(rgb(0xf2f2f4))
-        .rounded_md()
+        .bg(rgb(0xf4f4f6))
+        .rounded_lg()
         .text_xs()
         .text_color(rgb(t.muted))
         .child(label)
 }
 
-fn top_bar_controls(t: &theme::Tokens, chips_model: &str) -> gpui::Div {
+fn top_bar_controls(t: &theme::Tokens, chips_model: &str, cx: &mut Context<MainView>) -> gpui::Div {
     div()
         .flex()
         .items_center()
         .gap_2()
-        .child(model_selector_chip(t, chips_model))
+        .child(model_selector_chip(
+            t,
+            chips_model,
+            cx.listener(|this, _, _, cx| this.open_settings(cx)),
+        ))
 }
 
-fn model_selector_chip(t: &theme::Tokens, label: &str) -> gpui::Div {
+fn model_selector_chip(
+    t: &theme::Tokens,
+    label: &str,
+    on_click: impl Fn(&MouseDownEvent, &mut Window, &mut App) + 'static,
+) -> gpui::Div {
     div()
         .flex()
         .items_center()
         .gap_2()
-        .px_3()
+        .px_2()
         .py_1()
-        .bg(rgb(t.surface))
+        .bg(rgb(0xf8f8f9))
         .border_1()
         .border_color(rgb(t.border))
         .rounded_lg()
         .text_xs()
         .text_color(rgb(t.fg))
+        .cursor_pointer()
+        .hover(|d| d.border_color(rgb(0xc4c4ca)).bg(rgb(0xf4f4f6)))
         .child(label.to_string())
         .child(div().text_color(rgb(t.muted)).child("⌄"))
-}
-
-fn composer_icon_button(t: &theme::Tokens, label: &'static str) -> gpui::Div {
-    div()
-        .size(px(28.))
-        .flex()
-        .items_center()
-        .justify_center()
-        .text_sm()
-        .text_color(rgb(t.muted))
-        .rounded_full()
-        .hover(|d| d.bg(rgb(0xf1f1f3)).text_color(rgb(t.fg)))
-        .child(label)
+        .on_mouse_down(MouseButton::Left, on_click)
 }
 
 fn send_circle(label: &'static str, color: u32, enabled: bool) -> gpui::Div {
     div()
-        .size(px(34.))
+        .size(px(30.))
         .flex()
         .items_center()
         .justify_center()
@@ -106,29 +103,11 @@ fn send_circle(label: &'static str, color: u32, enabled: bool) -> gpui::Div {
         .child(label)
 }
 
-fn permission_chip(t: &theme::Tokens) -> gpui::Div {
+fn composer_status_text(t: &theme::Tokens, label: &str) -> gpui::Div {
     div()
-        .flex()
-        .items_center()
-        .gap_2()
-        .px_2()
-        .py_1()
-        .rounded_md()
-        .text_xs()
-        .text_color(rgb(t.accent))
-        .child("전체 권한")
-        .child("⌄")
-}
-
-fn chip_owned(t: &theme::Tokens, label: String) -> gpui::Div {
-    div()
-        .px_2()
-        .py_1()
-        .bg(rgb(0xf3f3f4))
         .text_xs()
         .text_color(rgb(t.muted))
-        .rounded_md()
-        .child(label)
+        .child(label.to_string())
 }
 
 pub(crate) const LONG_REASONING_CHARS: usize = 4_000;
@@ -208,7 +187,7 @@ mod tests {
             sub_model: "qwen".into(),
             recent_projects: Vec::new(),
         };
-        assert_eq!(model_route_label(&same), "조율/작업 qwen");
+        assert_eq!(model_route_label(&same), "조율/작업 모델");
 
         let split = Settings {
             provider: "local-vllm".into(),
@@ -217,6 +196,6 @@ mod tests {
             sub_model: "worker".into(),
             recent_projects: Vec::new(),
         };
-        assert_eq!(model_route_label(&split), "조율 planner · 작업 worker");
+        assert_eq!(model_route_label(&split), "조율 모델 · 작업 모델");
     }
 }
