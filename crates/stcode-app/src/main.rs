@@ -54,6 +54,15 @@ struct SessionUiState {
     scroll: ScrollHandle,
 }
 
+#[derive(Default)]
+struct SessionSummary {
+    user_turns: usize,
+    agent_messages: usize,
+    tools_running: usize,
+    tools_ok: usize,
+    tools_failed: usize,
+}
+
 impl SessionUiState {
     fn new(project: PathBuf, cx: &mut Context<MainView>) -> Self {
         let intro = ChatItem::message(Speaker::System, "세션을 여는 중…", cx);
@@ -1404,73 +1413,306 @@ fn render_chat_main(
         )
         .child(
             div()
-                .id("messages")
                 .flex()
-                .flex_col()
                 .flex_1()
-                .items_center()
-                .overflow_y_scroll()
-                .track_scroll(&s.scroll)
                 .child(
                     div()
                         .flex()
                         .flex_col()
-                        .gap_4()
-                        .w_full()
-                        .max_w(px(1040.))
-                        .px_8()
-                        .py_8()
-                        .children(s.messages.iter().map(|m| render_chat_item(t, m))),
-                ),
+                        .flex_1()
+                        .h_full()
+                        .child(
+                            div()
+                                .id("messages")
+                                .flex()
+                                .flex_col()
+                                .flex_1()
+                                .items_center()
+                                .overflow_y_scroll()
+                                .track_scroll(&s.scroll)
+                                .child(
+                                    div()
+                                        .flex()
+                                        .flex_col()
+                                        .gap_4()
+                                        .w_full()
+                                        .max_w(px(1040.))
+                                        .px_8()
+                                        .py_8()
+                                        .children(
+                                            s.messages.iter().map(|m| render_chat_item(t, m)),
+                                        ),
+                                ),
+                        )
+                        .child(render_composer(
+                            t,
+                            s,
+                            chips_model,
+                            send_label,
+                            send_color,
+                            send_enabled,
+                            cx,
+                        )),
+                )
+                .child(render_session_overview(t, s)),
         )
-        .child(
-            div().flex().justify_center().px_8().pb_8().child(
+}
+
+fn render_composer(
+    t: &theme::Tokens,
+    s: &SessionUiState,
+    chips_model: &str,
+    send_label: &'static str,
+    send_color: u32,
+    send_enabled: bool,
+    cx: &mut Context<MainView>,
+) -> gpui::Div {
+    div().flex().justify_center().px_8().pb_8().child(
+        div()
+            .flex()
+            .flex_col()
+            .gap_3()
+            .w_full()
+            .max_w(px(980.))
+            .min_h(px(126.))
+            .px_4()
+            .py_3()
+            .bg(rgb(t.surface))
+            .border_1()
+            .border_color(rgb(t.border))
+            .rounded_2xl()
+            .shadow_lg()
+            .child(div().flex_1().text_lg().child(s.input.clone()))
+            .child(
                 div()
                     .flex()
-                    .flex_col()
+                    .items_center()
                     .gap_3()
-                    .w_full()
-                    .max_w(px(980.))
-                    .min_h(px(126.))
-                    .px_4()
-                    .py_3()
-                    .bg(rgb(t.surface))
-                    .border_1()
-                    .border_color(rgb(t.border))
-                    .rounded_2xl()
-                    .shadow_lg()
-                    .child(div().flex_1().text_lg().child(s.input.clone()))
+                    .child(composer_icon_button(t, "+"))
+                    .child(permission_chip(t))
+                    .child(div().flex_1())
+                    .child(chip_owned(t, chips_model.to_string()))
+                    .child(composer_icon_button(t, "⌕"))
                     .child(
                         div()
+                            .size(px(40.))
                             .flex()
                             .items_center()
-                            .gap_3()
-                            .child(composer_icon_button(t, "+"))
-                            .child(permission_chip(t))
-                            .child(div().flex_1())
-                            .child(chip_owned(t, chips_model.to_string()))
-                            .child(composer_icon_button(t, "⌕"))
-                            .child(
-                                div()
-                                    .size(px(40.))
-                                    .flex()
-                                    .items_center()
-                                    .justify_center()
-                                    .bg(rgb(send_color))
-                                    .text_color(rgb(0xffffff))
-                                    .rounded_full()
-                                    .when(send_enabled, |d| {
-                                        d.cursor_pointer().hover(|d| d.bg(rgb(0x6f6f75)))
-                                    })
-                                    .child(send_label)
-                                    .on_mouse_down(
-                                        MouseButton::Left,
-                                        cx.listener(|this, _, _, cx| this.send_user_input(cx)),
-                                    ),
+                            .justify_center()
+                            .bg(rgb(send_color))
+                            .text_color(rgb(0xffffff))
+                            .rounded_full()
+                            .when(send_enabled, |d| {
+                                d.cursor_pointer().hover(|d| d.bg(rgb(0x6f6f75)))
+                            })
+                            .child(send_label)
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(|this, _, _, cx| this.send_user_input(cx)),
                             ),
                     ),
             ),
+    )
+}
+
+fn render_session_overview(t: &theme::Tokens, s: &SessionUiState) -> gpui::Div {
+    let summary = session_summary(s);
+    let workspace_state = if s.thread_started {
+        "준비됨"
+    } else {
+        "준비 중"
+    };
+    let agent_state = if s.interrupt_requested {
+        "중단 요청"
+    } else if s.turn_in_flight {
+        "진행 중"
+    } else if s.thread_started {
+        "대기"
+    } else {
+        "연결 중"
+    };
+    let save_state = s
+        .last_commit
+        .as_ref()
+        .map(|commit| commit.summary.clone())
+        .unwrap_or_else(|| "아직 저장 없음".to_string());
+    let tool_total = summary.tools_running + summary.tools_ok + summary.tools_failed;
+
+    div()
+        .flex()
+        .flex_col()
+        .w(px(292.))
+        .h_full()
+        .px_4()
+        .py_5()
+        .gap_5()
+        .bg(rgb(0xfbfbfc))
+        .border_l_1()
+        .border_color(rgb(t.border))
+        .child(
+            div()
+                .flex()
+                .flex_col()
+                .gap_2()
+                .child(panel_title(t, "작업 트리"))
+                .child(timeline_row(
+                    t,
+                    "1",
+                    "작업공간",
+                    workspace_state,
+                    s.thread_started,
+                ))
+                .child(timeline_row(
+                    t,
+                    "2",
+                    "에이전트",
+                    agent_state,
+                    s.turn_in_flight,
+                ))
+                .child(timeline_row(
+                    t,
+                    "3",
+                    "변경 저장",
+                    save_state.as_str(),
+                    s.last_commit.is_some(),
+                )),
         )
+        .child(
+            div()
+                .flex()
+                .flex_col()
+                .gap_2()
+                .child(panel_title(t, "세션 요약"))
+                .child(
+                    div()
+                        .flex()
+                        .gap_2()
+                        .child(metric_tile(t, "요청", summary.user_turns.to_string()))
+                        .child(metric_tile(t, "응답", summary.agent_messages.to_string())),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .gap_2()
+                        .child(metric_tile(t, "도구", tool_total.to_string()))
+                        .child(metric_tile(t, "실패", summary.tools_failed.to_string())),
+                ),
+        )
+        .child(
+            div()
+                .flex()
+                .flex_col()
+                .gap_2()
+                .child(panel_title(t, "안전망"))
+                .child(safety_row(t, "원본 폴더", "보호"))
+                .child(safety_row(t, "작업공간", "자동"))
+                .child(safety_row(
+                    t,
+                    "되돌리기",
+                    if s.last_commit.as_ref().is_some_and(|c| c.revertible) {
+                        "가능"
+                    } else {
+                        "대기"
+                    },
+                )),
+        )
+}
+
+fn panel_title(t: &theme::Tokens, label: &'static str) -> gpui::Div {
+    div().text_sm().text_color(rgb(t.muted)).child(label)
+}
+
+fn timeline_row(
+    t: &theme::Tokens,
+    step: &'static str,
+    label: &'static str,
+    state: &str,
+    active: bool,
+) -> gpui::Div {
+    div()
+        .flex()
+        .items_center()
+        .gap_3()
+        .px_3()
+        .py_2()
+        .bg(rgb(if active { 0xffffff } else { 0xf1f1f3 }))
+        .border_1()
+        .border_color(rgb(t.border))
+        .rounded_lg()
+        .child(
+            div()
+                .size(px(24.))
+                .flex()
+                .items_center()
+                .justify_center()
+                .rounded_full()
+                .bg(rgb(if active { t.accent } else { 0xd8d8dc }))
+                .text_color(rgb(0xffffff))
+                .text_xs()
+                .child(step),
+        )
+        .child(
+            div()
+                .flex()
+                .flex_col()
+                .flex_1()
+                .overflow_hidden()
+                .child(div().text_sm().text_color(rgb(t.fg)).child(label))
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(rgb(t.muted))
+                        .child(state.to_string()),
+                ),
+        )
+}
+
+fn metric_tile(t: &theme::Tokens, label: &'static str, value: String) -> gpui::Div {
+    div()
+        .flex()
+        .flex_col()
+        .flex_1()
+        .gap_1()
+        .px_3()
+        .py_3()
+        .bg(rgb(0xffffff))
+        .border_1()
+        .border_color(rgb(t.border))
+        .rounded_lg()
+        .child(div().text_xs().text_color(rgb(t.muted)).child(label))
+        .child(div().text_lg().text_color(rgb(t.fg)).child(value))
+}
+
+fn safety_row(t: &theme::Tokens, label: &'static str, state: &'static str) -> gpui::Div {
+    div()
+        .flex()
+        .items_center()
+        .gap_2()
+        .px_3()
+        .py_2()
+        .rounded_lg()
+        .bg(rgb(0xf1f1f3))
+        .child(div().flex_1().text_sm().text_color(rgb(t.fg)).child(label))
+        .child(div().text_xs().text_color(rgb(t.muted)).child(state))
+}
+
+fn session_summary(s: &SessionUiState) -> SessionSummary {
+    let mut summary = SessionSummary::default();
+    for item in &s.messages {
+        match item {
+            ChatItem::Message { who, .. } => match who {
+                Speaker::User => summary.user_turns += 1,
+                Speaker::Agent => summary.agent_messages += 1,
+                Speaker::System => {}
+            },
+            ChatItem::Tool { status, .. } => match status {
+                ToolStatus::InProgress => summary.tools_running += 1,
+                ToolStatus::CompletedOk => summary.tools_ok += 1,
+                ToolStatus::CompletedFail => summary.tools_failed += 1,
+            },
+        }
+    }
+    summary
 }
 
 fn status_pill(t: &theme::Tokens, label: &'static str) -> gpui::Div {
