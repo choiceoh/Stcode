@@ -1,11 +1,26 @@
 # Stcode
 
-코드를 모르는 바이브코더를 위한 macOS 데스크톱 코딩 에이전트.
+코드를 1도 모르는 작업자가 10개 안팎의 에이전트를 병렬 자동으로 수시간 연속으로
+굴리는 macOS 멀티 에이전트 바이브코딩 콘솔.
 
 - **GUI**: Zed의 [GPUI](https://github.com/zed-industries/zed/tree/main/crates/gpui) main HEAD (Apache-2.0)
 - **백엔드**: [OpenAI Codex CLI](https://github.com/openai/codex)의 fork (Apache-2.0) + `app-server` JSON-RPC
 - **LLM**: 로컬 vLLM (예: qwen3.6-35b-a3b) — fork patch가 vLLM 호환 처리
 - **타깃**: macOS 우선 — 사내/팀 도구
+
+## 제품 원칙
+
+Stcode는 IDE나 코드 뷰어가 아니다. 타깃 사용자는 코드를 읽고 판단하지 않는다. 한 사람이
+자연어 prompt만으로 10개 안팎의 작업 세션을 병렬 자동으로 수시간 연속 돌려놓고,
+각 에이전트의 진행 상태와 결과만 보고 운영하는 **멀티 에이전트 바이브코딩 콘솔**이다.
+
+- 코드 하이라이트, 코드블록 syntax highlight, diff/patch 보기, 파일 트리, 에디터 패널, LSP/AST navigation 같은 코드 독해 기능은 구현하지 않는다.
+- UI는 "어떤 작업이 진행 중인지", "완료/실패했는지", "되돌릴 수 있는지", "언제 중단할지"를 우선 보여준다.
+- 코드 텍스트가 결과 로그에 남더라도 그것은 에이전트 기록/복사용 텍스트일 뿐, 읽기 좋게 꾸민 코드 뷰가 아니다.
+- 변경 내용은 diff로 검토하게 하지 않고, 친화적 결과 요약과 turn 단위 되돌리기로 다룬다.
+- 안전망은 사전 승인 모달보다 사후 자동 저장/되돌리기, 자동 워크트리/브랜치 정리, 친화적 상태 표시로 해결한다.
+- GitHub는 병렬 작업의 주요 연결 지점이지만 사용자는 Git을 몰라도 된다. 세션 시작 시 작업용 워크트리와 브랜치를 자동 준비하고, 세션 종료 후 쓰지 않는 워크트리/브랜치는 시스템이 정리한다.
+- 메인 에이전트와 서브 에이전트는 시스템 설정에서 서로 다른 모델을 지정할 수 있어야 한다. 사용자가 매번 고르는 방식이 아니라, 조율용 메인 모델과 실행용 서브 모델을 역할별 기본값으로 라우팅한다.
 
 ## 사전 요구사항
 
@@ -100,7 +115,7 @@ crates/
 
 - **M0** ✅ scaffolding — GPUI 윈도우 + codex initialize 핸드셰이크
 - **M1** ✅ 채팅 PoC — 폴더 선택, 한국어 입력, multi-line wrap, 응답 스트리밍, vLLM 호환 (fork)
-- **M2** ✅ Tool Cards / Reasoning 분리 / 자동 모드 / Markdown(코드블록·heading·list) /
+- **M2** ✅ Tool Cards / Reasoning 분리 / 자동 모드 / 기본 Markdown 표시 /
   사이드바 + **병렬 멀티세션** / friendly 에러
 - **M3** ✅ git auto-commit + 되돌리기 / friendly 에러 / 설정 영구 저장
 - **M4** ✅ macOS `.app` 번들 + ad-hoc 코드사이닝 / 설정 화면 (model/provider switch)

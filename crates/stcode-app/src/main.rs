@@ -13,7 +13,7 @@ mod selectable_text;
 mod theme;
 
 use chat_input::ChatInput;
-use selectable_text::SelectableText;
+use selectable_text::{InlineKind, InlineSpan, SelectableText};
 use stcode_codex::bridge::{ApprovalDecision, Bridge, SessionId, ToolKind, UiCommand, UiEvent};
 use stcode_vibe::{friendly_translate, settings, Settings};
 
@@ -41,6 +41,9 @@ struct SessionUiState {
     messages: Vec<ChatItem>,
     thread_started: bool,
     turn_in_flight: bool,
+    interrupt_requested: bool,
+    turn_reasoning_chars: usize,
+    turn_answer_chars: usize,
     input: Entity<ChatInput>,
     last_commit: Option<LastCommit>,
     /// active 가 아닌 세션에서 새 message/델타가 와서 unread 표식.
@@ -59,6 +62,9 @@ impl SessionUiState {
             messages: vec![intro],
             thread_started: false,
             turn_in_flight: false,
+            interrupt_requested: false,
+            turn_reasoning_chars: 0,
+            turn_answer_chars: 0,
             input,
             last_commit: None,
             has_unread: false,
@@ -95,7 +101,7 @@ enum ChatItem {
     },
 }
 
-/// Markdown 파싱된 한 조각. line/block-level만. inline (코드/볼드/링크) 은 다음.
+/// Markdown 파싱된 한 조각. block-level + 일부 inline(code/bold/link).
 enum MessageSegment {
     /// 일반 텍스트 paragraph (줄바꿈 포함).
     Paragraph(Entity<SelectableText>),
@@ -359,6 +365,25 @@ impl MainView {
         cx.notify();
     }
 
+    fn interrupt_active(&mut self, cx: &mut Context<Self>) {
+        let Screen::Workspace(ws) = &mut self.screen else {
+            return;
+        };
+        let Some(sid) = ws.active.clone() else { return };
+        let Some(s) = ws.sessions.get_mut(&sid) else {
+            return;
+        };
+        if !s.turn_in_flight || s.interrupt_requested {
+            return;
+        }
+        s.interrupt_requested = true;
+        s.messages
+            .push(ChatItem::message(Speaker::System, "중단 요청을 보냈어요", cx));
+        s.scroll.scroll_to_bottom();
+        let _ = self.cmd_tx.send(UiCommand::InterruptTurn { session_id: sid });
+        cx.notify();
+    }
+
     fn send_user_input(&mut self, cx: &mut Context<Self>) {
         let Screen::Workspace(ws) = &self.screen else {
             return;
@@ -382,6 +407,9 @@ impl MainView {
                 s.messages.push(user_msg);
                 s.messages.push(agent_msg);
                 s.turn_in_flight = true;
+                s.interrupt_requested = false;
+                s.turn_reasoning_chars = 0;
+                s.turn_answer_chars = 0;
                 s.scroll.scroll_to_bottom();
             }
         }
@@ -425,6 +453,7 @@ impl MainView {
             UiEvent::AgentDelta { session_id, text } => {
                 let mut new_msg = None;
                 self.with_session(&session_id, |s| {
+                    s.turn_answer_chars = s.turn_answer_chars.saturating_add(text.chars().count());
                     match last_agent_message_text(&mut s.messages) {
                         Some(entity) => {
                             entity.update(cx, |this, cx| this.append(&text, cx));
@@ -442,6 +471,8 @@ impl MainView {
             UiEvent::ReasoningDelta { session_id, text } => {
                 let mut create_new = None;
                 self.with_session(&session_id, |s| {
+                    s.turn_reasoning_chars =
+                        s.turn_reasoning_chars.saturating_add(text.chars().count());
                     if let Some(reasoning_entity) = ensure_agent_reasoning(&mut s.messages) {
                         reasoning_entity.update(cx, |this, cx| this.append(&text, cx));
                     } else {
@@ -542,6 +573,9 @@ impl MainView {
                 if let Screen::Workspace(ws) = &mut self.screen {
                     if let Some(s) = ws.sessions.get_mut(&session_id) {
                         s.turn_in_flight = false;
+                        s.interrupt_requested = false;
+                        s.turn_reasoning_chars = 0;
+                        s.turn_answer_chars = 0;
                         if let Some(m) = err_msg {
                             s.messages.push(m);
                         }
@@ -917,13 +951,36 @@ fn render_chat_main(
             )
     });
 
-    let status_label = if !s.thread_started {
-        "세션 여는 중…"
-    } else if s.turn_in_flight {
-        "응답 중"
-    } else {
-        "대기"
-    };
+    let interrupt_btn = s.turn_in_flight.then(|| {
+        let requested = s.interrupt_requested;
+        let label = if requested { "중단 요청됨" } else { "중단" };
+        let bg = if requested { 0x3a3440 } else { 0x4a2630 };
+        let fg = if requested { t.muted } else { 0xffb8c0 };
+        div()
+            .px_3()
+            .py_1()
+            .bg(rgb(bg))
+            .text_color(rgb(fg))
+            .text_xs()
+            .rounded_md()
+            .child(label)
+            .when(!requested, |d| {
+                d.cursor_pointer()
+                    .hover(|d| d.bg(rgb(0x603040)))
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|this, _, _, cx| this.interrupt_active(cx)),
+                    )
+            })
+    });
+
+    let status_label = turn_status_label(
+        s.thread_started,
+        s.turn_in_flight,
+        s.interrupt_requested,
+        s.turn_reasoning_chars,
+        s.turn_answer_chars,
+    );
 
     div()
         .flex()
@@ -947,6 +1004,7 @@ fn render_chat_main(
                         .text_color(rgb(t.muted))
                         .child(status_label),
                 )
+                .when_some(interrupt_btn, |d, b| d.child(b))
                 .when_some(revert_btn, |d, b| d.child(b)),
         )
         .child(
@@ -1030,6 +1088,32 @@ fn chip_owned(t: &theme::Tokens, label: String) -> gpui::Div {
         .border_color(rgb(t.border))
         .rounded_md()
         .child(label)
+}
+
+const LONG_REASONING_CHARS: usize = 4_000;
+
+fn turn_status_label(
+    thread_started: bool,
+    turn_in_flight: bool,
+    interrupt_requested: bool,
+    reasoning_chars: usize,
+    answer_chars: usize,
+) -> &'static str {
+    if !thread_started {
+        "세션 여는 중…"
+    } else if !turn_in_flight {
+        "대기"
+    } else if interrupt_requested {
+        "중단 요청 중"
+    } else if answer_chars > 0 {
+        "답변 작성 중"
+    } else if reasoning_chars >= LONG_REASONING_CHARS {
+        "생각이 길어지는 중"
+    } else if reasoning_chars > 0 {
+        "생각 중"
+    } else {
+        "응답 기다리는 중"
+    }
 }
 
 fn render_chat_item(t: &theme::Tokens, item: &ChatItem) -> gpui::Div {
@@ -1469,7 +1553,7 @@ fn finalize_last_agent_message_markdown(s: &mut SessionUiState, cx: &mut Context
 
 /// 마크다운 marker가 하나라도 있으면 true. 파싱 비용 절약용 빠른 체크.
 fn has_markdown_markers(raw: &str) -> bool {
-    if raw.contains("```") {
+    if raw.contains("```") || raw.contains('`') || raw.contains("**") || raw.contains("](") {
         return true;
     }
     for line in raw.lines() {
@@ -1582,21 +1666,106 @@ fn parse_markdown_raw(raw: &str) -> Vec<RawSegment> {
     segments
 }
 
+#[derive(Debug, PartialEq, Eq)]
+struct InlineParse {
+    text: String,
+    spans: Vec<InlineSpan>,
+}
+
+fn parse_inline_markdown(raw: &str) -> InlineParse {
+    let mut text = String::with_capacity(raw.len());
+    let mut spans = Vec::new();
+    let mut i = 0;
+    while i < raw.len() {
+        let rest = &raw[i..];
+        if let Some(after_tick) = rest.strip_prefix('`') {
+            if let Some(end) = after_tick.find('`') {
+                let body = &after_tick[..end];
+                if !body.is_empty() {
+                    let start = text.len();
+                    text.push_str(body);
+                    spans.push(InlineSpan {
+                        range: start..text.len(),
+                        kind: InlineKind::Code,
+                    });
+                    i += 1 + end + 1;
+                    continue;
+                }
+            }
+        }
+        if let Some(after_open) = rest.strip_prefix("**") {
+            if let Some(end) = after_open.find("**") {
+                let body = &after_open[..end];
+                if !body.is_empty() {
+                    let start = text.len();
+                    text.push_str(body);
+                    spans.push(InlineSpan {
+                        range: start..text.len(),
+                        kind: InlineKind::Bold,
+                    });
+                    i += 2 + end + 2;
+                    continue;
+                }
+            }
+        }
+        if let Some(after_bracket) = rest.strip_prefix('[') {
+            if let Some(label_end) = after_bracket.find("](") {
+                let label = &after_bracket[..label_end];
+                let after_url_open = &after_bracket[label_end + 2..];
+                if let Some(url_end) = after_url_open.find(')') {
+                    let url = &after_url_open[..url_end];
+                    if !label.is_empty() && !url.is_empty() {
+                        let start = text.len();
+                        text.push_str(label);
+                        text.push_str(" (");
+                        text.push_str(url);
+                        text.push(')');
+                        spans.push(InlineSpan {
+                            range: start..text.len(),
+                            kind: InlineKind::Link,
+                        });
+                        i += 1 + label_end + 2 + url_end + 1;
+                        continue;
+                    }
+                }
+            }
+        }
+
+        let ch = rest.chars().next().expect("non-empty rest");
+        text.push(ch);
+        i += ch.len_utf8();
+    }
+    InlineParse { text, spans }
+}
+
+fn selectable_from_markdown_inline(
+    raw: String,
+    color: u32,
+    cx: &mut Context<MainView>,
+) -> Entity<SelectableText> {
+    let parsed = parse_inline_markdown(&raw);
+    if parsed.spans.is_empty() && parsed.text == raw {
+        cx.new(|cx| SelectableText::new(raw, color, cx))
+    } else {
+        cx.new(|cx| SelectableText::new_inline(parsed.text, color, parsed.spans, cx))
+    }
+}
+
 /// RawSegment 들에서 SelectableText entity를 만들어 MessageSegment 로 변환.
 fn parse_markdown_segments(raw: &str, cx: &mut Context<MainView>) -> Vec<MessageSegment> {
     parse_markdown_raw(raw)
         .into_iter()
         .map(|raw_seg| match raw_seg {
             RawSegment::Paragraph(text) => {
-                let entity = cx.new(|cx| SelectableText::new(text, theme::TOKENS.fg, cx));
+                let entity = selectable_from_markdown_inline(text, theme::TOKENS.fg, cx);
                 MessageSegment::Paragraph(entity)
             }
             RawSegment::Heading { level, body } => {
-                let entity = cx.new(|cx| SelectableText::new(body, theme::TOKENS.fg, cx));
+                let entity = selectable_from_markdown_inline(body, theme::TOKENS.fg, cx);
                 MessageSegment::Heading { level, body: entity }
             }
             RawSegment::ListItem(body) => {
-                let entity = cx.new(|cx| SelectableText::new(body, theme::TOKENS.fg, cx));
+                let entity = selectable_from_markdown_inline(body, theme::TOKENS.fg, cx);
                 MessageSegment::ListItem { body: entity }
             }
             RawSegment::Code { body, language } => {
@@ -1639,6 +1808,70 @@ fn list_item_body(line: &str) -> Option<String> {
 #[cfg(test)]
 mod markdown_tests {
     use super::*;
+
+    #[test]
+    fn status_label_tracks_reasoning_before_answer() {
+        assert_eq!(turn_status_label(false, false, false, 0, 0), "세션 여는 중…");
+        assert_eq!(turn_status_label(true, false, false, 0, 0), "대기");
+        assert_eq!(turn_status_label(true, true, false, 0, 0), "응답 기다리는 중");
+        assert_eq!(turn_status_label(true, true, false, 10, 0), "생각 중");
+        assert_eq!(
+            turn_status_label(true, true, false, LONG_REASONING_CHARS, 0),
+            "생각이 길어지는 중"
+        );
+        assert_eq!(turn_status_label(true, true, false, 10_000, 1), "답변 작성 중");
+        assert_eq!(turn_status_label(true, true, true, 10_000, 0), "중단 요청 중");
+    }
+
+    #[test]
+    fn inline_code_strips_markers_and_records_span() {
+        let parsed = parse_inline_markdown("use `cargo test` now");
+
+        assert_eq!(parsed.text, "use cargo test now");
+        assert_eq!(
+            parsed.spans,
+            vec![InlineSpan {
+                range: 4..14,
+                kind: InlineKind::Code,
+            }]
+        );
+    }
+
+    #[test]
+    fn inline_bold_strips_markers_and_records_span() {
+        let parsed = parse_inline_markdown("this is **important**");
+
+        assert_eq!(parsed.text, "this is important");
+        assert_eq!(
+            parsed.spans,
+            vec![InlineSpan {
+                range: 8..17,
+                kind: InlineKind::Bold,
+            }]
+        );
+    }
+
+    #[test]
+    fn inline_link_keeps_url_visible_and_records_span() {
+        let parsed = parse_inline_markdown("see [docs](https://example.test)");
+
+        assert_eq!(parsed.text, "see docs (https://example.test)");
+        assert_eq!(
+            parsed.spans,
+            vec![InlineSpan {
+                range: 4..31,
+                kind: InlineKind::Link,
+            }]
+        );
+    }
+
+    #[test]
+    fn unmatched_inline_markers_stay_literal() {
+        let parsed = parse_inline_markdown("bad `code and **bold");
+
+        assert_eq!(parsed.text, "bad `code and **bold");
+        assert!(parsed.spans.is_empty());
+    }
 
     #[test]
     fn empty_input() {

@@ -80,6 +80,7 @@ async fn main() -> anyhow::Result<()> {
 
     let mut event_counts = std::collections::BTreeMap::<String, usize>::new();
     let mut accumulated_message = String::new();
+    let mut accumulated_reasoning = String::new();
     let timeout = Duration::from_secs(
         env::var("STCODE_LIVETEST_TIMEOUT")
             .ok()
@@ -112,6 +113,11 @@ async fn main() -> anyhow::Result<()> {
                 accumulated_message.push_str(&d.delta);
                 println!("  AgentMessageDelta: +{} chars", d.delta.len());
             }
+            ThreadEvent::ReasoningDelta(d) => {
+                *event_counts.entry("ReasoningDelta".into()).or_default() += 1;
+                accumulated_reasoning.push_str(&d.delta);
+                println!("  ReasoningDelta: +{} chars", d.delta.len());
+            }
             ThreadEvent::TurnCompleted { turn } => {
                 *event_counts.entry("TurnCompleted".into()).or_default() += 1;
                 println!("  TurnCompleted: status={:?}", turn.status);
@@ -133,6 +139,30 @@ async fn main() -> anyhow::Result<()> {
                     d.delta.len()
                 );
             }
+            ThreadEvent::ItemStarted {
+                item_id,
+                item_type,
+                params,
+            } => {
+                *event_counts
+                    .entry(format!("ItemStarted:{item_type}"))
+                    .or_default() += 1;
+                let preview = serde_json::to_string(params).unwrap_or_default();
+                let preview = preview.chars().take(120).collect::<String>();
+                println!("  ItemStarted[{item_type} {item_id}]: {preview}");
+            }
+            ThreadEvent::ItemCompleted {
+                item_id,
+                item_type,
+                params,
+            } => {
+                *event_counts
+                    .entry(format!("ItemCompleted:{item_type}"))
+                    .or_default() += 1;
+                let preview = serde_json::to_string(params).unwrap_or_default();
+                let preview = preview.chars().take(120).collect::<String>();
+                println!("  ItemCompleted[{item_type} {item_id}]: {preview}");
+            }
             ThreadEvent::Other { method, params } => {
                 *event_counts.entry(format!("Other:{method}")).or_default() += 1;
                 let preview = serde_json::to_string(params).unwrap_or_default();
@@ -152,9 +182,17 @@ async fn main() -> anyhow::Result<()> {
     println!("=== summary ===");
     println!("  completed         : {completed}");
     println!("  accumulated_text  : {} chars", accumulated_message.len());
+    println!(
+        "  reasoning_text    : {} chars",
+        accumulated_reasoning.len()
+    );
     if !accumulated_message.is_empty() {
         let preview: String = accumulated_message.chars().take(200).collect();
         println!("  text_preview      : {preview:?}");
+    }
+    if !accumulated_reasoning.is_empty() {
+        let preview: String = accumulated_reasoning.chars().take(200).collect();
+        println!("  reasoning_preview : {preview:?}");
     }
     println!("  event counts:");
     for (k, v) in &event_counts {
