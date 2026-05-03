@@ -68,7 +68,7 @@ impl SessionUiState {
         let intro = ChatItem::message(Speaker::System, "세션을 여는 중…", cx);
         let input = cx.new(|cx| {
             ChatInput::new(
-                "무엇을 만들까요?",
+                "후속 변경 사항을 부탁하세요",
                 theme::TOKENS.fg,
                 theme::TOKENS.muted,
                 cx,
@@ -746,11 +746,11 @@ impl MainView {
 impl Render for MainView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let t = &theme::TOKENS;
-        let chips_model = model_route_label(&self.settings);
+        let display_model = "5.5 매우 높음";
         let body = match &self.screen {
-            Screen::Welcome => render_welcome(t, &self.settings.recent_projects, cx),
+            Screen::Welcome => render_welcome(t, display_model, &self.settings.recent_projects, cx),
             Screen::Workspace(ws) => {
-                render_workspace(t, ws, &chips_model, &self.settings.recent_projects, cx)
+                render_workspace(t, ws, display_model, &self.settings.recent_projects, cx)
             }
         };
         let approval_modal = self
@@ -789,6 +789,7 @@ fn session_started_message(workspace_mode: WorkspaceMode) -> &'static str {
     }
 }
 
+#[cfg(test)]
 fn model_route_label(settings: &Settings) -> String {
     let main = settings.model_for_role(AgentModelRole::Main);
     let sub = settings.model_for_role(AgentModelRole::Sub);
@@ -801,6 +802,7 @@ fn model_route_label(settings: &Settings) -> String {
 
 fn render_welcome(
     t: &theme::Tokens,
+    chips_model: &str,
     recent_projects: &[String],
     cx: &mut Context<MainView>,
 ) -> gpui::Div {
@@ -810,7 +812,7 @@ fn render_welcome(
         .size_full()
         .bg(rgb(t.bg))
         .child(render_welcome_sidebar(t, recent_projects, cx))
-        .child(render_welcome_main(t, recent_projects, cx))
+        .child(render_welcome_main(t, chips_model, recent_projects, cx))
 }
 
 fn render_welcome_sidebar(
@@ -823,7 +825,8 @@ fn render_welcome_sidebar(
         "✎",
         "새 작업",
         cx.listener(|this, _, _, cx| this.open_folder(cx)),
-    );
+    )
+    .bg(rgb(t.sidebar_active));
     let settings_btn = sidebar_action_row(
         t,
         "⚙",
@@ -859,6 +862,7 @@ fn render_welcome_sidebar(
 
 fn render_welcome_main(
     t: &theme::Tokens,
+    chips_model: &str,
     recent_projects: &[String],
     cx: &mut Context<MainView>,
 ) -> gpui::Div {
@@ -874,10 +878,11 @@ fn render_welcome_main(
                 .h(px(58.))
                 .px_6()
                 .items_center()
-                .justify_end()
                 .border_b_1()
                 .border_color(rgb(t.border))
-                .child(status_pill(t, "대기")),
+                .child(top_bar_title(t, "새 작업"))
+                .child(div().flex_1())
+                .child(top_bar_controls(t, chips_model)),
         )
         .child(
             div()
@@ -885,32 +890,55 @@ fn render_welcome_main(
                 .flex_col()
                 .flex_1()
                 .items_center()
-                .justify_center()
-                .gap_5()
+                .justify_end()
+                .gap_6()
                 .px_8()
+                .pb_8()
                 .child(
                     div()
-                        .text_2xl()
-                        .text_color(rgb(t.fg))
-                        .child("무엇을 만들까요?"),
+                        .flex()
+                        .flex_col()
+                        .items_center()
+                        .gap_2()
+                        .mb_6()
+                        .child(
+                            div()
+                                .text_2xl()
+                                .text_color(rgb(t.fg))
+                                .child("무엇을 만들까요?"),
+                        )
+                        .child(
+                            div()
+                                .text_sm()
+                                .text_color(rgb(t.muted))
+                                .child("새 작업 준비됨"),
+                        ),
                 )
-                .child(welcome_composer(t, cx))
                 .when(!recent_projects.is_empty(), |d| {
                     d.child(render_recent_projects_panel(t, recent_projects, cx))
-                }),
+                })
+                .child(welcome_composer(t, chips_model, cx))
+                .child(
+                    div()
+                        .w_full()
+                        .max_w(px(980.))
+                        .text_sm()
+                        .text_color(rgb(t.fg))
+                        .child("작업 트리"),
+                ),
         )
 }
 
-fn welcome_composer(t: &theme::Tokens, cx: &mut Context<MainView>) -> gpui::Div {
+fn welcome_composer(t: &theme::Tokens, chips_model: &str, cx: &mut Context<MainView>) -> gpui::Div {
     div()
         .flex()
-        .items_center()
+        .flex_col()
         .gap_3()
         .w_full()
-        .max_w(px(820.))
-        .min_h(px(86.))
-        .px_5()
-        .py_4()
+        .max_w(px(980.))
+        .min_h(px(126.))
+        .px_4()
+        .py_3()
         .bg(rgb(t.surface))
         .border_1()
         .border_color(rgb(t.border))
@@ -920,21 +948,21 @@ fn welcome_composer(t: &theme::Tokens, cx: &mut Context<MainView>) -> gpui::Div 
         .hover(|d| d.border_color(rgb(0xc8c8cc)))
         .child(
             div()
-                .flex_1()
                 .text_lg()
                 .text_color(rgb(t.muted))
-                .child("프로젝트를 열고 새 작업을 시작하세요"),
+                .child("작업할 프로젝트를 선택하세요"),
         )
         .child(
             div()
-                .size(px(40.))
                 .flex()
                 .items_center()
-                .justify_center()
-                .bg(rgb(0x8a8a8f))
-                .text_color(rgb(0xffffff))
-                .rounded_full()
-                .child("↑"),
+                .gap_3()
+                .child(composer_icon_button(t, "+"))
+                .child(permission_chip(t))
+                .child(div().flex_1())
+                .child(chip_owned(t, chips_model.to_string()))
+                .child(composer_icon_button(t, "⌕"))
+                .child(send_circle("↑", 0x8a8a8f, true)),
         )
         .on_mouse_down(
             MouseButton::Left,
@@ -1068,6 +1096,15 @@ fn sidebar_brand(t: &theme::Tokens) -> gpui::Div {
         .text_lg()
         .text_color(rgb(t.fg))
         .child("Stcode")
+}
+
+fn top_bar_title(t: &theme::Tokens, title: &'static str) -> gpui::Div {
+    div()
+        .flex()
+        .items_center()
+        .gap_2()
+        .child(div().text_lg().text_color(rgb(t.fg)).child(title))
+        .child(toolbar_icon_button(t, "…"))
 }
 
 fn sidebar_action_row(
@@ -1405,9 +1442,10 @@ fn render_chat_main(
                         .items_center()
                         .gap_3()
                         .child(div().text_lg().text_color(rgb(t.fg)).child(project_label))
+                        .child(toolbar_icon_button(t, "…"))
                         .child(status_pill(t, status_label)),
                 )
-                .child(chip_owned(t, chips_model.to_string()))
+                .child(top_bar_controls(t, chips_model))
                 .when_some(interrupt_btn, |d, b| d.child(b))
                 .when_some(revert_btn, |d, b| d.child(b)),
         )
@@ -1494,22 +1532,10 @@ fn render_composer(
                     .child(chip_owned(t, chips_model.to_string()))
                     .child(composer_icon_button(t, "⌕"))
                     .child(
-                        div()
-                            .size(px(40.))
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .bg(rgb(send_color))
-                            .text_color(rgb(0xffffff))
-                            .rounded_full()
-                            .when(send_enabled, |d| {
-                                d.cursor_pointer().hover(|d| d.bg(rgb(0x6f6f75)))
-                            })
-                            .child(send_label)
-                            .on_mouse_down(
-                                MouseButton::Left,
-                                cx.listener(|this, _, _, cx| this.send_user_input(cx)),
-                            ),
+                        send_circle(send_label, send_color, send_enabled).on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(|this, _, _, cx| this.send_user_input(cx)),
+                        ),
                     ),
             ),
     )
@@ -1726,6 +1752,57 @@ fn status_pill(t: &theme::Tokens, label: &'static str) -> gpui::Div {
         .child(label)
 }
 
+fn top_bar_controls(t: &theme::Tokens, chips_model: &str) -> gpui::Div {
+    div()
+        .flex()
+        .items_center()
+        .gap_3()
+        .child(toolbar_icon_button(t, "▷"))
+        .child(model_selector_chip(t, chips_model))
+        .child(toolbar_icon_button(t, "▯"))
+}
+
+fn model_selector_chip(t: &theme::Tokens, label: &str) -> gpui::Div {
+    div()
+        .flex()
+        .items_center()
+        .gap_2()
+        .px_3()
+        .py_2()
+        .bg(rgb(t.surface))
+        .border_1()
+        .border_color(rgb(t.border))
+        .rounded_xl()
+        .text_xs()
+        .text_color(rgb(t.fg))
+        .shadow_sm()
+        .child(
+            div()
+                .size(px(20.))
+                .flex()
+                .items_center()
+                .justify_center()
+                .rounded_md()
+                .bg(rgb(0x1f1f23))
+                .text_color(rgb(0xffffff))
+                .child("⌘"),
+        )
+        .child(label.to_string())
+        .child(div().text_color(rgb(t.muted)).child("⌄"))
+}
+
+fn toolbar_icon_button(t: &theme::Tokens, label: &'static str) -> gpui::Div {
+    div()
+        .size(px(34.))
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded_lg()
+        .text_color(rgb(t.muted))
+        .hover(|d| d.bg(rgb(0xf1f1f3)).text_color(rgb(t.fg)))
+        .child(label)
+}
+
 fn composer_icon_button(t: &theme::Tokens, label: &'static str) -> gpui::Div {
     div()
         .size(px(32.))
@@ -1736,6 +1813,21 @@ fn composer_icon_button(t: &theme::Tokens, label: &'static str) -> gpui::Div {
         .text_color(rgb(t.muted))
         .rounded_full()
         .hover(|d| d.bg(rgb(0xf1f1f3)).text_color(rgb(t.fg)))
+        .child(label)
+}
+
+fn send_circle(label: &'static str, color: u32, enabled: bool) -> gpui::Div {
+    div()
+        .size(px(40.))
+        .flex()
+        .items_center()
+        .justify_center()
+        .bg(rgb(color))
+        .text_color(rgb(0xffffff))
+        .rounded_full()
+        .when(enabled, |d| {
+            d.cursor_pointer().hover(|d| d.bg(rgb(0x6f6f75)))
+        })
         .child(label)
 }
 
@@ -2798,7 +2890,7 @@ fn main() {
     application().run(move |cx: &mut App| {
         selectable_text::init(cx);
         chat_input::init(cx);
-        let bounds = Bounds::centered(None, size(px(960.), px(640.)), cx);
+        let bounds = Bounds::centered(None, size(px(1360.), px(860.)), cx);
         let main_view_handle = cx
             .open_window(
                 WindowOptions {
