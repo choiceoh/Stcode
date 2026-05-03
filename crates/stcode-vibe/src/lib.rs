@@ -21,4 +21,4 @@ pub use session_worktree::{
     cleanup_finished_session_branches, cleanup_session_worktree, default_worktrees_root,
     prepare_session_worktree, session_branch_name,
 };
-pub use settings::Settings;
+pub use settings::{AgentModelRole, Settings};

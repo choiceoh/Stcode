@@ -17,7 +17,7 @@ use selectable_text::{InlineKind, InlineSpan, SelectableText};
 use stcode_codex::bridge::{
     ApprovalDecision, Bridge, SessionId, ToolKind, UiCommand, UiEvent, WorkspaceMode,
 };
-use stcode_vibe::{friendly_translate, settings, Settings};
+use stcode_vibe::{AgentModelRole, Settings, friendly_translate, settings};
 
 // ─── 화면 / 상태 ──────────────────────────────────────────
 
@@ -178,10 +178,11 @@ struct PendingApproval {
     raw_detail: String,
 }
 
-/// 설정 모달이 떠 있을 때의 임시 입력 상태. ChatInput 두 개 (provider, model).
+/// 설정 모달이 떠 있을 때의 임시 입력 상태.
 struct SettingsDraft {
     provider: Entity<ChatInput>,
-    model: Entity<ChatInput>,
+    main_model: Entity<ChatInput>,
+    sub_model: Entity<ChatInput>,
     /// 저장 후 잠깐 보여줄 안내 (Some(text), 자동 사라짐 없음 — 닫을 때 None).
     notice: Option<String>,
 }
@@ -219,20 +220,27 @@ impl MainView {
 
     fn open_settings(&mut self, cx: &mut Context<Self>) {
         let provider_text = self.settings.provider.clone();
-        let model_text = self.settings.model.clone();
+        let main_model_text = self.settings.main_model.clone();
+        let sub_model_text = self.settings.sub_model.clone();
         let provider = cx.new(|cx| {
             let mut ci = ChatInput::new("provider 이름", theme::TOKENS.fg, theme::TOKENS.muted, cx);
             ci.set_content(provider_text, cx);
             ci
         });
-        let model = cx.new(|cx| {
-            let mut ci = ChatInput::new("model 식별자", theme::TOKENS.fg, theme::TOKENS.muted, cx);
-            ci.set_content(model_text, cx);
+        let main_model = cx.new(|cx| {
+            let mut ci = ChatInput::new("조율 모델", theme::TOKENS.fg, theme::TOKENS.muted, cx);
+            ci.set_content(main_model_text, cx);
+            ci
+        });
+        let sub_model = cx.new(|cx| {
+            let mut ci = ChatInput::new("작업 모델", theme::TOKENS.fg, theme::TOKENS.muted, cx);
+            ci.set_content(sub_model_text, cx);
             ci
         });
         self.settings_draft = Some(SettingsDraft {
             provider,
-            model,
+            main_model,
+            sub_model,
             notice: None,
         });
         cx.notify();
@@ -248,15 +256,21 @@ impl MainView {
             return;
         };
         let provider = d.provider.read(cx).content().trim().to_string();
-        let model = d.model.read(cx).content().trim().to_string();
-        if provider.is_empty() || model.is_empty() {
+        let main_model = d.main_model.read(cx).content().trim().to_string();
+        let sub_model = d.sub_model.read(cx).content().trim().to_string();
+        if provider.is_empty() || main_model.is_empty() || sub_model.is_empty() {
             if let Some(d) = self.settings_draft.as_mut() {
-                d.notice = Some("provider 와 model 모두 입력해 주세요".into());
+                d.notice = Some("provider, 조율 모델, 작업 모델을 모두 입력해 주세요".into());
             }
             cx.notify();
             return;
         }
-        let new_settings = Settings { provider, model };
+        let new_settings = Settings {
+            provider,
+            model: main_model.clone(),
+            main_model,
+            sub_model,
+        };
         match settings::save(&new_settings) {
             Ok(()) => {
                 self.settings = new_settings;
@@ -314,7 +328,7 @@ impl MainView {
             session_id,
             path,
             provider: self.settings.provider.clone(),
-            model: self.settings.model.clone(),
+            model: self.settings.model_for_role(AgentModelRole::Main).to_string(),
         });
         cx.notify();
     }
@@ -689,7 +703,7 @@ impl MainView {
 impl Render for MainView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let t = &theme::TOKENS;
-        let chips_model = self.settings.model.clone();
+        let chips_model = model_route_label(&self.settings);
         let body = match &self.screen {
             Screen::Welcome => render_welcome(t, cx),
             Screen::Workspace(ws) => render_workspace(t, ws, &chips_model, cx),
@@ -727,6 +741,16 @@ fn session_started_message(workspace_mode: WorkspaceMode) -> &'static str {
             "작업공간 준비됨\n원본 폴더는 그대로 두고 이 세션 전용 공간에서 진행해요.\n에이전트 연결됨"
         }
         WorkspaceMode::Direct => "작업공간 준비됨\n에이전트 연결됨",
+    }
+}
+
+fn model_route_label(settings: &Settings) -> String {
+    let main = settings.model_for_role(AgentModelRole::Main);
+    let sub = settings.model_for_role(AgentModelRole::Sub);
+    if main == sub {
+        format!("조율/작업 {main}")
+    } else {
+        format!("조율 {main} · 작업 {sub}")
     }
 }
 
@@ -1537,7 +1561,8 @@ fn render_settings_modal(
                     "Provider (codex config.toml에 정의된 이름)",
                     d.provider.clone(),
                 ))
-                .child(setting_field(t, "Model", d.model.clone()))
+                .child(setting_field(t, "조율 모델", d.main_model.clone()))
+                .child(setting_field(t, "작업 모델", d.sub_model.clone()))
                 .when_some(notice, |dv, n| {
                     dv.child(
                         div()
@@ -1916,6 +1941,25 @@ mod markdown_tests {
 
         let direct = session_started_message(WorkspaceMode::Direct);
         assert_eq!(direct, "작업공간 준비됨\n에이전트 연결됨");
+    }
+
+    #[test]
+    fn model_route_label_shows_main_and_sub_roles() {
+        let same = Settings {
+            provider: "local-vllm".into(),
+            model: "qwen".into(),
+            main_model: "qwen".into(),
+            sub_model: "qwen".into(),
+        };
+        assert_eq!(model_route_label(&same), "조율/작업 qwen");
+
+        let split = Settings {
+            provider: "local-vllm".into(),
+            model: "planner".into(),
+            main_model: "planner".into(),
+            sub_model: "worker".into(),
+        };
+        assert_eq!(model_route_label(&split), "조율 planner · 작업 worker");
     }
 
     #[test]
