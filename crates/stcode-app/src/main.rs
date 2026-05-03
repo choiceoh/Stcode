@@ -614,11 +614,128 @@ fn render_chat(
     last_commit: Option<LastCommit>,
     cx: &mut Context<MainView>,
 ) -> gpui::Div {
+    // [사이드바 | 메인]
+    div()
+        .flex()
+        .flex_row()
+        .size_full()
+        .child(render_sidebar(t, project, thread_started, turn_in_flight, cx))
+        .child(render_chat_main(
+            t,
+            project,
+            messages,
+            thread_started,
+            turn_in_flight,
+            input,
+            scroll,
+            last_commit,
+            cx,
+        ))
+}
+
+/// 좌측 사이드바. v1엔 단일 세션 항목 1개 + "+ 새 세션" 버튼.
+/// 데이터는 1개지만 UI 구조는 list — multi-session 도입 시 데이터만 Vec로 바꾸면 됨.
+fn render_sidebar(
+    t: &theme::Tokens,
+    project: &PathBuf,
+    thread_started: bool,
+    turn_in_flight: bool,
+    cx: &mut Context<MainView>,
+) -> gpui::Div {
     let project_label = project
         .file_name()
         .map(|s| s.to_string_lossy().into_owned())
         .unwrap_or_else(|| project.to_string_lossy().into_owned());
 
+    // 세션 상태 표식: 처음(○) / 작업 중(⏳) / 대기(✓)
+    let status_icon = if !thread_started {
+        "○"
+    } else if turn_in_flight {
+        "⏳"
+    } else {
+        "✓"
+    };
+
+    let session_item = div()
+        .flex()
+        .gap_2()
+        .items_center()
+        .px_3()
+        .py_2()
+        // v1엔 항상 활성. multi-session 도입 시 active 비교로 분기.
+        .bg(rgb(t.sidebar_active))
+        .text_sm()
+        .text_color(rgb(t.fg))
+        .border_l_2()
+        .border_color(rgb(t.accent))
+        .child(div().w_4().text_xs().text_color(rgb(t.muted)).child(status_icon))
+        .child(
+            div()
+                .flex_1()
+                .overflow_hidden()
+                .child(format!("📁 {project_label}")),
+        );
+
+    let new_session_btn = div()
+        .flex()
+        .gap_2()
+        .items_center()
+        .px_3()
+        .py_2()
+        .text_sm()
+        .text_color(rgb(t.muted))
+        .cursor_pointer()
+        .hover(|d| d.bg(rgb(t.sidebar_active)).text_color(rgb(t.fg)))
+        .child(div().w_4().text_xs().child("+"))
+        .child(div().flex_1().child("새 세션"))
+        .on_mouse_down(
+            MouseButton::Left,
+            cx.listener(|this, _, _, cx| this.open_folder(cx)),
+        );
+
+    div()
+        .flex()
+        .flex_col()
+        .w(px(220.))
+        .h_full()
+        .bg(rgb(t.sidebar))
+        .border_r_1()
+        .border_color(rgb(t.border))
+        .child(
+            div()
+                .flex()
+                .h_10()
+                .px_4()
+                .items_center()
+                .border_b_1()
+                .border_color(rgb(t.border))
+                .text_sm()
+                .text_color(rgb(t.muted))
+                .child("🚀 Stcode"),
+        )
+        .child(
+            div()
+                .flex()
+                .flex_col()
+                .flex_1()
+                .py_2()
+                .child(session_item)
+                .child(new_session_btn),
+        )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn render_chat_main(
+    t: &theme::Tokens,
+    _project: &PathBuf,
+    messages: &[ChatItem],
+    thread_started: bool,
+    turn_in_flight: bool,
+    input: Entity<ChatInput>,
+    scroll: ScrollHandle,
+    last_commit: Option<LastCommit>,
+    cx: &mut Context<MainView>,
+) -> gpui::Div {
     let send_enabled = thread_started && !turn_in_flight;
     let send_label = if turn_in_flight { "⏳ 응답 중…" } else { "↵ 보내기" };
     let send_color = if send_enabled { t.accent } else { 0x555566 };
@@ -640,11 +757,21 @@ fn render_chat(
             )
     });
 
+    let status_label = if !thread_started {
+        "세션 여는 중…"
+    } else if turn_in_flight {
+        "응답 중"
+    } else {
+        "대기"
+    };
+
     div()
         .flex()
         .flex_col()
-        .size_full()
+        .flex_1()
+        .h_full()
         .child(
+            // 채팅 헤더 — 세션 status 좌측, revert 버튼 우측
             div()
                 .flex()
                 .h_10()
@@ -653,12 +780,13 @@ fn render_chat(
                 .gap_3()
                 .bg(rgb(t.surface))
                 .border_b_1()
-                .border_color(rgb(0x383848))
+                .border_color(rgb(t.border))
                 .child(
                     div()
                         .flex_1()
                         .text_sm()
-                        .child(format!("📁 {project_label}")),
+                        .text_color(rgb(t.muted))
+                        .child(status_label),
                 )
                 .when_some(revert_btn, |d, b| d.child(b)),
         )
@@ -674,6 +802,20 @@ fn render_chat(
                 .track_scroll(&scroll)
                 .children(messages.iter().map(|m| render_chat_item(t, m))),
         )
+        // 하단 chips row — 모델 / 권한. v1은 readonly 표시.
+        .child(
+            div()
+                .flex()
+                .gap_2()
+                .px_4()
+                .py_2()
+                .bg(rgb(t.surface))
+                .border_t_1()
+                .border_color(rgb(t.border))
+                .child(chip(t, "🤖 qwen3.6-35b-a3b"))
+                .child(chip(t, "⚡ 자동 모드"))
+                .child(chip(t, "📂 작업 폴더 자유")),
+        )
         .child(
             div()
                 .flex()
@@ -684,7 +826,7 @@ fn render_chat(
                 .gap_3()
                 .bg(rgb(t.surface))
                 .border_t_1()
-                .border_color(rgb(0x383848))
+                .border_color(rgb(t.border))
                 .child(
                     div()
                         .flex_1()
@@ -692,7 +834,7 @@ fn render_chat(
                         .py_2()
                         .bg(rgb(t.bg))
                         .border_1()
-                        .border_color(rgb(0x383848))
+                        .border_color(rgb(t.border))
                         .rounded_md()
                         .child(input),
                 )
@@ -704,8 +846,7 @@ fn render_chat(
                         .text_color(rgb(0x111122))
                         .rounded_md()
                         .when(send_enabled, |d| {
-                            d.cursor_pointer()
-                                .hover(|d| d.bg(rgb(0xa0c0ff)))
+                            d.cursor_pointer().hover(|d| d.bg(rgb(0xa0c0ff)))
                         })
                         .child(send_label)
                         .on_mouse_down(
@@ -714,6 +855,20 @@ fn render_chat(
                         ),
                 ),
         )
+}
+
+/// 하단 정보 chip — 작은 둥근 라벨. v1엔 readonly.
+fn chip(t: &theme::Tokens, label: &'static str) -> gpui::Div {
+    div()
+        .px_2()
+        .py_1()
+        .bg(rgb(t.bg))
+        .text_xs()
+        .text_color(rgb(t.muted))
+        .border_1()
+        .border_color(rgb(t.border))
+        .rounded_md()
+        .child(label)
 }
 
 fn render_chat_item(t: &theme::Tokens, item: &ChatItem) -> gpui::Div {
