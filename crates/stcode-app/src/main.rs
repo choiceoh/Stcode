@@ -2,9 +2,9 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use gpui::{
-    App, Bounds, Context, Entity, IntoElement, MouseButton, MouseDownEvent, ParentElement, Render,
-    ScrollHandle, SharedString, Styled, Window, WindowBounds, WindowOptions, div, prelude::*, px,
-    rgb, rgba, size,
+    App, Bounds, Context, Entity, FontWeight, IntoElement, MouseButton, MouseDownEvent,
+    ParentElement, Render, ScrollHandle, SharedString, Styled, Window, WindowBounds, WindowOptions,
+    div, prelude::*, px, rgb, rgba, size,
 };
 use gpui_platform::application;
 
@@ -772,6 +772,8 @@ impl Render for MainView {
             .size_full()
             .bg(rgb(t.bg))
             .text_color(rgb(t.fg))
+            .text_size(px(14.))
+            .line_height(px(20.))
             .on_action(cx.listener(|this, _: &chat_input::Submit, _, cx| this.send_user_input(cx)))
             .child(body)
             .when_some(approval_modal, |d, m| d.child(m))
@@ -822,14 +824,14 @@ fn render_welcome_sidebar(
 ) -> gpui::Div {
     let new_session_btn = sidebar_action_row(
         t,
-        "✎",
+        "+",
         "새 작업",
         cx.listener(|this, _, _, cx| this.open_folder(cx)),
     )
     .bg(rgb(t.sidebar_active));
     let settings_btn = sidebar_action_row(
         t,
-        "⚙",
+        "",
         "설정",
         cx.listener(|this, _, _, cx| this.open_settings(cx)),
     );
@@ -837,7 +839,7 @@ fn render_welcome_sidebar(
     div()
         .flex()
         .flex_col()
-        .w(px(300.))
+        .w(px(248.))
         .h_full()
         .bg(rgb(t.sidebar))
         .border_r_1()
@@ -873,8 +875,8 @@ fn render_welcome_main(
         .child(
             div()
                 .flex()
-                .h(px(58.))
-                .px_6()
+                .h(px(50.))
+                .px_4()
                 .items_center()
                 .border_b_1()
                 .border_color(rgb(t.border))
@@ -889,19 +891,20 @@ fn render_welcome_main(
                 .flex_1()
                 .items_center()
                 .justify_end()
-                .gap_6()
-                .px_8()
-                .pb_8()
+                .gap_3()
+                .px_5()
+                .pb_5()
                 .child(
                     div()
                         .flex()
                         .flex_col()
                         .items_center()
                         .gap_2()
-                        .mb_6()
+                        .mb_3()
                         .child(
                             div()
-                                .text_2xl()
+                                .text_xl()
+                                .font_weight(FontWeight::MEDIUM)
                                 .text_color(rgb(t.fg))
                                 .child("무엇을 만들까요?"),
                         )
@@ -915,15 +918,7 @@ fn render_welcome_main(
                 .when(!recent_projects.is_empty(), |d| {
                     d.child(render_recent_projects_panel(t, recent_projects, cx))
                 })
-                .child(welcome_composer(t, chips_model, cx))
-                .child(
-                    div()
-                        .w_full()
-                        .max_w(px(980.))
-                        .text_sm()
-                        .text_color(rgb(t.fg))
-                        .child("작업 트리"),
-                ),
+                .child(welcome_composer(t, chips_model, cx)),
         )
 }
 
@@ -931,22 +926,21 @@ fn welcome_composer(t: &theme::Tokens, chips_model: &str, cx: &mut Context<MainV
     div()
         .flex()
         .flex_col()
-        .gap_3()
+        .gap_2()
         .w_full()
-        .max_w(px(980.))
-        .min_h(px(126.))
+        .max_w(px(800.))
+        .min_h(px(84.))
         .px_4()
-        .py_3()
+        .py_2()
         .bg(rgb(t.surface))
         .border_1()
         .border_color(rgb(t.border))
-        .rounded_2xl()
-        .shadow_lg()
+        .rounded_lg()
         .cursor_pointer()
         .hover(|d| d.border_color(rgb(0xc8c8cc)))
         .child(
             div()
-                .text_lg()
+                .text_sm()
                 .text_color(rgb(t.muted))
                 .child("작업할 프로젝트를 선택하세요"),
         )
@@ -959,7 +953,6 @@ fn welcome_composer(t: &theme::Tokens, chips_model: &str, cx: &mut Context<MainV
                 .child(permission_chip(t))
                 .child(div().flex_1())
                 .child(chip_owned(t, chips_model.to_string()))
-                .child(composer_icon_button(t, "⌕"))
                 .child(send_circle("↑", 0x8a8a8f, true)),
         )
         .on_mouse_down(
@@ -978,7 +971,7 @@ fn render_recent_projects_panel(
         .flex_col()
         .gap_1()
         .w_full()
-        .max_w(px(820.))
+        .max_w(px(760.))
         .child(section_label("최근 프로젝트"))
         .children(
             recent_projects
@@ -1028,13 +1021,13 @@ fn render_sidebar(
 
     let new_session_btn = sidebar_action_row(
         t,
-        "✎",
+        "+",
         "새 작업",
         cx.listener(|this, _, _, cx| this.open_folder(cx)),
     );
     let settings_btn = sidebar_action_row(
         t,
-        "⚙",
+        "",
         "설정",
         cx.listener(|this, _, _, cx| this.open_settings(cx)),
     );
@@ -1042,7 +1035,7 @@ fn render_sidebar(
     div()
         .flex()
         .flex_col()
-        .w(px(300.))
+        .w(px(248.))
         .h_full()
         .bg(rgb(t.sidebar))
         .border_r_1()
@@ -1060,10 +1053,10 @@ fn render_sidebar(
         .child(render_recent_project_section(t, recent_projects, cx))
         .child(
             div()
-                .px_5()
-                .pt_4()
-                .pb_2()
-                .text_sm()
+                .px_4()
+                .pt_3()
+                .pb_1()
+                .text_xs()
                 .text_color(rgb(0xa0a0a6))
                 .child("작업 세션"),
         )
@@ -1085,22 +1078,24 @@ fn render_sidebar(
 fn sidebar_brand(t: &theme::Tokens) -> gpui::Div {
     div()
         .flex()
-        .h(px(58.))
-        .px_5()
+        .h(px(50.))
+        .px_4()
         .items_center()
         .gap_2()
-        .text_lg()
+        .text_size(px(15.))
+        .font_weight(FontWeight::MEDIUM)
         .text_color(rgb(t.fg))
         .child("Stcode")
 }
 
 fn top_bar_title(t: &theme::Tokens, title: &'static str) -> gpui::Div {
-    div()
-        .flex()
-        .items_center()
-        .gap_2()
-        .child(div().text_lg().text_color(rgb(t.fg)).child(title))
-        .child(toolbar_icon_button(t, "…"))
+    div().flex().items_center().gap_2().child(
+        div()
+            .text_size(px(14.))
+            .font_weight(FontWeight::MEDIUM)
+            .text_color(rgb(t.fg))
+            .child(title),
+    )
 }
 
 fn sidebar_action_row(
@@ -1113,15 +1108,21 @@ fn sidebar_action_row(
         .flex()
         .gap_2()
         .items_center()
-        .mx_3()
-        .px_3()
-        .py_2()
+        .mx_2()
+        .px_2()
+        .py_1()
         .text_color(rgb(t.fg))
         .rounded_lg()
         .cursor_pointer()
         .hover(|d| d.bg(rgb(t.sidebar_active)))
-        .child(div().w_5().text_color(rgb(t.muted)).child(icon))
-        .child(div().flex_1().child(label))
+        .child(
+            div()
+                .w(px(18.))
+                .text_xs()
+                .text_color(rgb(t.muted))
+                .child(icon),
+        )
+        .child(div().flex_1().text_size(px(14.)).child(label))
         .on_mouse_down(MouseButton::Left, on_click)
 }
 
@@ -1138,10 +1139,10 @@ fn render_recent_project_section(
         .collect();
     let body = if rows.is_empty() {
         div()
-            .mx_3()
-            .px_3()
-            .py_2()
-            .text_sm()
+            .mx_2()
+            .px_2()
+            .py_1()
+            .text_xs()
             .text_color(rgb(t.muted))
             .child("최근 프로젝트 없음")
     } else {
@@ -1174,21 +1175,21 @@ fn sidebar_status_row(t: &theme::Tokens, label: &'static str, value: &'static st
         .flex()
         .items_center()
         .gap_2()
-        .mx_3()
-        .px_3()
-        .py_2()
+        .mx_2()
+        .px_2()
+        .py_1()
         .rounded_lg()
         .bg(rgb(0xf6f6f7))
-        .child(div().flex_1().text_sm().text_color(rgb(t.fg)).child(label))
+        .child(div().flex_1().text_xs().text_color(rgb(t.fg)).child(label))
         .child(div().text_xs().text_color(rgb(t.muted)).child(value))
 }
 
 fn section_label(label: &'static str) -> gpui::Div {
     div()
-        .px_5()
-        .pt_4()
-        .pb_2()
-        .text_sm()
+        .px_4()
+        .pt_3()
+        .pb_1()
+        .text_xs()
         .text_color(rgb(0xa0a0a6))
         .child(label)
 }
@@ -1210,30 +1211,39 @@ fn render_recent_project_row(
         .cursor_pointer()
         .bg(rgb(if roomy { t.surface } else { t.sidebar }))
         .hover(|d| d.bg(rgb(t.sidebar_active)))
-        .child(div().w_5().text_color(rgb(t.muted)).child("□"))
+        .child(
+            div()
+                .w(px(16.))
+                .h(px(16.))
+                .rounded_md()
+                .border_1()
+                .border_color(rgb(t.muted)),
+        )
         .child(
             div()
                 .flex()
                 .flex_col()
                 .flex_1()
                 .overflow_hidden()
-                .child(div().text_color(rgb(t.fg)).child(label))
+                .child(
+                    div()
+                        .text_size(px(14.))
+                        .font_weight(FontWeight::MEDIUM)
+                        .text_color(rgb(t.fg))
+                        .child(label),
+                )
                 .child(div().text_xs().text_color(rgb(t.muted)).child(hint)),
         )
-        .child(div().text_color(rgb(t.muted)).child("↗"))
+        .child(div().text_xs().text_color(rgb(t.muted)).child("열기"))
         .on_mouse_down(
             MouseButton::Left,
             cx.listener(move |this, _, _, cx| this.open_recent_project(path_for_click.clone(), cx)),
         );
 
     if roomy {
-        row.px_4()
-            .py_3()
-            .border_1()
-            .border_color(rgb(t.border))
-            .shadow_sm()
+        row.px_4().py_2().border_1().border_color(rgb(t.border))
     } else {
-        row.mx_3().px_3().py_2()
+        row.mx_2().px_2().py_1()
     }
 }
 
@@ -1282,8 +1292,8 @@ fn render_session_item(
         .gap_2()
         .items_center()
         .mx_2()
-        .px_3()
-        .py_2()
+        .px_2()
+        .py_1()
         .rounded_lg()
         .bg(rgb(bg))
         .text_color(rgb(t.fg))
@@ -1291,14 +1301,22 @@ fn render_session_item(
         .hover(|d| d.bg(rgb(t.sidebar_active)))
         .child(
             div()
-                .w_5()
+                .w(px(16.))
+                .text_xs()
                 .text_color(rgb(if s.turn_in_flight { t.accent } else { t.muted }))
                 .child(status_icon),
         )
-        .child(div().flex_1().overflow_hidden().child(project_label))
         .child(
             div()
-                .w_5()
+                .flex_1()
+                .overflow_hidden()
+                .text_size(px(14.))
+                .font_weight(FontWeight::MEDIUM)
+                .child(project_label),
+        )
+        .child(
+            div()
+                .w(px(16.))
                 .text_xs()
                 .text_color(rgb(t.muted))
                 .cursor_pointer()
@@ -1336,11 +1354,12 @@ fn render_active_main(
             .flex_col()
             .items_center()
             .justify_center()
-            .gap_4()
+            .gap_2()
             .bg(rgb(t.bg))
             .child(
                 div()
-                    .text_2xl()
+                    .text_lg()
+                    .font_weight(FontWeight::MEDIUM)
                     .text_color(rgb(t.fg))
                     .child("프로젝트를 열어 작업을 시작하세요"),
             )
@@ -1429,8 +1448,8 @@ fn render_chat_main(
         .child(
             div()
                 .flex()
-                .h(px(58.))
-                .px_6()
+                .h(px(50.))
+                .px_4()
                 .items_center()
                 .gap_3()
                 .bg(rgb(0xfbfbfc))
@@ -1442,8 +1461,13 @@ fn render_chat_main(
                         .flex()
                         .items_center()
                         .gap_3()
-                        .child(div().text_lg().text_color(rgb(t.fg)).child(project_label))
-                        .child(toolbar_icon_button(t, "…"))
+                        .child(
+                            div()
+                                .text_size(px(15.))
+                                .font_weight(FontWeight::MEDIUM)
+                                .text_color(rgb(t.fg))
+                                .child(project_label),
+                        )
                         .child(status_pill(t, status_label)),
                 )
                 .child(top_bar_controls(t, chips_model))
@@ -1475,9 +1499,9 @@ fn render_chat_main(
                                         .flex_col()
                                         .gap_4()
                                         .w_full()
-                                        .max_w(px(1040.))
-                                        .px_8()
-                                        .py_8()
+                                        .max_w(px(820.))
+                                        .px_5()
+                                        .py_5()
                                         .children(
                                             s.messages.iter().map(|m| render_chat_item(t, m)),
                                         ),
@@ -1506,22 +1530,21 @@ fn render_composer(
     send_enabled: bool,
     cx: &mut Context<MainView>,
 ) -> gpui::Div {
-    div().flex().justify_center().px_8().pb_8().child(
+    div().flex().justify_center().px_5().pb_5().child(
         div()
             .flex()
             .flex_col()
-            .gap_3()
+            .gap_2()
             .w_full()
-            .max_w(px(980.))
-            .min_h(px(126.))
+            .max_w(px(760.))
+            .min_h(px(82.))
             .px_4()
-            .py_3()
+            .py_2()
             .bg(rgb(t.surface))
             .border_1()
             .border_color(rgb(t.border))
-            .rounded_2xl()
-            .shadow_lg()
-            .child(div().flex_1().text_lg().child(s.input.clone()))
+            .rounded_lg()
+            .child(div().flex_1().child(s.input.clone()))
             .child(
                 div()
                     .flex()
@@ -1531,7 +1554,6 @@ fn render_composer(
                     .child(permission_chip(t))
                     .child(div().flex_1())
                     .child(chip_owned(t, chips_model.to_string()))
-                    .child(composer_icon_button(t, "⌕"))
                     .child(
                         send_circle(send_label, send_color, send_enabled).on_mouse_down(
                             MouseButton::Left,
@@ -1568,11 +1590,11 @@ fn render_session_overview(t: &theme::Tokens, s: &SessionUiState) -> gpui::Div {
     div()
         .flex()
         .flex_col()
-        .w(px(292.))
+        .w(px(220.))
         .h_full()
-        .px_4()
-        .py_5()
-        .gap_5()
+        .px_3()
+        .py_3()
+        .gap_4()
         .bg(rgb(0xfbfbfc))
         .border_l_1()
         .border_color(rgb(t.border))
@@ -1646,12 +1668,16 @@ fn render_session_overview(t: &theme::Tokens, s: &SessionUiState) -> gpui::Div {
 }
 
 fn panel_title(t: &theme::Tokens, label: &'static str) -> gpui::Div {
-    div().text_sm().text_color(rgb(t.muted)).child(label)
+    div()
+        .text_xs()
+        .font_weight(FontWeight::MEDIUM)
+        .text_color(rgb(t.muted))
+        .child(label)
 }
 
 fn timeline_row(
     t: &theme::Tokens,
-    step: &'static str,
+    _step: &'static str,
     label: &'static str,
     state: &str,
     active: bool,
@@ -1659,24 +1685,14 @@ fn timeline_row(
     div()
         .flex()
         .items_center()
-        .gap_3()
-        .px_3()
-        .py_2()
-        .bg(rgb(if active { 0xffffff } else { 0xf1f1f3 }))
-        .border_1()
-        .border_color(rgb(t.border))
-        .rounded_lg()
+        .gap_2()
+        .px_1()
+        .py_1()
         .child(
             div()
-                .size(px(24.))
-                .flex()
-                .items_center()
-                .justify_center()
+                .size(px(7.))
                 .rounded_full()
-                .bg(rgb(if active { t.accent } else { 0xd8d8dc }))
-                .text_color(rgb(0xffffff))
-                .text_xs()
-                .child(step),
+                .bg(rgb(if active { t.accent } else { 0xc7c7cc })),
         )
         .child(
             div()
@@ -1684,7 +1700,7 @@ fn timeline_row(
                 .flex_col()
                 .flex_1()
                 .overflow_hidden()
-                .child(div().text_sm().text_color(rgb(t.fg)).child(label))
+                .child(div().text_xs().text_color(rgb(t.fg)).child(label))
                 .child(
                     div()
                         .text_xs()
@@ -1697,17 +1713,19 @@ fn timeline_row(
 fn metric_tile(t: &theme::Tokens, label: &'static str, value: String) -> gpui::Div {
     div()
         .flex()
-        .flex_col()
+        .items_center()
         .flex_1()
-        .gap_1()
-        .px_3()
-        .py_3()
-        .bg(rgb(0xffffff))
-        .border_1()
-        .border_color(rgb(t.border))
-        .rounded_lg()
+        .gap_2()
+        .px_1()
+        .py_1()
         .child(div().text_xs().text_color(rgb(t.muted)).child(label))
-        .child(div().text_lg().text_color(rgb(t.fg)).child(value))
+        .child(
+            div()
+                .text_size(px(14.))
+                .font_weight(FontWeight::MEDIUM)
+                .text_color(rgb(t.fg))
+                .child(value),
+        )
 }
 
 fn safety_row(t: &theme::Tokens, label: &'static str, state: &'static str) -> gpui::Div {
@@ -1715,11 +1733,9 @@ fn safety_row(t: &theme::Tokens, label: &'static str, state: &'static str) -> gp
         .flex()
         .items_center()
         .gap_2()
-        .px_3()
-        .py_2()
-        .rounded_lg()
-        .bg(rgb(0xf1f1f3))
-        .child(div().flex_1().text_sm().text_color(rgb(t.fg)).child(label))
+        .px_1()
+        .py_1()
+        .child(div().flex_1().text_xs().text_color(rgb(t.fg)).child(label))
         .child(div().text_xs().text_color(rgb(t.muted)).child(state))
 }
 
@@ -1744,10 +1760,10 @@ fn session_summary(s: &SessionUiState) -> SessionSummary {
 
 fn status_pill(t: &theme::Tokens, label: &'static str) -> gpui::Div {
     div()
-        .px_3()
+        .px_2()
         .py_1()
-        .bg(rgb(0xf1f1f3))
-        .rounded_lg()
+        .bg(rgb(0xf2f2f4))
+        .rounded_md()
         .text_xs()
         .text_color(rgb(t.muted))
         .child(label)
@@ -1757,10 +1773,8 @@ fn top_bar_controls(t: &theme::Tokens, chips_model: &str) -> gpui::Div {
     div()
         .flex()
         .items_center()
-        .gap_3()
-        .child(toolbar_icon_button(t, "▷"))
+        .gap_2()
         .child(model_selector_chip(t, chips_model))
-        .child(toolbar_icon_button(t, "▯"))
 }
 
 fn model_selector_chip(t: &theme::Tokens, label: &str) -> gpui::Div {
@@ -1769,48 +1783,24 @@ fn model_selector_chip(t: &theme::Tokens, label: &str) -> gpui::Div {
         .items_center()
         .gap_2()
         .px_3()
-        .py_2()
+        .py_1()
         .bg(rgb(t.surface))
         .border_1()
         .border_color(rgb(t.border))
-        .rounded_xl()
+        .rounded_lg()
         .text_xs()
         .text_color(rgb(t.fg))
-        .shadow_sm()
-        .child(
-            div()
-                .size(px(20.))
-                .flex()
-                .items_center()
-                .justify_center()
-                .rounded_md()
-                .bg(rgb(0x1f1f23))
-                .text_color(rgb(0xffffff))
-                .child("⌘"),
-        )
         .child(label.to_string())
         .child(div().text_color(rgb(t.muted)).child("⌄"))
 }
 
-fn toolbar_icon_button(t: &theme::Tokens, label: &'static str) -> gpui::Div {
-    div()
-        .size(px(34.))
-        .flex()
-        .items_center()
-        .justify_center()
-        .rounded_lg()
-        .text_color(rgb(t.muted))
-        .hover(|d| d.bg(rgb(0xf1f1f3)).text_color(rgb(t.fg)))
-        .child(label)
-}
-
 fn composer_icon_button(t: &theme::Tokens, label: &'static str) -> gpui::Div {
     div()
-        .size(px(32.))
+        .size(px(28.))
         .flex()
         .items_center()
         .justify_center()
-        .text_lg()
+        .text_sm()
         .text_color(rgb(t.muted))
         .rounded_full()
         .hover(|d| d.bg(rgb(0xf1f1f3)).text_color(rgb(t.fg)))
@@ -1819,7 +1809,7 @@ fn composer_icon_button(t: &theme::Tokens, label: &'static str) -> gpui::Div {
 
 fn send_circle(label: &'static str, color: u32, enabled: bool) -> gpui::Div {
     div()
-        .size(px(40.))
+        .size(px(34.))
         .flex()
         .items_center()
         .justify_center()
@@ -1837,10 +1827,10 @@ fn permission_chip(t: &theme::Tokens) -> gpui::Div {
         .flex()
         .items_center()
         .gap_2()
-        .px_3()
+        .px_2()
         .py_1()
-        .rounded_lg()
-        .text_sm()
+        .rounded_md()
+        .text_xs()
         .text_color(rgb(t.accent))
         .child("전체 권한")
         .child("⌄")
@@ -1848,12 +1838,12 @@ fn permission_chip(t: &theme::Tokens) -> gpui::Div {
 
 fn chip_owned(t: &theme::Tokens, label: String) -> gpui::Div {
     div()
-        .px_3()
+        .px_2()
         .py_1()
-        .bg(rgb(0xf1f1f3))
+        .bg(rgb(0xf3f3f4))
         .text_xs()
         .text_color(rgb(t.muted))
-        .rounded_lg()
+        .rounded_md()
         .child(label)
 }
 
@@ -1914,19 +1904,21 @@ fn render_message(
     reasoning: Option<Entity<SelectableText>>,
     segments: Option<&[MessageSegment]>,
 ) -> gpui::Div {
-    let (icon, bubble_bg) = match who {
-        Speaker::User => ("나", 0xfff3eb),
-        Speaker::Agent => ("AI", t.surface),
-        Speaker::System => ("상태", 0xf1f1f3),
-    };
+    if who == Speaker::System {
+        return render_status_message(t, text);
+    }
+    if who == Speaker::User {
+        return render_user_message(t, text);
+    }
+
     let mut body = div().flex_1().flex().flex_col().gap_2();
     if let Some(r) = reasoning {
         body = body.child(
             div()
-                .px_3()
-                .py_2()
-                .bg(rgb(0xf1f3f5))
-                .rounded_lg()
+                .px_2()
+                .py_1()
+                .bg(rgb(0xf4f5f6))
+                .rounded_md()
                 .border_l_2()
                 .border_color(rgb(0xc7ccd3))
                 .text_xs()
@@ -1939,48 +1931,60 @@ fn render_message(
     // streaming 중이라 raw text 그대로.
     if let Some(segs) = segments {
         for seg in segs {
-            body = body.child(render_segment(t, seg, bubble_bg));
+            body = body.child(render_segment(t, seg));
         }
     } else {
-        body = body.child(
-            div()
-                .px_3()
-                .py_2()
-                .bg(rgb(bubble_bg))
-                .rounded_md()
-                .child(text),
-        );
+        body = body.child(div().py_1().text_color(rgb(t.fg)).child(text));
     }
-    div()
-        .flex()
-        .gap_3()
-        .items_start()
-        .child(
-            div()
-                .w(px(38.))
-                .mt_1()
-                .text_xs()
-                .text_color(rgb(t.muted))
-                .child(icon),
-        )
-        .child(body)
+    div().flex().gap_2().items_start().child(body)
 }
 
-fn render_segment(t: &theme::Tokens, seg: &MessageSegment, bubble_bg: u32) -> gpui::Div {
-    match seg {
-        MessageSegment::Paragraph(entity) => div()
+fn render_status_message(t: &theme::Tokens, text: Entity<SelectableText>) -> gpui::Div {
+    div()
+        .flex()
+        .items_start()
+        .gap_2()
+        .py_1()
+        .text_xs()
+        .text_color(rgb(t.muted))
+        .child(
+            div()
+                .mt(px(7.))
+                .size(px(6.))
+                .rounded_full()
+                .bg(rgb(0xb7b7bd)),
+        )
+        .child(div().flex_1().child(text))
+}
+
+fn render_user_message(t: &theme::Tokens, text: Entity<SelectableText>) -> gpui::Div {
+    div().flex().justify_end().child(
+        div()
+            .max_w(px(520.))
             .px_3()
             .py_2()
-            .bg(rgb(bubble_bg))
+            .bg(rgb(0xf0f0f2))
             .rounded_lg()
-            .child(entity.clone()),
+            .text_color(rgb(t.fg))
+            .child(text),
+    )
+}
+
+fn render_segment(t: &theme::Tokens, seg: &MessageSegment) -> gpui::Div {
+    match seg {
+        MessageSegment::Paragraph(entity) => {
+            div().py_1().text_color(rgb(t.fg)).child(entity.clone())
+        }
         MessageSegment::Heading { level, body } => {
-            // H1=2xl, H2=xl, H3=lg. 색은 약간 더 밝게 강조.
-            let base = div().px_3().py_2().text_color(rgb(t.fg));
+            let base = div()
+                .pt_2()
+                .pb_1()
+                .font_weight(FontWeight::MEDIUM)
+                .text_color(rgb(t.fg));
             match level {
-                1 => base.text_2xl(),
-                2 => base.text_xl(),
-                _ => base.text_lg(),
+                1 => base.text_lg(),
+                2 => base.text_size(px(16.)),
+                _ => base.text_size(px(15.)),
             }
             .child(body.clone())
         }
@@ -1992,17 +1996,17 @@ fn render_segment(t: &theme::Tokens, seg: &MessageSegment, bubble_bg: u32) -> gp
             .child(div().w_4().text_color(rgb(t.muted)).child("•"))
             .child(div().flex_1().child(body.clone())),
         MessageSegment::Code { body, language } => {
-            // 코드 블록은 읽기 전용 요약 카드처럼 차분하게 보인다.
             let mut card = div()
                 .flex()
                 .flex_col()
                 .gap_1()
                 .px_3()
                 .py_2()
-                .bg(rgb(0xf1f1f3))
+                .bg(rgb(0xf4f4f5))
                 .border_1()
                 .border_color(rgb(t.border))
-                .rounded_lg();
+                .rounded_md()
+                .text_size(px(13.));
             if let Some(lang) = language {
                 if !lang.is_empty() {
                     card = card.child(div().text_xs().text_color(rgb(t.muted)).child(lang.clone()));
@@ -2030,42 +2034,20 @@ fn render_tool_card(
     };
     div()
         .flex()
-        .gap_3()
-        .items_start()
-        .child(div().w(px(38.)).mt_1().text_color(rgb(t.muted)).child(icon))
+        .gap_2()
+        .items_center()
+        .py_1()
+        .text_xs()
+        .text_color(rgb(t.muted))
+        .child(div().w(px(18.)).text_color(rgb(status_color)).child(icon))
+        .child(div().text_color(rgb(status_color)).child(status_label))
         .child(
             div()
                 .flex_1()
-                .flex()
-                .flex_col()
-                .gap_1()
-                .px_3()
-                .py_2()
-                .bg(rgb(0xf7f7f8))
-                .rounded_lg()
-                .border_1()
-                .border_color(rgb(t.border))
-                .child(
-                    div()
-                        .flex()
-                        .gap_2()
-                        .items_center()
-                        .child(
-                            div()
-                                .text_xs()
-                                .text_color(rgb(status_color))
-                                .child(status_label),
-                        )
-                        .child(
-                            div()
-                                .flex_1()
-                                .text_sm()
-                                .text_color(rgb(t.fg))
-                                .child(title.to_string()),
-                        ),
-                )
-                .child(div().text_xs().text_color(rgb(t.muted)).child(output)),
+                .text_color(rgb(t.fg))
+                .child(title.to_string()),
         )
+        .child(div().max_w(px(280.)).overflow_hidden().child(output))
 }
 
 // ─── 모달 (자동 모드에선 거의 안 뜸 — 인프라만 남김) ──────
@@ -2891,7 +2873,7 @@ fn main() {
     application().run(move |cx: &mut App| {
         selectable_text::init(cx);
         chat_input::init(cx);
-        let bounds = Bounds::centered(None, size(px(1360.), px(860.)), cx);
+        let bounds = Bounds::centered(None, size(px(1280.), px(820.)), cx);
         let main_view_handle = cx
             .open_window(
                 WindowOptions {
