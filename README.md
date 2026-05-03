@@ -100,11 +100,14 @@ crates/
 
 - **M0** ✅ scaffolding — GPUI 윈도우 + codex initialize 핸드셰이크
 - **M1** ✅ 채팅 PoC — 폴더 선택, 한국어 입력, multi-line wrap, 응답 스트리밍, vLLM 호환 (fork)
-- **M2** 승인 다이얼로그, command 출력, 파일 변경 알림
-- **M3** 바이브 안전 레이어 — auto-git, 되돌리기, 친화적 에러
-- **M4** 팀 배포 — `.app` 번들, 사내 코드사이닝
+- **M2** ✅ Tool Cards / Reasoning 분리 / 자동 모드 / Markdown(코드블록·heading·list) /
+  사이드바 + **병렬 멀티세션** / friendly 에러
+- **M3** ✅ git auto-commit + 되돌리기 / friendly 에러 / 설정 영구 저장
+- **M4** ✅ macOS `.app` 번들 + ad-hoc 코드사이닝 / 설정 화면 (model/provider switch)
 
-자세한 계획은 `~/.claude/plans/zed-gui-typed-trinket.md`.
+**현재 v0.1.0** — 사내 첫 배포. 자세한 변경 로그는 [CHANGELOG.md](CHANGELOG.md).
+
+자세한 초기 계획은 `~/.claude/plans/zed-gui-typed-trinket.md`.
 
 ## 라이선스 주의
 
