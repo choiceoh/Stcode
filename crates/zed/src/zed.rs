@@ -282,6 +282,20 @@ pub fn init(cx: &mut App) {
     });
 }
 
+pub fn app_display_name(cx: &App) -> &'static str {
+    let release_channel = ReleaseChannel::global(cx);
+    if workspace::AppLaunchMode::is_stcode(cx) {
+        match release_channel {
+            ReleaseChannel::Dev => "Stcode Dev",
+            ReleaseChannel::Nightly => "Stcode Nightly",
+            ReleaseChannel::Preview => "Stcode Preview",
+            ReleaseChannel::Stable => "Stcode",
+        }
+    } else {
+        release_channel.display_name()
+    }
+}
+
 fn bind_on_window_closed(cx: &mut App) -> Option<gpui::Subscription> {
     #[cfg(target_os = "macos")]
     {
@@ -1354,7 +1368,7 @@ fn open_about_window(cx: &mut App) {
     impl AboutWindow {
         fn new(cx: &mut Context<Self>) -> Self {
             let release_channel = ReleaseChannel::global(cx);
-            let release_channel_name = release_channel.display_name();
+            let release_channel_name = app_display_name(cx);
             let full_version: SharedString = AppVersion::global(cx).to_string().into();
             let version = env!("CARGO_PKG_VERSION");
 
@@ -1517,7 +1531,7 @@ fn open_about_window(cx: &mut App) {
     cx.open_window(
         WindowOptions {
             titlebar: Some(TitlebarOptions {
-                title: Some("About Zed".into()),
+                title: Some(format!("About {}", app_display_name(cx)).into()),
                 appears_transparent: true,
                 traffic_light_position: Some(point(px(12.), px(12.))),
             }),

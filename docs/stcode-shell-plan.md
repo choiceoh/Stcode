@@ -18,6 +18,7 @@ The `stcode` binary should:
 - avoid persisting its simplified shell layout into the restored Zed workspace state
 - close broad IDE panels at runtime: project, outline, Git, collaboration, and terminal
 - open and focus the agent panel as the main work surface
+- show Stcode as the visible app name in app-level menu and about surfaces
 
 The terminal panel is hidden by default in Stcode mode because users should not need to operate a terminal directly. This does not remove terminal or execution support. Agent tools and workspace execution surfaces remain available; Stcode should surface progress through the agent panel, tool cards, and later a dedicated activity timeline.
 
