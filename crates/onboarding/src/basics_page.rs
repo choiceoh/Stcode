@@ -20,6 +20,7 @@ use ui::{
     prelude::*,
 };
 use vim_mode_setting::VimModeSetting;
+use workspace::AppLaunchMode;
 
 use crate::{
     ImportCursorSettings, ImportVsCodeSettings, SettingsImportState,
@@ -33,6 +34,14 @@ const FAMILY_NAMES: [SharedString; 3] = [
     SharedString::new_static("Ayu"),
     SharedString::new_static("Gruvbox"),
 ];
+
+fn app_name(cx: &App) -> &'static str {
+    if AppLaunchMode::is_stcode(cx) {
+        "Stcode"
+    } else {
+        "Zed"
+    }
+}
 
 fn get_theme_family_themes(theme_name: &str) -> Option<(&'static str, &'static str)> {
     for i in 0..LIGHT_THEMES.len() {
@@ -243,6 +252,7 @@ fn render_theme_section(tab_index: &mut isize, cx: &mut App) -> impl IntoElement
 
 fn render_telemetry_section(tab_index: &mut isize, cx: &App) -> impl IntoElement {
     let fs = <dyn Fs>::global(cx);
+    let app_name = app_name(cx);
 
     v_flex()
         .gap_4()
@@ -250,7 +260,7 @@ fn render_telemetry_section(tab_index: &mut isize, cx: &App) -> impl IntoElement
             SwitchField::new(
                 "onboarding-telemetry-metrics",
                 None::<&str>,
-                Some("Help improve Zed by sending anonymous usage data".into()),
+                Some(format!("Help improve {app_name} by sending anonymous usage data").into()),
                 if TelemetrySettings::get_global(cx).metrics {
                     ui::ToggleState::Selected
                 } else {
@@ -290,8 +300,10 @@ fn render_telemetry_section(tab_index: &mut isize, cx: &App) -> impl IntoElement
                 "onboarding-telemetry-crash-reports",
                 None::<&str>,
                 Some(
-                    "Help fix Zed by sending crash reports so we can fix critical issues fast"
-                        .into(),
+                    format!(
+                        "Help fix {app_name} by sending crash reports so we can fix critical issues fast"
+                    )
+                    .into(),
                 ),
                 if TelemetrySettings::get_global(cx).diagnostics {
                     ui::ToggleState::Selected
@@ -431,12 +443,21 @@ fn render_worktree_auto_trust_switch(tab_index: &mut isize, cx: &mut App) -> imp
         ui::ToggleState::Unselected
     };
 
-    let tooltip_description = "Zed can only allow services like language servers, project settings, and MCP servers to run after you mark a new project as trusted.";
+    let tooltip_description = format!(
+        "{} can only allow services like language servers, project settings, and MCP servers to run after you mark a new project as trusted.",
+        app_name(cx)
+    );
 
     SwitchField::new(
         "onboarding-auto-trust-worktrees",
         Some("Trust All Projects By Default"),
-        Some("Automatically mark all new projects as trusted to unlock all Zed's features".into()),
+        Some(
+            format!(
+                "Automatically mark all new projects as trusted to unlock all {}'s features",
+                app_name(cx)
+            )
+            .into(),
+        ),
         toggle_state,
         {
             let fs = <dyn Fs>::global(cx);
@@ -634,7 +655,11 @@ fn render_zed_agent_button(user_store: &Entity<UserStore>, cx: &mut App) -> impl
                 .size(IconSize::XSmall)
                 .color(Color::Muted),
         )
-        .name("Zed Agent")
+        .name(if AppLaunchMode::is_stcode(cx) {
+            "Stcode Agent"
+        } else {
+            "Zed Agent"
+        })
         .state(state_element)
         .disabled(is_trial || is_pro)
         .map(|this| {

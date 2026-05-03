@@ -20,7 +20,7 @@ use ui::{
 pub use workspace::welcome::ShowWelcome;
 use workspace::welcome::WelcomePage;
 use workspace::{
-    AppState, Workspace, WorkspaceId,
+    AppLaunchMode, AppState, Workspace, WorkspaceId,
     dock::DockPosition,
     item::{Item, ItemEvent},
     notifications::NotifyResultExt as _,
@@ -266,6 +266,17 @@ impl Onboarding {
 
 impl Render for Onboarding {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let app_name = if AppLaunchMode::is_stcode(cx) {
+            "Stcode"
+        } else {
+            "Zed"
+        };
+        let tagline = if AppLaunchMode::is_stcode(cx) {
+            "The agent workspace for what's next"
+        } else {
+            "The editor for what's next"
+        };
+
         div()
             .image_cache(gpui::retain_all("onboarding-page"))
             .key_context({
@@ -314,11 +325,13 @@ impl Render for Onboarding {
                                             .child(
                                                 v_flex()
                                                     .child(
-                                                        Headline::new("Welcome to Zed")
-                                                            .size(HeadlineSize::Small),
+                                                        Headline::new(format!(
+                                                            "Welcome to {app_name}"
+                                                        ))
+                                                        .size(HeadlineSize::Small),
                                                     )
                                                     .child(
-                                                        Label::new("The editor for what's next")
+                                                        Label::new(tagline)
                                                             .color(Color::Muted)
                                                             .size(LabelSize::Small)
                                                             .italic(),
