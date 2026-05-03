@@ -14,6 +14,7 @@ The `stcode` binary should:
 - initialize through the shared bootstrap path
 - restore or create workspaces normally
 - leave user settings files unchanged
+- avoid persisting its simplified shell layout into the restored Zed workspace state
 - close broad IDE panels at runtime: project, outline, Git, collaboration, and terminal
 - open and focus the agent panel as the main work surface
 
