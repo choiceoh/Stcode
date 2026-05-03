@@ -15,7 +15,7 @@ mod theme;
 use chat_input::ChatInput;
 use selectable_text::SelectableText;
 use stcode_codex::bridge::{ApprovalDecision, Bridge, SessionId, ToolKind, UiCommand, UiEvent};
-use stcode_vibe::friendly_translate;
+use stcode_vibe::{friendly_translate, settings, Settings};
 
 // ─── 화면 / 상태 ──────────────────────────────────────────
 
@@ -170,12 +170,24 @@ struct PendingApproval {
     raw_detail: String,
 }
 
+/// 설정 모달이 떠 있을 때의 임시 입력 상태. ChatInput 두 개 (provider, model).
+struct SettingsDraft {
+    provider: Entity<ChatInput>,
+    model: Entity<ChatInput>,
+    /// 저장 후 잠깐 보여줄 안내 (Some(text), 자동 사라짐 없음 — 닫을 때 None).
+    notice: Option<String>,
+}
+
 // ─── MainView ────────────────────────────────────────────
 
 struct MainView {
     screen: Screen,
     cmd_tx: tokio::sync::mpsc::UnboundedSender<UiCommand>,
     pending_approval: Option<PendingApproval>,
+    /// 영구 사용자 설정. 새 세션 시작 시 provider/model로 사용.
+    settings: Settings,
+    /// 설정 모달이 열려 있으면 Some.
+    settings_draft: Option<SettingsDraft>,
 }
 
 impl MainView {
@@ -184,7 +196,63 @@ impl MainView {
             screen: Screen::Welcome,
             cmd_tx,
             pending_approval: None,
+            settings: settings::load(),
+            settings_draft: None,
         }
+    }
+
+    fn open_settings(&mut self, cx: &mut Context<Self>) {
+        let provider_text = self.settings.provider.clone();
+        let model_text = self.settings.model.clone();
+        let provider = cx.new(|cx| {
+            let mut ci = ChatInput::new("provider 이름", theme::TOKENS.fg, theme::TOKENS.muted, cx);
+            ci.set_content(provider_text, cx);
+            ci
+        });
+        let model = cx.new(|cx| {
+            let mut ci = ChatInput::new("model 식별자", theme::TOKENS.fg, theme::TOKENS.muted, cx);
+            ci.set_content(model_text, cx);
+            ci
+        });
+        self.settings_draft = Some(SettingsDraft {
+            provider,
+            model,
+            notice: None,
+        });
+        cx.notify();
+    }
+
+    fn close_settings(&mut self, cx: &mut Context<Self>) {
+        self.settings_draft = None;
+        cx.notify();
+    }
+
+    fn save_settings(&mut self, cx: &mut Context<Self>) {
+        let Some(d) = self.settings_draft.as_ref() else {
+            return;
+        };
+        let provider = d.provider.read(cx).content().trim().to_string();
+        let model = d.model.read(cx).content().trim().to_string();
+        if provider.is_empty() || model.is_empty() {
+            if let Some(d) = self.settings_draft.as_mut() {
+                d.notice = Some("provider 와 model 모두 입력해 주세요".into());
+            }
+            cx.notify();
+            return;
+        }
+        let new_settings = Settings { provider, model };
+        match settings::save(&new_settings) {
+            Ok(()) => {
+                self.settings = new_settings;
+                self.settings_draft = None;
+            }
+            Err(e) => {
+                if let Some(d) = self.settings_draft.as_mut() {
+                    d.notice = Some(format!("저장 실패: {e}"));
+                }
+            }
+        }
+        cx.notify();
     }
 
     /// 폴더 다이얼로그 → 새 세션 추가. Welcome이면 Workspace로 전환.
@@ -226,7 +294,12 @@ impl MainView {
         ws.sessions.insert(session_id.clone(), state);
         ws.order.push(session_id.clone());
         ws.active = Some(session_id.clone());
-        let _ = self.cmd_tx.send(UiCommand::NewSession { session_id, path });
+        let _ = self.cmd_tx.send(UiCommand::NewSession {
+            session_id,
+            path,
+            provider: self.settings.provider.clone(),
+            model: self.settings.model.clone(),
+        });
         cx.notify();
     }
 
@@ -562,14 +635,19 @@ impl MainView {
 impl Render for MainView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let t = &theme::TOKENS;
+        let chips_model = self.settings.model.clone();
         let body = match &self.screen {
             Screen::Welcome => render_welcome(t, cx),
-            Screen::Workspace(ws) => render_workspace(t, ws, cx),
+            Screen::Workspace(ws) => render_workspace(t, ws, &chips_model, cx),
         };
-        let modal = self
+        let approval_modal = self
             .pending_approval
             .as_ref()
             .map(|p| render_approval_modal(t, p, cx));
+        let settings_modal = self
+            .settings_draft
+            .as_ref()
+            .map(|d| render_settings_modal(t, d, cx));
         div()
             .relative()
             .flex()
@@ -579,7 +657,8 @@ impl Render for MainView {
             .text_color(rgb(t.fg))
             .on_action(cx.listener(|this, _: &chat_input::Submit, _, cx| this.send_user_input(cx)))
             .child(body)
-            .when_some(modal, |d, m| d.child(m))
+            .when_some(approval_modal, |d, m| d.child(m))
+            .when_some(settings_modal, |d, m| d.child(m))
     }
 }
 
@@ -618,6 +697,7 @@ fn render_welcome(t: &theme::Tokens, cx: &mut Context<MainView>) -> gpui::Div {
 fn render_workspace(
     t: &theme::Tokens,
     ws: &WorkspaceState,
+    chips_model: &str,
     cx: &mut Context<MainView>,
 ) -> gpui::Div {
     div()
@@ -625,7 +705,7 @@ fn render_workspace(
         .flex_row()
         .size_full()
         .child(render_sidebar(t, ws, cx))
-        .child(render_active_main(t, ws, cx))
+        .child(render_active_main(t, ws, chips_model, cx))
 }
 
 /// 좌측 사이드바 — dynamic 세션 list. 클릭으로 active 전환. status icon 동기화.
@@ -660,6 +740,25 @@ fn render_sidebar(
             cx.listener(|this, _, _, cx| this.open_folder(cx)),
         );
 
+    let settings_btn = div()
+        .flex()
+        .gap_2()
+        .items_center()
+        .px_3()
+        .py_2()
+        .text_sm()
+        .text_color(rgb(t.muted))
+        .cursor_pointer()
+        .border_t_1()
+        .border_color(rgb(t.border))
+        .hover(|d| d.bg(rgb(t.sidebar_active)).text_color(rgb(t.fg)))
+        .child(div().w_4().text_xs().child("⚙"))
+        .child(div().flex_1().child("설정"))
+        .on_mouse_down(
+            MouseButton::Left,
+            cx.listener(|this, _, _, cx| this.open_settings(cx)),
+        );
+
     div()
         .flex()
         .flex_col()
@@ -689,6 +788,7 @@ fn render_sidebar(
                 .children(items)
                 .child(new_session_btn),
         )
+        .child(settings_btn)
 }
 
 fn render_session_item(
@@ -767,6 +867,7 @@ fn render_session_item(
 fn render_active_main(
     t: &theme::Tokens,
     ws: &WorkspaceState,
+    chips_model: &str,
     cx: &mut Context<MainView>,
 ) -> gpui::Div {
     let Some(sid) = ws.active.clone() else {
@@ -782,12 +883,13 @@ fn render_active_main(
     let Some(s) = ws.sessions.get(&sid) else {
         return div().flex_1();
     };
-    render_chat_main(t, s, cx)
+    render_chat_main(t, s, chips_model, cx)
 }
 
 fn render_chat_main(
     t: &theme::Tokens,
     s: &SessionUiState,
+    chips_model: &str,
     cx: &mut Context<MainView>,
 ) -> gpui::Div {
     let send_enabled = s.thread_started && !s.turn_in_flight;
@@ -868,7 +970,7 @@ fn render_chat_main(
                 .bg(rgb(t.surface))
                 .border_t_1()
                 .border_color(rgb(t.border))
-                .child(chip(t, "🤖 qwen3.6-35b-a3b"))
+                .child(chip_owned(t, format!("🤖 {chips_model}")))
                 .child(chip(t, "⚡ 자동 모드"))
                 .child(chip(t, "📂 작업 폴더 자유")),
         )
@@ -914,6 +1016,10 @@ fn render_chat_main(
 }
 
 fn chip(t: &theme::Tokens, label: &'static str) -> gpui::Div {
+    chip_owned(t, label.to_string())
+}
+
+fn chip_owned(t: &theme::Tokens, label: String) -> gpui::Div {
     div()
         .px_2()
         .py_1()
@@ -1219,6 +1325,112 @@ fn approval_button(
         .text_sm()
         .child(label)
         .on_mouse_down(MouseButton::Left, on_click)
+}
+
+// ─── 설정 모달 ───────────────────────────────────────────
+
+fn render_settings_modal(
+    t: &theme::Tokens,
+    d: &SettingsDraft,
+    cx: &mut Context<MainView>,
+) -> gpui::Div {
+    let path_hint = settings::settings_path()
+        .map(|p| p.display().to_string())
+        .unwrap_or_else(|| "(경로 알 수 없음)".into());
+    let notice = d.notice.clone();
+
+    div()
+        .absolute()
+        .inset_0()
+        .flex()
+        .items_center()
+        .justify_center()
+        .bg(rgb(0x10101a))
+        .on_mouse_down(MouseButton::Left, |_, _, _| {})
+        .child(
+            div()
+                .flex()
+                .flex_col()
+                .gap_4()
+                .w(px(520.))
+                .p_6()
+                .bg(rgb(t.surface))
+                .border_1()
+                .border_color(rgb(t.accent))
+                .rounded_md()
+                .child(div().text_lg().child("⚙ 설정"))
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(rgb(t.muted))
+                        .child("새 세션부터 적용돼요. 진행 중인 세션엔 영향 없음."),
+                )
+                .child(setting_field(
+                    t,
+                    "Provider (codex config.toml에 정의된 이름)",
+                    d.provider.clone(),
+                ))
+                .child(setting_field(t, "Model", d.model.clone()))
+                .when_some(notice, |dv, n| {
+                    dv.child(
+                        div()
+                            .px_3()
+                            .py_2()
+                            .bg(rgb(0x40242c))
+                            .text_color(rgb(0xe0a0a0))
+                            .text_sm()
+                            .rounded_md()
+                            .child(n),
+                    )
+                })
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(rgb(t.muted))
+                        .child(format!("저장 위치: {path_hint}")),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .gap_2()
+                        .justify_end()
+                        .child(approval_button(
+                            "취소",
+                            t.surface,
+                            t.fg,
+                            cx.listener(|this, _, _, cx| this.close_settings(cx)),
+                        ))
+                        .child(approval_button(
+                            "저장",
+                            t.accent,
+                            0x111122,
+                            cx.listener(|this, _, _, cx| this.save_settings(cx)),
+                        )),
+                ),
+        )
+}
+
+fn setting_field(t: &theme::Tokens, label: &'static str, input: Entity<ChatInput>) -> gpui::Div {
+    div()
+        .flex()
+        .flex_col()
+        .gap_1()
+        .child(
+            div()
+                .text_xs()
+                .text_color(rgb(t.muted))
+                .child(label),
+        )
+        .child(
+            div()
+                .px_3()
+                .py_2()
+                .bg(rgb(t.bg))
+                .border_1()
+                .border_color(rgb(t.border))
+                .rounded_md()
+                .child(input),
+        )
 }
 
 // ─── Markdown ───────────────────────────────────────────

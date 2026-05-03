@@ -22,6 +22,8 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "io-util", "pr
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 git2 = { version = "0.20", default-features = false }
+toml = "0.9"
+dirs = "6"
 
 # GPUI: main HEAD 핀 (2026-05-01). 멀티 크레이트 분리됨 — gpui + gpui_platform
 # 두 dep만 명시하면 gpui_platform이 cfg(target_os)로 macOS/Linux/Windows

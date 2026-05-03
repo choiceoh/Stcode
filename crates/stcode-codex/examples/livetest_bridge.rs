@@ -58,6 +58,8 @@ async fn run_single() -> anyhow::Result<()> {
     cmd_tx.send(UiCommand::NewSession {
         session_id: sid.clone(),
         path: cwd,
+        provider: "local-vllm".into(),
+        model: "qwen3.6-35b-a3b".into(),
     })?;
 
     let timeout = Duration::from_secs(
@@ -181,10 +183,14 @@ async fn run_parallel() -> anyhow::Result<()> {
     cmd_tx.send(UiCommand::NewSession {
         session_id: sid_a.clone(),
         path: cwd_a,
+        provider: "local-vllm".into(),
+        model: "qwen3.6-35b-a3b".into(),
     })?;
     cmd_tx.send(UiCommand::NewSession {
         session_id: sid_b.clone(),
         path: cwd_b,
+        provider: "local-vllm".into(),
+        model: "qwen3.6-35b-a3b".into(),
     })?;
 
     let timeout = Duration::from_secs(

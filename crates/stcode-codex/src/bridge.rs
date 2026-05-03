@@ -25,9 +25,12 @@ pub type SessionId = String;
 #[derive(Debug)]
 pub enum UiCommand {
     /// 새 세션 추가. id는 클라이언트가 발급해서 같이 보냄 — 응답 매칭 단순.
+    /// provider/model은 사용자 설정에서 — 새 세션마다 적용.
     NewSession {
         session_id: SessionId,
         path: PathBuf,
+        provider: String,
+        model: String,
     },
     /// 특정 세션에 사용자 텍스트 전달.
     SendText {
@@ -237,12 +240,12 @@ async fn handler_loop(
             cmd_opt = cmd_rx.recv() => {
                 let Some(cmd) = cmd_opt else { break; };
                 match cmd {
-                    UiCommand::NewSession { session_id, path } => {
+                    UiCommand::NewSession { session_id, path, provider, model } => {
                         // git repo 자동 init.
                         if let Err(e) = stcode_vibe::ensure_repo(&path) {
                             tracing::warn!("[{session_id}] git 초기화 실패: {e}");
                         }
-                        match start_session(&path).await {
+                        match start_session(&path, &provider, &model).await {
                             Ok(thread_session) => {
                                 let thread_id = thread_session.thread_id.clone();
                                 let (s_cmd_tx, s_cmd_rx) = mpsc::unbounded_channel();
@@ -577,12 +580,22 @@ fn item_card_completion(kind: &ToolKind, params: &serde_json::Value) -> (bool, O
     }
 }
 
-async fn start_session(path: &PathBuf) -> anyhow::Result<ThreadSession> {
-    let mut opts = SpawnOptions::with_provider_model("local-vllm", "qwen3.6-35b-a3b");
+async fn start_session(
+    path: &PathBuf,
+    provider: &str,
+    model: &str,
+) -> anyhow::Result<ThreadSession> {
+    let mut opts = SpawnOptions::with_provider_model(provider, model);
     opts = opts
         .with_env("STCODE_VLLM_COMPAT", "1")
-        .push("model_reasoning_effort", "minimal")
-        .push("model_providers.local-vllm.supports_websockets", "false");
+        .push("model_reasoning_effort", "minimal");
+    // vLLM은 ws 미지원 — provider가 vLLM 계열일 때만 ws 끄기.
+    if provider.contains("vllm") {
+        opts = opts.push(
+            format!("model_providers.{}.supports_websockets", provider),
+            "false",
+        );
+    }
     if std::env::var_os("VLLM_API_KEY").is_none() {
         opts = opts.with_env("VLLM_API_KEY", "dummy");
     }
