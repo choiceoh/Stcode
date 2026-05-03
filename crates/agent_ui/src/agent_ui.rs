@@ -535,6 +535,7 @@ fn maybe_backfill_editor_layout(fs: Arc<dyn Fs>, is_new_install: bool, cx: &mut 
 fn update_command_palette_filter(cx: &mut App) {
     let disable_ai = DisableAiSettings::get_global(cx).disable_ai;
     let agent_enabled = AgentSettings::get_global(cx).enabled;
+    let is_stcode = AppLaunchMode::is_stcode(cx);
 
     let edit_prediction_provider = AllLanguageSettings::get_global(cx)
         .edit_predictions
@@ -605,7 +606,72 @@ fn update_command_palette_filter(cx: &mut App) {
 
             filter.show_namespace("multi_workspace");
         }
+
+        update_stcode_command_palette_filter(filter, is_stcode);
     });
+}
+
+fn update_stcode_command_palette_filter(filter: &mut CommandPaletteFilter, is_stcode: bool) {
+    let hidden_namespaces = [
+        "collab",
+        "debug_panel",
+        "debugger",
+        "outline",
+        "outline_panel",
+        "pane",
+        "project_panel",
+        "project_symbols",
+        "task",
+        "terminal",
+        "terminal_panel",
+    ];
+    let hidden_action_types = [
+        TypeId::of::<workspace::AddFolderToProject>(),
+        TypeId::of::<workspace::ClearNavigationHistory>(),
+        TypeId::of::<workspace::CloseActiveDock>(),
+        TypeId::of::<workspace::CloseAllDocks>(),
+        TypeId::of::<workspace::DecreaseActiveDockSize>(),
+        TypeId::of::<workspace::DecreaseOpenDocksSize>(),
+        TypeId::of::<workspace::IncreaseActiveDockSize>(),
+        TypeId::of::<workspace::IncreaseOpenDocksSize>(),
+        TypeId::of::<workspace::MoveFocusedPanelToNextPosition>(),
+        TypeId::of::<workspace::NewCenterTerminal>(),
+        TypeId::of::<workspace::NewFile>(),
+        TypeId::of::<workspace::NewFileSplitHorizontal>(),
+        TypeId::of::<workspace::NewFileSplitVertical>(),
+        TypeId::of::<workspace::NewTerminal>(),
+        TypeId::of::<workspace::OpenComponentPreview>(),
+        TypeId::of::<workspace::OpenInTerminal>(),
+        TypeId::of::<workspace::OpenTerminal>(),
+        TypeId::of::<workspace::ResetActiveDockSize>(),
+        TypeId::of::<workspace::ResetOpenDocksSize>(),
+        TypeId::of::<workspace::ShutdownDebugAdapters>(),
+        TypeId::of::<workspace::ToggleAllDocks>(),
+        TypeId::of::<workspace::ToggleBottomDock>(),
+        TypeId::of::<workspace::ToggleCenteredLayout>(),
+        TypeId::of::<workspace::ToggleLeftDock>(),
+        TypeId::of::<workspace::ToggleRightDock>(),
+        TypeId::of::<zed_actions::Extensions>(),
+        TypeId::of::<zed_actions::OpenAccountSettings>(),
+        TypeId::of::<zed_actions::OpenPerformanceProfiler>(),
+        TypeId::of::<zed_actions::OpenProjectSettings>(),
+        TypeId::of::<zed_actions::OpenServerSettings>(),
+        TypeId::of::<zed_actions::ShowUpdateNotification>(),
+    ];
+    let shown_action_types = [TypeId::of::<workspace::DeploySearch>()];
+
+    if is_stcode {
+        for namespace in hidden_namespaces {
+            filter.hide_namespace(namespace);
+        }
+        filter.hide_action_types(&hidden_action_types);
+        filter.show_action_types(&shown_action_types);
+    } else {
+        for namespace in hidden_namespaces {
+            filter.show_namespace(namespace);
+        }
+        filter.show_action_types(&hidden_action_types);
+    }
 }
 
 fn init_language_model_settings(cx: &mut App) {
@@ -679,19 +745,17 @@ mod tests {
         DockPosition, NotifyWhenAgentWaiting, PlaySoundWhenAgentDone, Settings, SettingsStore,
     };
 
-    #[gpui::test]
-    fn test_agent_command_palette_visibility(cx: &mut TestAppContext) {
-        // Init settings
-        cx.update(|cx| {
-            let store = SettingsStore::test(cx);
-            cx.set_global(store);
-            command_palette_hooks::init(cx);
-            AgentSettings::register(cx);
-            DisableAiSettings::register(cx);
-            AllLanguageSettings::register(cx);
-        });
+    fn register_command_palette_test_globals(cx: &mut App) {
+        let store = SettingsStore::test(cx);
+        cx.set_global(store);
+        command_palette_hooks::init(cx);
+        AgentSettings::register(cx);
+        DisableAiSettings::register(cx);
+        AllLanguageSettings::register(cx);
+    }
 
-        let agent_settings = AgentSettings {
+    fn enabled_agent_settings() -> AgentSettings {
+        AgentSettings {
             enabled: true,
             button: true,
             dock: DockPosition::Right,
@@ -724,7 +788,14 @@ mod tests {
             new_thread_location: Default::default(),
             sidebar_side: Default::default(),
             thinking_display: Default::default(),
-        };
+        }
+    }
+
+    #[gpui::test]
+    fn test_agent_command_palette_visibility(cx: &mut TestAppContext) {
+        cx.update(register_command_palette_test_globals);
+
+        let agent_settings = enabled_agent_settings();
 
         cx.update(|cx| {
             AgentSettings::override_global(agent_settings.clone(), cx);
@@ -804,6 +875,69 @@ mod tests {
             assert!(
                 filter.is_hidden(&AcceptEditPrediction),
                 "EditPrediction should be hidden when provider is None"
+            );
+        });
+    }
+
+    #[gpui::test]
+    fn test_stcode_command_palette_filters_ide_surfaces(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            register_command_palette_test_globals(cx);
+            AppLaunchMode::set_global(AppLaunchMode::Stcode, cx);
+        });
+
+        cx.update(|cx| {
+            AgentSettings::override_global(enabled_agent_settings(), cx);
+            DisableAiSettings::override_global(DisableAiSettings { disable_ai: false }, cx);
+            update_command_palette_filter(cx);
+        });
+
+        cx.update(|cx| {
+            let filter = CommandPaletteFilter::try_global(cx).unwrap();
+            assert!(
+                !filter.is_hidden(&NewThread),
+                "agent actions should stay visible in Stcode"
+            );
+            assert!(
+                filter.is_hidden(&zed_actions::project_panel::ToggleFocus),
+                "project panel actions should be hidden in Stcode"
+            );
+            assert!(
+                filter.is_hidden(&workspace::AddFolderToProject),
+                "project editing actions should be hidden in Stcode"
+            );
+            assert!(
+                filter.is_hidden(&workspace::NewTerminal::default()),
+                "direct terminal actions should be hidden in Stcode"
+            );
+            assert!(
+                filter.is_hidden(&workspace::SplitRight::default()),
+                "pane split actions should be hidden in Stcode"
+            );
+            assert!(
+                !filter.is_hidden(&workspace::DeploySearch::default()),
+                "workspace search should stay available in Stcode"
+            );
+            assert!(
+                !filter.is_hidden(&workspace::NewWindow),
+                "workspace basics should stay available in Stcode"
+            );
+        });
+
+        cx.update(|cx| {
+            AppLaunchMode::set_global(AppLaunchMode::Zed, cx);
+            update_command_palette_filter(cx);
+        });
+
+        cx.update(|cx| {
+            let filter = CommandPaletteFilter::try_global(cx).unwrap();
+            assert!(
+                !filter.is_hidden(&workspace::AddFolderToProject),
+                "Zed should keep the full command palette surface"
+            );
+            assert!(
+                !filter.is_hidden(&workspace::SplitRight::default()),
+                "Zed should keep pane commands visible"
             );
         });
     }
