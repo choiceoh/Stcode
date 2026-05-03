@@ -16,7 +16,7 @@ use heapless::Vec as ArrayVec;
 use language_model::{LanguageModelEffortLevel, Speed};
 use settings::{SidebarSide, update_settings_file};
 use ui::{ButtonLike, SpinnerLabel, SpinnerVariant, SplitButton, SplitButtonStyle, Tab};
-use workspace::SERIALIZATION_THROTTLE_TIME;
+use workspace::{AppLaunchMode, SERIALIZATION_THROTTLE_TIME};
 
 use super::*;
 
@@ -1235,12 +1235,21 @@ impl ThreadView {
     fn emit_thread_error_telemetry(&self, error: &ThreadError, cx: &mut Context<Self>) {
         let (error_kind, acp_error_code, message): (&str, Option<SharedString>, SharedString) =
             match error {
-                ThreadError::PaymentRequired => (
-                    "payment_required",
-                    None,
-                    "You reached your free usage limit. Upgrade to Zed Pro for more prompts."
+                ThreadError::PaymentRequired => {
+                    let pro_plan_name = if AppLaunchMode::is_stcode(cx) {
+                        "Stcode Pro"
+                    } else {
+                        "Zed Pro"
+                    };
+                    (
+                        "payment_required",
+                        None,
+                        format!(
+                            "You reached your free usage limit. Upgrade to {pro_plan_name} for more prompts."
+                        )
                         .into(),
-                ),
+                    )
+                }
                 ThreadError::Refusal => {
                     let model_or_agent_name = self.current_model_name(cx);
                     let message = format!(
@@ -8438,19 +8447,25 @@ impl ThreadView {
     }
 
     fn render_payment_required_error(&self, cx: &mut Context<Self>) -> Callout {
-        const ERROR_MESSAGE: &str =
-            "You reached your free usage limit. Upgrade to Zed Pro for more prompts.";
+        let pro_plan_name = if AppLaunchMode::is_stcode(cx) {
+            "Stcode Pro"
+        } else {
+            "Zed Pro"
+        };
+        let error_message = SharedString::from(format!(
+            "You reached your free usage limit. Upgrade to {pro_plan_name} for more prompts."
+        ));
 
         Callout::new()
             .severity(Severity::Error)
             .icon(IconName::XCircle)
             .title("Free Usage Exceeded")
-            .description(ERROR_MESSAGE)
+            .description(error_message.clone())
             .actions_slot(
                 h_flex()
                     .gap_0p5()
                     .child(self.upgrade_button(cx))
-                    .child(self.create_copy_button(ERROR_MESSAGE)),
+                    .child(self.create_copy_button(error_message)),
             )
             .dismiss_action(self.dismiss_error_button(cx))
     }

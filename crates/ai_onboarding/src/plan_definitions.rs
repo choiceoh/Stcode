@@ -1,11 +1,20 @@
-use gpui::{IntoElement, ParentElement};
+use gpui::{App, IntoElement, ParentElement};
 use ui::{List, ListBulletItem, prelude::*};
+use workspace::AppLaunchMode;
 
 /// Centralized definitions for Zed AI plans
 pub struct PlanDefinitions;
 
 impl PlanDefinitions {
-    pub fn free_plan(&self) -> impl IntoElement {
+    fn agent_name(cx: &App) -> &'static str {
+        if AppLaunchMode::is_stcode(cx) {
+            "Stcode agent"
+        } else {
+            "Zed agent"
+        }
+    }
+
+    pub fn free_plan(&self, _cx: &App) -> impl IntoElement {
         List::new()
             .child(ListBulletItem::new("2,000 accepted edit predictions"))
             .child(ListBulletItem::new(
@@ -14,9 +23,12 @@ impl PlanDefinitions {
             .child(ListBulletItem::new("Unlimited use of external agents"))
     }
 
-    pub fn pro_trial(&self, period: bool) -> impl IntoElement {
+    pub fn pro_trial(&self, cx: &App, period: bool) -> impl IntoElement {
         List::new()
-            .child(ListBulletItem::new("$20 of tokens in Zed agent"))
+            .child(ListBulletItem::new(format!(
+                "$20 of tokens in {}",
+                Self::agent_name(cx)
+            )))
             .child(ListBulletItem::new("Unlimited edit predictions"))
             .when(period, |this| {
                 this.child(ListBulletItem::new(
@@ -25,9 +37,12 @@ impl PlanDefinitions {
             })
     }
 
-    pub fn pro_plan(&self) -> impl IntoElement {
+    pub fn pro_plan(&self, cx: &App) -> impl IntoElement {
         List::new()
-            .child(ListBulletItem::new("$5 of tokens in Zed agent"))
+            .child(ListBulletItem::new(format!(
+                "$5 of tokens in {}",
+                Self::agent_name(cx)
+            )))
             .child(ListBulletItem::new("Usage-based billing beyond $5"))
             .child(ListBulletItem::new("Unlimited edit predictions"))
     }
@@ -38,10 +53,13 @@ impl PlanDefinitions {
             .child(ListBulletItem::new("Usage-based billing"))
     }
 
-    pub fn student_plan(&self) -> impl IntoElement {
+    pub fn student_plan(&self, cx: &App) -> impl IntoElement {
         List::new()
             .child(ListBulletItem::new("Unlimited edit predictions"))
-            .child(ListBulletItem::new("$10 of tokens in Zed agent"))
+            .child(ListBulletItem::new(format!(
+                "$10 of tokens in {}",
+                Self::agent_name(cx)
+            )))
             .child(ListBulletItem::new(
                 "Optional credit packs for additional usage",
             ))
