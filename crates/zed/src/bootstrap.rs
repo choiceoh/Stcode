@@ -214,7 +214,13 @@ fn apply_stcode_layout_to_workspace(
         workspace.close_panel::<GitPanel>(window, cx);
         workspace.close_panel::<CollabPanel>(window, cx);
         workspace.close_panel::<TerminalPanel>(window, cx);
-        workspace.focus_panel::<AgentPanel>(window, cx);
+
+        // Keep the Stcode shell overlay runtime-only. `focus_panel` serializes the
+        // workspace layout, which would let a Stcode run rewrite Zed's restored panel state.
+        workspace.open_panel::<AgentPanel>(window, cx);
+        if let Some(panel) = workspace.panel::<AgentPanel>(cx) {
+            panel.read(cx).focus_handle(cx).focus(window, cx);
+        }
     });
 }
 
