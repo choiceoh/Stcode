@@ -1,46 +1,56 @@
-# Zed
+# Stcode
 
-[![Zed](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/zed-industries/zed/main/assets/badge/v0.json)](https://zed.dev)
-[![CI](https://github.com/zed-industries/zed/actions/workflows/run_tests.yml/badge.svg)](https://github.com/zed-industries/zed/actions/workflows/run_tests.yml)
+Stcode is a local-first vibe-coding workspace for people who do not want to drive a code editor by hand.
 
-Welcome to Zed, a high-performance, multiplayer code editor from the creators of [Atom](https://github.com/atom/atom) and [Tree-sitter](https://github.com/tree-sitter/tree-sitter).
+The product direction is simple:
 
----
+- describe what you want in normal language
+- split work across multiple AI agents
+- keep the code, Git state, and safety checks visible without making the user learn them
+- use Zed 1.0's editor, input, agent UI, terminal, project, and GPUI foundations as the base
 
-### Installation
+This repository currently starts from the Zed v1.0.0 source tree and is being carved down into a focused Stcode app. The first baseline keeps the heavy pieces that make chat input, editor behavior, agent panels, workspace state, and terminal-backed execution feel real, while removing upstream Zed website, release, extension sample, and infrastructure material that does not serve Stcode.
 
-On macOS, Linux, and Windows you can [download Zed directly](https://zed.dev/download) or install Zed via your local package manager ([macOS](https://zed.dev/docs/installation#macos)/[Linux](https://zed.dev/docs/linux#installing-via-a-package-manager)/[Windows](https://zed.dev/docs/windows#package-managers)).
+## Product Shape
 
-Other platforms are not yet available:
+Stcode is not trying to be another general-purpose IDE.
 
-- Web ([tracking issue](https://github.com/zed-industries/zed/issues/5396))
+It is for a user who can say "make this app", "fix the weird input behavior", "split this among agents", or "open a PR and merge it" without knowing what files, commands, branches, or test targets should be touched.
 
-### Developing Zed
+The application should make these things first-class:
 
-- [Building Zed for macOS](./docs/src/development/macos.md)
-- [Building Zed for Linux](./docs/src/development/linux.md)
-- [Building Zed for Windows](./docs/src/development/windows.md)
+- a strong chat/message input with normal cursor, selection, IME, history, paste, and multiline behavior
+- a multi-agent work board where several agents can investigate, implement, and verify in parallel
+- an understandable activity timeline instead of raw terminal noise
+- automatic Git/worktree handling for branches, commits, PRs, and merges
+- enough editor and terminal power for agents to work seriously, without exposing every IDE surface to the user
 
-### Contributing
+## Current Baseline
 
-See [CONTRIBUTING.md](./CONTRIBUTING.md) for ways you can contribute to Zed.
+The current codebase is intentionally broad because it was imported from Zed 1.0 before pruning. The important retained areas are:
 
-Also... we're hiring! Check out our [jobs](https://zed.dev/jobs) page for open roles.
+- `crates/agent_ui`: agent-facing UI surface
+- `crates/agent`: agent orchestration and tool flow
+- `crates/ui_input`: production text input behavior
+- `crates/editor`: editor buffer and interaction behavior
+- `crates/workspace`, `crates/project`, `crates/worktree`: workspace and project state
+- `crates/git`, `crates/git_ui`: Git integration that can later be simplified for non-coders
+- `crates/terminal`, `crates/terminal_view`: execution surface for agents
+- `crates/gpui`, `crates/ui`, `crates/component`: UI foundation
 
-### Licensing
+The default binary is still Zed's app entrypoint while Stcode is being reshaped. Renaming, narrowing startup, and replacing Zed-branded surfaces are follow-up pruning tasks.
 
-License information for third party dependencies must be correctly provided for CI to pass.
+## Local Checks
 
-We use [`cargo-about`](https://github.com/EmbarkStudios/cargo-about) to automatically comply with open source licenses. If CI is failing, check the following:
+Useful first checks:
 
-- Is it showing a `no license specified` error for a crate you've created? If so, add `publish = false` under `[package]` in your crate's Cargo.toml.
-- Is the error `failed to satisfy license requirements` for a dependency? If so, first determine what license the project has and whether this system is sufficient to comply with this license's requirements. If you're unsure, ask a lawyer. Once you've verified that this system is acceptable add the license's SPDX identifier to the `accepted` array in `script/licenses/zed-licenses.toml`.
-- Is `cargo-about` unable to find the license for a dependency? If so, add a clarification field at the end of `script/licenses/zed-licenses.toml`, as specified in the [cargo-about book](https://embarkstudios.github.io/cargo-about/cli/generate/config.html#crate-configuration).
+```sh
+cargo metadata --no-deps --format-version 1
+cargo check -p agent_ui
+```
 
-## Sponsorship
+`cargo check -p agent_ui` is the main smoke check for the current direction because it keeps the agent UI, input editor, editor, project, terminal, and model-provider stack connected.
 
-Zed is developed by **Zed Industries, Inc.**, a for-profit company.
+## License
 
-If you’d like to financially support the project, you can do so via GitHub Sponsors.
-Sponsorships go directly to Zed Industries and are used as general company revenue.
-There are no perks or entitlements associated with sponsorship.
+Stcode is based on Zed v1.0.0. The imported source includes GPL, AGPL, and Apache-licensed components. Keep the upstream license files and any required notices intact while pruning.
