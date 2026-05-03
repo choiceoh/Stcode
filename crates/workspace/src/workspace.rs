@@ -1107,6 +1107,17 @@ pub struct AppState {
     pub session: Entity<AppSession>,
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum AppLaunchMode {
+    #[default]
+    Zed,
+    Stcode,
+}
+
+struct GlobalAppLaunchMode(AppLaunchMode);
+
+impl Global for GlobalAppLaunchMode {}
+
 struct GlobalAppState(Arc<AppState>);
 
 impl Global for GlobalAppState {}
@@ -1206,6 +1217,22 @@ impl AppState {
             build_window_options: |_, _| Default::default(),
             session,
         })
+    }
+}
+
+impl AppLaunchMode {
+    pub fn global(cx: &App) -> Self {
+        cx.try_global::<GlobalAppLaunchMode>()
+            .map(|mode| mode.0)
+            .unwrap_or_default()
+    }
+
+    pub fn is_stcode(cx: &App) -> bool {
+        Self::global(cx) == Self::Stcode
+    }
+
+    pub fn set_global(mode: Self, cx: &mut App) {
+        cx.set_global(GlobalAppLaunchMode(mode));
     }
 }
 
