@@ -49,6 +49,11 @@ impl SelectableText {
         }
     }
 
+    /// 누적된 raw 텍스트 — markdown 파싱 등에서 사용.
+    pub fn content(&self) -> &str {
+        &self.content
+    }
+
     pub fn set_content(&mut self, content: impl Into<SharedString>, cx: &mut Context<Self>) {
         self.content = content.into();
         if self.selected_range.end > self.content.len() {
