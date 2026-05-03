@@ -75,6 +75,7 @@ pub enum UiEvent {
         session_id: SessionId,
         project: PathBuf,
         thread_id: String,
+        workspace_mode: WorkspaceMode,
     },
     /// 세션 시작 실패.
     SessionFailed {
@@ -83,6 +84,11 @@ pub enum UiEvent {
     },
     /// 세션 종료(사용자 닫음 또는 codex 끊김).
     SessionClosed { session_id: SessionId },
+    /// 세션 작업공간 정리 결과.
+    WorkspaceCleanup {
+        session_id: SessionId,
+        message: String,
+    },
     /// agentMessage delta.
     AgentDelta { session_id: SessionId, text: String },
     /// reasoning text delta.
@@ -137,6 +143,14 @@ pub enum UiEvent {
     },
     /// 세션과 묶지 못하는 글로벌 에러.
     Error(String),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WorkspaceMode {
+    /// 원본 폴더를 건드리지 않는 세션 전용 작업공간.
+    Isolated,
+    /// 빈 폴더처럼 별도 작업공간을 만들 수 없어 선택한 경로에서 바로 시작.
+    Direct,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -266,6 +280,7 @@ async fn handler_loop(
                                 continue;
                             }
                         };
+                        let workspace_mode = prepared.workspace_mode();
                         match start_session(&prepared.runtime_path, &provider, &model).await {
                             Ok(thread_session) => {
                                 let thread_id = thread_session.thread_id.clone();
@@ -296,9 +311,19 @@ async fn handler_loop(
                                     session_id,
                                     project: path,
                                     thread_id,
+                                    workspace_mode,
                                 });
                             }
                             Err(e) => {
+                                if let Some(worktree) = &prepared.worktree {
+                                    if let Err(cleanup_error) =
+                                        stcode_vibe::cleanup_session_worktree(worktree)
+                                    {
+                                        tracing::warn!(
+                                            "[{session_id}] 세션 시작 실패 후 작업공간 정리 실패: {cleanup_error}"
+                                        );
+                                    }
+                                }
                                 let _ = evt_tx.send(UiEvent::SessionFailed {
                                     session_id,
                                     error: e.to_string(),
@@ -641,6 +666,16 @@ struct PreparedSessionWorkspace {
     worktree: Option<SessionWorktree>,
 }
 
+impl PreparedSessionWorkspace {
+    fn workspace_mode(&self) -> WorkspaceMode {
+        if self.worktree.is_some() {
+            WorkspaceMode::Isolated
+        } else {
+            WorkspaceMode::Direct
+        }
+    }
+}
+
 fn prepare_session_workspace(
     session_id: &SessionId,
     source_path: &PathBuf,
@@ -690,11 +725,31 @@ fn cleanup_session_workspace(
                 cleanup.deleted_branch,
                 cleanup.kept_branch_reason
             );
+            let _ = evt_tx.send(UiEvent::WorkspaceCleanup {
+                session_id: session_id.clone(),
+                message: workspace_cleanup_message(&cleanup),
+            });
         }
         Err(e) => {
             tracing::warn!("[{session_id}] 세션 작업공간 정리 실패: {e}");
             let _ = evt_tx.send(UiEvent::Error(format!("작업공간 정리 실패: {e}")));
         }
+    }
+}
+
+fn workspace_cleanup_message(cleanup: &stcode_vibe::WorktreeCleanup) -> String {
+    match (
+        cleanup.removed_worktree,
+        cleanup.deleted_branch,
+        cleanup.kept_branch_reason.as_deref(),
+    ) {
+        (true, true, _) => "작업공간 정리됨".into(),
+        (false, false, Some(reason)) if reason.contains("저장되지 않은 변경") => {
+            "저장되지 않은 변경이 있어 작업공간을 보관했어요".into()
+        }
+        (true, false, Some(_)) => "작업 결과가 남아 있어 보관했어요".into(),
+        (false, false, Some(_)) => "작업공간을 보관했어요".into(),
+        _ => "작업공간 상태를 확인했어요".into(),
     }
 }
 
@@ -813,6 +868,38 @@ mod tests {
         assert_eq!(prepared.runtime_path, source);
         assert!(prepared.worktree.is_none());
         assert!(prepared.runtime_path.join(".git").exists());
+    }
+
+    #[test]
+    fn prepared_workspace_reports_user_facing_mode() {
+        assert_eq!(
+            PreparedSessionWorkspace {
+                runtime_path: PathBuf::from("/tmp/direct"),
+                worktree: None,
+            }
+            .workspace_mode(),
+            WorkspaceMode::Direct
+        );
+    }
+
+    #[test]
+    fn workspace_cleanup_message_hides_git_terms() {
+        assert_eq!(
+            workspace_cleanup_message(&stcode_vibe::WorktreeCleanup {
+                removed_worktree: true,
+                deleted_branch: true,
+                kept_branch_reason: None,
+            }),
+            "작업공간 정리됨"
+        );
+        assert_eq!(
+            workspace_cleanup_message(&stcode_vibe::WorktreeCleanup {
+                removed_worktree: true,
+                deleted_branch: false,
+                kept_branch_reason: Some("branch에 세션 작업 commit이 남아 있어요".into()),
+            }),
+            "작업 결과가 남아 있어 보관했어요"
+        );
     }
 
     #[test]
