@@ -2,9 +2,9 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use gpui::{
-    div, prelude::*, px, rgb, rgba, size, App, Bounds, Context, Entity, IntoElement, MouseButton,
-    MouseDownEvent, ParentElement, Render, ScrollHandle, SharedString, Styled, Window, WindowBounds,
-    WindowOptions,
+    App, Bounds, Context, Entity, IntoElement, MouseButton, MouseDownEvent, ParentElement, Render,
+    ScrollHandle, SharedString, Styled, Window, WindowBounds, WindowOptions, div, prelude::*, px,
+    rgb, rgba, size,
 };
 use gpui_platform::application;
 
@@ -57,8 +57,14 @@ struct SessionUiState {
 impl SessionUiState {
     fn new(project: PathBuf, cx: &mut Context<MainView>) -> Self {
         let intro = ChatItem::message(Speaker::System, "세션을 여는 중…", cx);
-        let input =
-            cx.new(|cx| ChatInput::new("무엇을 만들까요?", theme::TOKENS.fg, theme::TOKENS.muted, cx));
+        let input = cx.new(|cx| {
+            ChatInput::new(
+                "무엇을 만들까요?",
+                theme::TOKENS.fg,
+                theme::TOKENS.muted,
+                cx,
+            )
+        });
         Self {
             project,
             messages: vec![intro],
@@ -113,9 +119,7 @@ enum MessageSegment {
         body: Entity<SelectableText>,
     },
     /// `- item` 또는 `* item`. body는 bullet 제외한 본문.
-    ListItem {
-        body: Entity<SelectableText>,
-    },
+    ListItem { body: Entity<SelectableText> },
     /// fenced code block. ```language\n...\n``` 의 안쪽 내용. mono font + 다른 bg.
     Code {
         body: Entity<SelectableText>,
@@ -332,7 +336,10 @@ impl MainView {
                 .settings
                 .model_for_role(AgentModelRole::Main)
                 .to_string(),
-            sub_model: self.settings.model_for_role(AgentModelRole::Sub).to_string(),
+            sub_model: self
+                .settings
+                .model_for_role(AgentModelRole::Sub)
+                .to_string(),
         });
         cx.notify();
     }
@@ -361,7 +368,9 @@ impl MainView {
                 self.screen = Screen::Welcome;
             }
         }
-        let _ = self.cmd_tx.send(UiCommand::CloseSession { session_id: sid });
+        let _ = self
+            .cmd_tx
+            .send(UiCommand::CloseSession { session_id: sid });
         cx.notify();
     }
 
@@ -389,7 +398,9 @@ impl MainView {
             return;
         }
         s.last_commit = None;
-        let _ = self.cmd_tx.send(UiCommand::RevertLastTurn { session_id: sid });
+        let _ = self
+            .cmd_tx
+            .send(UiCommand::RevertLastTurn { session_id: sid });
         cx.notify();
     }
 
@@ -405,10 +416,15 @@ impl MainView {
             return;
         }
         s.interrupt_requested = true;
-        s.messages
-            .push(ChatItem::message(Speaker::System, "중단 요청을 보냈어요", cx));
+        s.messages.push(ChatItem::message(
+            Speaker::System,
+            "중단 요청을 보냈어요",
+            cx,
+        ));
         s.scroll.scroll_to_bottom();
-        let _ = self.cmd_tx.send(UiCommand::InterruptTurn { session_id: sid });
+        let _ = self
+            .cmd_tx
+            .send(UiCommand::InterruptTurn { session_id: sid });
         cx.notify();
     }
 
@@ -417,7 +433,9 @@ impl MainView {
             return;
         };
         let Some(sid) = ws.active.clone() else { return };
-        let Some(s) = ws.sessions.get(&sid) else { return };
+        let Some(s) = ws.sessions.get(&sid) else {
+            return;
+        };
         if !s.thread_started || s.turn_in_flight {
             return;
         }
@@ -458,11 +476,8 @@ impl MainView {
                 thread_id: _,
                 workspace_mode,
             } => {
-                let intro = ChatItem::message(
-                    Speaker::System,
-                    session_started_message(workspace_mode),
-                    cx,
-                );
+                let intro =
+                    ChatItem::message(Speaker::System, session_started_message(workspace_mode), cx);
                 self.with_session(&session_id, |s| {
                     s.thread_started = true;
                     s.messages.clear();
@@ -471,11 +486,8 @@ impl MainView {
             }
             UiEvent::SessionFailed { session_id, error } => {
                 let friendly = friendly_translate(&error);
-                let m = ChatItem::message(
-                    Speaker::System,
-                    format!("세션 시작 실패\n{friendly}"),
-                    cx,
-                );
+                let m =
+                    ChatItem::message(Speaker::System, format!("세션 시작 실패\n{friendly}"), cx);
                 self.with_session(&session_id, |s| s.messages.push(m));
             }
             UiEvent::SessionClosed { session_id } => {
@@ -656,11 +668,7 @@ impl MainView {
                 } else {
                     let raw = error_text.unwrap_or_default();
                     let friendly = friendly_translate(&raw);
-                    ChatItem::message(
-                        Speaker::System,
-                        format!("되돌리기 실패\n{friendly}"),
-                        cx,
-                    )
+                    ChatItem::message(Speaker::System, format!("되돌리기 실패\n{friendly}"), cx)
                 };
                 self.with_session(&session_id, |s| s.messages.push(m));
             }
@@ -765,24 +773,27 @@ fn render_welcome(t: &theme::Tokens, cx: &mut Context<MainView>) -> gpui::Div {
         .size_full()
         .items_center()
         .justify_center()
-        .gap_8()
-        .child(div().text_2xl().child("🚀 Stcode"))
+        .gap_6()
+        .bg(rgb(t.bg))
+        .child(div().text_2xl().text_color(rgb(t.fg)).child("Stcode"))
         .child(
             div()
                 .text_sm()
                 .text_color(rgb(t.muted))
-                .child("자연어로 시키면 코드를 만들어드려요"),
+                .child("여러 에이전트가 긴 작업을 나눠서 진행하는 콘솔"),
         )
         .child(
             div()
                 .px_8()
-                .py_4()
+                .py_3()
                 .bg(rgb(t.surface))
-                .rounded_md()
+                .rounded_lg()
                 .border_1()
-                .border_color(rgb(t.accent))
+                .border_color(rgb(t.border))
+                .shadow_sm()
                 .cursor_pointer()
-                .child("📁  폴더 열기")
+                .text_color(rgb(t.fg))
+                .child("프로젝트 열기")
                 .on_mouse_down(
                     MouseButton::Left,
                     cx.listener(|this, _, _, cx| this.open_folder(cx)),
@@ -805,17 +816,19 @@ fn render_workspace(
 }
 
 /// 좌측 사이드바 — dynamic 세션 list. 클릭으로 active 전환. status icon 동기화.
-fn render_sidebar(
-    t: &theme::Tokens,
-    ws: &WorkspaceState,
-    cx: &mut Context<MainView>,
-) -> gpui::Div {
+fn render_sidebar(t: &theme::Tokens, ws: &WorkspaceState, cx: &mut Context<MainView>) -> gpui::Div {
     let items: Vec<gpui::Div> = ws
         .order
         .iter()
         .filter_map(|sid| {
             let s = ws.sessions.get(sid)?;
-            Some(render_session_item(t, sid.clone(), s, ws.active.as_ref() == Some(sid), cx))
+            Some(render_session_item(
+                t,
+                sid.clone(),
+                s,
+                ws.active.as_ref() == Some(sid),
+                cx,
+            ))
         })
         .collect();
 
@@ -823,14 +836,15 @@ fn render_sidebar(
         .flex()
         .gap_2()
         .items_center()
+        .mx_3()
         .px_3()
         .py_2()
-        .text_sm()
-        .text_color(rgb(t.muted))
+        .text_color(rgb(t.fg))
+        .rounded_lg()
         .cursor_pointer()
-        .hover(|d| d.bg(rgb(t.sidebar_active)).text_color(rgb(t.fg)))
-        .child(div().w_4().text_xs().child("+"))
-        .child(div().flex_1().child("새 세션"))
+        .hover(|d| d.bg(rgb(t.sidebar_active)))
+        .child(div().w_5().text_color(rgb(t.muted)).child("✎"))
+        .child(div().flex_1().child("새 작업"))
         .on_mouse_down(
             MouseButton::Left,
             cx.listener(|this, _, _, cx| this.open_folder(cx)),
@@ -840,15 +854,14 @@ fn render_sidebar(
         .flex()
         .gap_2()
         .items_center()
+        .mx_3()
         .px_3()
         .py_2()
-        .text_sm()
         .text_color(rgb(t.muted))
+        .rounded_lg()
         .cursor_pointer()
-        .border_t_1()
-        .border_color(rgb(t.border))
         .hover(|d| d.bg(rgb(t.sidebar_active)).text_color(rgb(t.fg)))
-        .child(div().w_4().text_xs().child("⚙"))
+        .child(div().w_5().child("⚙"))
         .child(div().flex_1().child("설정"))
         .on_mouse_down(
             MouseButton::Left,
@@ -858,7 +871,7 @@ fn render_sidebar(
     div()
         .flex()
         .flex_col()
-        .w(px(220.))
+        .w(px(300.))
         .h_full()
         .bg(rgb(t.sidebar))
         .border_r_1()
@@ -866,25 +879,68 @@ fn render_sidebar(
         .child(
             div()
                 .flex()
-                .h_10()
-                .px_4()
+                .h(px(58.))
+                .px_5()
                 .items_center()
-                .border_b_1()
-                .border_color(rgb(t.border))
-                .text_sm()
-                .text_color(rgb(t.muted))
-                .child("🚀 Stcode"),
+                .gap_2()
+                .text_lg()
+                .text_color(rgb(t.fg))
+                .child("Stcode"),
         )
         .child(
             div()
                 .flex()
                 .flex_col()
+                .gap_1()
+                .px_2()
+                .pb_4()
+                .child(new_session_btn)
+                .child(sidebar_nav_row(t, "⌕", "검색", false))
+                .child(sidebar_nav_row(t, "◇", "플러그인", false))
+                .child(sidebar_nav_row(t, "○", "자동화", false)),
+        )
+        .child(
+            div()
+                .px_5()
+                .pt_4()
+                .pb_2()
+                .text_sm()
+                .text_color(rgb(0xa0a0a6))
+                .child("작업 세션"),
+        )
+        .child(
+            div()
+                .id("session-list")
+                .flex()
+                .flex_col()
                 .flex_1()
-                .py_2()
-                .children(items)
-                .child(new_session_btn),
+                .gap_1()
+                .px_2()
+                .overflow_y_scroll()
+                .children(items),
         )
         .child(settings_btn)
+}
+
+fn sidebar_nav_row(
+    t: &theme::Tokens,
+    icon: &'static str,
+    label: &'static str,
+    active: bool,
+) -> gpui::Div {
+    let bg = if active { t.sidebar_active } else { t.sidebar };
+    div()
+        .flex()
+        .items_center()
+        .gap_2()
+        .mx_3()
+        .px_3()
+        .py_2()
+        .rounded_lg()
+        .bg(rgb(bg))
+        .text_color(rgb(t.muted))
+        .child(div().w_5().child(icon))
+        .child(div().flex_1().child(label))
 }
 
 fn render_session_item(
@@ -915,33 +971,29 @@ fn render_session_item(
         .flex()
         .gap_2()
         .items_center()
+        .mx_2()
         .px_3()
         .py_2()
+        .rounded_lg()
         .bg(rgb(bg))
-        .text_sm()
         .text_color(rgb(t.fg))
         .cursor_pointer()
+        .hover(|d| d.bg(rgb(t.sidebar_active)))
         .child(
             div()
-                .w_4()
-                .text_xs()
-                .text_color(rgb(t.muted))
+                .w_5()
+                .text_color(rgb(if s.turn_in_flight { t.accent } else { t.muted }))
                 .child(status_icon),
         )
+        .child(div().flex_1().overflow_hidden().child(project_label))
         .child(
             div()
-                .flex_1()
-                .overflow_hidden()
-                .child(format!("📁 {project_label}")),
-        )
-        .child(
-            div()
-                .px_1()
+                .w_5()
                 .text_xs()
                 .text_color(rgb(t.muted))
                 .cursor_pointer()
-                .hover(|d| d.text_color(rgb(0xe0a0a0)))
-                .child("✕")
+                .hover(|d| d.text_color(rgb(0xb43b3b)))
+                .child("×")
                 .on_mouse_down(
                     MouseButton::Left,
                     cx.listener(move |this, _ev: &MouseDownEvent, _, cx| {
@@ -954,7 +1006,7 @@ fn render_session_item(
             cx.listener(move |this, _, _, cx| this.set_active(sid_for_click.clone(), cx)),
         );
     if active {
-        row = row.border_l_2().border_color(rgb(t.accent));
+        row = row.text_color(rgb(0x111114));
     }
     row
 }
@@ -971,10 +1023,19 @@ fn render_active_main(
             .flex_1()
             .h_full()
             .flex()
+            .flex_col()
             .items_center()
             .justify_center()
+            .gap_4()
+            .bg(rgb(t.bg))
+            .child(
+                div()
+                    .text_2xl()
+                    .text_color(rgb(t.fg))
+                    .child("프로젝트를 열어 작업을 시작하세요"),
+            )
             .text_color(rgb(t.muted))
-            .child("열린 세션이 없어요. 사이드바의 + 새 세션을 눌러주세요.");
+            .child("왼쪽의 새 작업을 누르면 세션별 작업공간과 브랜치를 자동으로 준비합니다.");
     };
     let Some(s) = ws.sessions.get(&sid) else {
         return div().flex_1();
@@ -989,22 +1050,23 @@ fn render_chat_main(
     cx: &mut Context<MainView>,
 ) -> gpui::Div {
     let send_enabled = s.thread_started && !s.turn_in_flight;
-    let send_label = if s.turn_in_flight {
-        "⏳ 응답 중…"
-    } else {
-        "↵ 보내기"
-    };
-    let send_color = if send_enabled { t.accent } else { 0x555566 };
+    let send_label = if s.turn_in_flight { "…" } else { "↑" };
+    let send_color = if send_enabled { 0x8a8a8f } else { 0xd1d1d6 };
+    let project_label = s
+        .project
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| s.project.to_string_lossy().into_owned());
 
     let revert_btn = s.last_commit.as_ref().filter(|c| c.revertible).map(|c| {
-        let tooltip = format!("↶ 되돌리기 — {}", c.summary);
+        let tooltip = format!("되돌리기 · {}", c.summary);
         div()
             .px_3()
-            .py_1()
-            .bg(rgb(0x2a2030))
-            .text_color(rgb(0xe0c0d0))
+            .py_2()
+            .bg(rgb(0xf1f1f3))
+            .text_color(rgb(t.fg))
             .text_xs()
-            .rounded_md()
+            .rounded_lg()
             .cursor_pointer()
             .child(tooltip)
             .on_mouse_down(
@@ -1015,20 +1077,24 @@ fn render_chat_main(
 
     let interrupt_btn = s.turn_in_flight.then(|| {
         let requested = s.interrupt_requested;
-        let label = if requested { "중단 요청됨" } else { "중단" };
-        let bg = if requested { 0x3a3440 } else { 0x4a2630 };
-        let fg = if requested { t.muted } else { 0xffb8c0 };
+        let label = if requested {
+            "중단 요청됨"
+        } else {
+            "중단"
+        };
+        let bg = if requested { 0xf1f1f3 } else { 0xffeee6 };
+        let fg = if requested { t.muted } else { t.accent };
         div()
             .px_3()
-            .py_1()
+            .py_2()
             .bg(rgb(bg))
             .text_color(rgb(fg))
             .text_xs()
-            .rounded_md()
+            .rounded_lg()
             .child(label)
             .when(!requested, |d| {
                 d.cursor_pointer()
-                    .hover(|d| d.bg(rgb(0x603040)))
+                    .hover(|d| d.bg(rgb(0xffe0d0)))
                     .on_mouse_down(
                         MouseButton::Left,
                         cx.listener(|this, _, _, cx| this.interrupt_active(cx)),
@@ -1049,23 +1115,27 @@ fn render_chat_main(
         .flex_col()
         .flex_1()
         .h_full()
+        .bg(rgb(t.bg))
         .child(
             div()
                 .flex()
-                .h_10()
-                .px_4()
+                .h(px(58.))
+                .px_6()
                 .items_center()
                 .gap_3()
-                .bg(rgb(t.surface))
+                .bg(rgb(0xfbfbfc))
                 .border_b_1()
                 .border_color(rgb(t.border))
                 .child(
                     div()
                         .flex_1()
-                        .text_sm()
-                        .text_color(rgb(t.muted))
-                        .child(status_label),
+                        .flex()
+                        .items_center()
+                        .gap_3()
+                        .child(div().text_lg().text_color(rgb(t.fg)).child(project_label))
+                        .child(status_pill(t, status_label)),
                 )
+                .child(chip_owned(t, chips_model.to_string()))
                 .when_some(interrupt_btn, |d, b| d.child(b))
                 .when_some(revert_btn, |d, b| d.child(b)),
         )
@@ -1075,80 +1145,117 @@ fn render_chat_main(
                 .flex()
                 .flex_col()
                 .flex_1()
-                .gap_3()
-                .p_4()
+                .items_center()
                 .overflow_y_scroll()
                 .track_scroll(&s.scroll)
-                .children(s.messages.iter().map(|m| render_chat_item(t, m))),
-        )
-        .child(
-            div()
-                .flex()
-                .gap_2()
-                .px_4()
-                .py_2()
-                .bg(rgb(t.surface))
-                .border_t_1()
-                .border_color(rgb(t.border))
-                .child(chip_owned(t, format!("🤖 {chips_model}")))
-                .child(chip(t, "⚡ 자동 모드"))
-                .child(chip(t, "📂 작업 폴더 자유")),
-        )
-        .child(
-            div()
-                .flex()
-                .min_h_16()
-                .px_4()
-                .py_3()
-                .items_start()
-                .gap_3()
-                .bg(rgb(t.surface))
-                .border_t_1()
-                .border_color(rgb(t.border))
                 .child(
                     div()
-                        .flex_1()
-                        .px_3()
-                        .py_2()
-                        .bg(rgb(t.bg))
-                        .border_1()
-                        .border_color(rgb(t.border))
-                        .rounded_md()
-                        .child(s.input.clone()),
-                )
-                .child(
-                    div()
-                        .px_4()
-                        .py_2()
-                        .bg(rgb(send_color))
-                        .text_color(rgb(0x111122))
-                        .rounded_md()
-                        .when(send_enabled, |d| {
-                            d.cursor_pointer().hover(|d| d.bg(rgb(0xa0c0ff)))
-                        })
-                        .child(send_label)
-                        .on_mouse_down(
-                            MouseButton::Left,
-                            cx.listener(|this, _, _, cx| this.send_user_input(cx)),
-                        ),
+                        .flex()
+                        .flex_col()
+                        .gap_4()
+                        .w_full()
+                        .max_w(px(1040.))
+                        .px_8()
+                        .py_8()
+                        .children(s.messages.iter().map(|m| render_chat_item(t, m))),
                 ),
+        )
+        .child(
+            div().flex().justify_center().px_8().pb_8().child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap_3()
+                    .w_full()
+                    .max_w(px(980.))
+                    .min_h(px(126.))
+                    .px_4()
+                    .py_3()
+                    .bg(rgb(t.surface))
+                    .border_1()
+                    .border_color(rgb(t.border))
+                    .rounded_2xl()
+                    .shadow_lg()
+                    .child(div().flex_1().text_lg().child(s.input.clone()))
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap_3()
+                            .child(composer_icon_button(t, "+"))
+                            .child(permission_chip(t))
+                            .child(div().flex_1())
+                            .child(chip_owned(t, chips_model.to_string()))
+                            .child(composer_icon_button(t, "⌕"))
+                            .child(
+                                div()
+                                    .size(px(40.))
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .bg(rgb(send_color))
+                                    .text_color(rgb(0xffffff))
+                                    .rounded_full()
+                                    .when(send_enabled, |d| {
+                                        d.cursor_pointer().hover(|d| d.bg(rgb(0x6f6f75)))
+                                    })
+                                    .child(send_label)
+                                    .on_mouse_down(
+                                        MouseButton::Left,
+                                        cx.listener(|this, _, _, cx| this.send_user_input(cx)),
+                                    ),
+                            ),
+                    ),
+            ),
         )
 }
 
-fn chip(t: &theme::Tokens, label: &'static str) -> gpui::Div {
-    chip_owned(t, label.to_string())
+fn status_pill(t: &theme::Tokens, label: &'static str) -> gpui::Div {
+    div()
+        .px_3()
+        .py_1()
+        .bg(rgb(0xf1f1f3))
+        .rounded_lg()
+        .text_xs()
+        .text_color(rgb(t.muted))
+        .child(label)
+}
+
+fn composer_icon_button(t: &theme::Tokens, label: &'static str) -> gpui::Div {
+    div()
+        .size(px(32.))
+        .flex()
+        .items_center()
+        .justify_center()
+        .text_lg()
+        .text_color(rgb(t.muted))
+        .rounded_full()
+        .hover(|d| d.bg(rgb(0xf1f1f3)).text_color(rgb(t.fg)))
+        .child(label)
+}
+
+fn permission_chip(t: &theme::Tokens) -> gpui::Div {
+    div()
+        .flex()
+        .items_center()
+        .gap_2()
+        .px_3()
+        .py_1()
+        .rounded_lg()
+        .text_sm()
+        .text_color(rgb(t.accent))
+        .child("전체 권한")
+        .child("⌄")
 }
 
 fn chip_owned(t: &theme::Tokens, label: String) -> gpui::Div {
     div()
-        .px_2()
+        .px_3()
         .py_1()
-        .bg(rgb(t.bg))
+        .bg(rgb(0xf1f1f3))
         .text_xs()
         .text_color(rgb(t.muted))
-        .border_1()
-        .border_color(rgb(t.border))
-        .rounded_md()
+        .rounded_lg()
         .child(label)
 }
 
@@ -1185,7 +1292,13 @@ fn render_chat_item(t: &theme::Tokens, item: &ChatItem) -> gpui::Div {
             text,
             reasoning,
             segments,
-        } => render_message(t, *who, text.clone(), reasoning.clone(), segments.as_deref()),
+        } => render_message(
+            t,
+            *who,
+            text.clone(),
+            reasoning.clone(),
+            segments.as_deref(),
+        ),
         ChatItem::Tool {
             kind,
             title,
@@ -1204,9 +1317,9 @@ fn render_message(
     segments: Option<&[MessageSegment]>,
 ) -> gpui::Div {
     let (icon, bubble_bg) = match who {
-        Speaker::User => ("🧑", 0x2a3050),
-        Speaker::Agent => ("🤖", t.surface),
-        Speaker::System => ("ℹ", 0x252535),
+        Speaker::User => ("나", 0xfff3eb),
+        Speaker::Agent => ("AI", t.surface),
+        Speaker::System => ("상태", 0xf1f1f3),
     };
     let mut body = div().flex_1().flex().flex_col().gap_2();
     if let Some(r) = reasoning {
@@ -1214,13 +1327,13 @@ fn render_message(
             div()
                 .px_3()
                 .py_2()
-                .bg(rgb(0x202028))
-                .rounded_md()
+                .bg(rgb(0xf1f3f5))
+                .rounded_lg()
                 .border_l_2()
-                .border_color(rgb(0x556677))
+                .border_color(rgb(0xc7ccd3))
                 .text_xs()
                 .text_color(rgb(t.muted))
-                .child(div().mb_1().child("💭 사고"))
+                .child(div().mb_1().child("생각"))
                 .child(r),
         );
     }
@@ -1242,9 +1355,16 @@ fn render_message(
     }
     div()
         .flex()
-        .gap_2()
+        .gap_3()
         .items_start()
-        .child(div().w_6().mt_1().child(icon))
+        .child(
+            div()
+                .w(px(38.))
+                .mt_1()
+                .text_xs()
+                .text_color(rgb(t.muted))
+                .child(icon),
+        )
         .child(body)
 }
 
@@ -1254,14 +1374,11 @@ fn render_segment(t: &theme::Tokens, seg: &MessageSegment, bubble_bg: u32) -> gp
             .px_3()
             .py_2()
             .bg(rgb(bubble_bg))
-            .rounded_md()
+            .rounded_lg()
             .child(entity.clone()),
         MessageSegment::Heading { level, body } => {
             // H1=2xl, H2=xl, H3=lg. 색은 약간 더 밝게 강조.
-            let base = div()
-                .px_3()
-                .py_2()
-                .text_color(rgb(0xffffff));
+            let base = div().px_3().py_2().text_color(rgb(t.fg));
             match level {
                 1 => base.text_2xl(),
                 2 => base.text_xl(),
@@ -1277,30 +1394,24 @@ fn render_segment(t: &theme::Tokens, seg: &MessageSegment, bubble_bg: u32) -> gp
             .child(div().w_4().text_color(rgb(t.muted)).child("•"))
             .child(div().flex_1().child(body.clone())),
         MessageSegment::Code { body, language } => {
-            // 코드 블록: mono font + 어두운 bg + 옅은 라벨 (language). language는 부모
-            // div에 .font_family로 걸면 SelectableText가 자동 상속.
+            // 코드 블록은 읽기 전용 요약 카드처럼 차분하게 보인다.
             let mut card = div()
                 .flex()
                 .flex_col()
                 .gap_1()
                 .px_3()
                 .py_2()
-                .bg(rgb(0x10141a))
+                .bg(rgb(0xf1f1f3))
                 .border_1()
-                .border_color(rgb(0x2a3a4a))
-                .rounded_md();
+                .border_color(rgb(t.border))
+                .rounded_lg();
             if let Some(lang) = language {
                 if !lang.is_empty() {
-                    card = card.child(
-                        div()
-                            .text_xs()
-                            .text_color(rgb(t.muted))
-                            .child(lang.clone()),
-                    );
+                    card = card.child(div().text_xs().text_color(rgb(t.muted)).child(lang.clone()));
                 }
             }
             card.font_family("Menlo")
-                .text_color(rgb(0xc0d8e8))
+                .text_color(rgb(t.fg))
                 .child(body.clone())
         }
     }
@@ -1315,15 +1426,15 @@ fn render_tool_card(
 ) -> gpui::Div {
     let icon = kind.icon();
     let (status_label, status_color) = match status {
-        ToolStatus::InProgress => ("⏳", 0xb0b0c0),
-        ToolStatus::CompletedOk => ("✅", 0x60d090),
-        ToolStatus::CompletedFail => ("❌", 0xd07070),
+        ToolStatus::InProgress => ("진행", 0x8a8a91),
+        ToolStatus::CompletedOk => ("완료", 0x2f8f55),
+        ToolStatus::CompletedFail => ("실패", 0xb43b3b),
     };
     div()
         .flex()
-        .gap_2()
+        .gap_3()
         .items_start()
-        .child(div().w_6().mt_1().child(icon))
+        .child(div().w(px(38.)).mt_1().text_color(rgb(t.muted)).child(icon))
         .child(
             div()
                 .flex_1()
@@ -1332,16 +1443,21 @@ fn render_tool_card(
                 .gap_1()
                 .px_3()
                 .py_2()
-                .bg(rgb(0x1a1f2a))
-                .rounded_md()
+                .bg(rgb(0xf7f7f8))
+                .rounded_lg()
                 .border_1()
-                .border_color(rgb(0x303848))
+                .border_color(rgb(t.border))
                 .child(
                     div()
                         .flex()
                         .gap_2()
                         .items_center()
-                        .child(div().text_color(rgb(status_color)).child(status_label))
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(rgb(status_color))
+                                .child(status_label),
+                        )
                         .child(
                             div()
                                 .flex_1()
@@ -1350,12 +1466,7 @@ fn render_tool_card(
                                 .child(title.to_string()),
                         ),
                 )
-                .child(
-                    div()
-                        .text_xs()
-                        .text_color(rgb(t.muted))
-                        .child(output),
-                ),
+                .child(div().text_xs().text_color(rgb(t.muted)).child(output)),
         )
 }
 
@@ -1376,7 +1487,7 @@ fn render_approval_modal(
         .flex()
         .items_center()
         .justify_center()
-        .bg(rgb(0x10101a))
+        .bg(rgba(0x00000040))
         .on_mouse_down(MouseButton::Left, |_, _, _| {})
         .child(
             div()
@@ -1387,20 +1498,16 @@ fn render_approval_modal(
                 .p_6()
                 .bg(rgb(t.surface))
                 .border_1()
-                .border_color(rgb(t.accent))
-                .rounded_md()
+                .border_color(rgb(t.border))
+                .rounded_2xl()
+                .shadow_lg()
                 .child(
                     div()
                         .flex()
                         .gap_3()
                         .items_center()
                         .child(div().text_2xl().child(icon))
-                        .child(
-                            div()
-                                .flex_1()
-                                .text_lg()
-                                .child(p.friendly_title.clone()),
-                        ),
+                        .child(div().flex_1().text_lg().child(p.friendly_title.clone())),
                 )
                 .when(show_detail, |d| {
                     d.child(
@@ -1408,9 +1515,9 @@ fn render_approval_modal(
                             .px_3()
                             .py_2()
                             .bg(rgb(t.bg))
-                            .rounded_md()
+                            .rounded_lg()
                             .border_1()
-                            .border_color(rgb(0x303848))
+                            .border_color(rgb(t.border))
                             .text_sm()
                             .text_color(rgb(t.muted))
                             .child(detail),
@@ -1502,23 +1609,13 @@ fn render_notice_modal(
                 .rounded_md()
                 .on_mouse_down(MouseButton::Left, |_, _, _| {})
                 .child(div().text_lg().child("작업공간"))
-                .child(
-                    div()
-                        .text_sm()
-                        .text_color(rgb(t.muted))
-                        .child(message),
-                )
-                .child(
-                    div()
-                        .flex()
-                        .justify_end()
-                        .child(approval_button(
-                            "확인",
-                            t.accent,
-                            0x111122,
-                            cx.listener(|this, _, _, cx| this.dismiss_notice(cx)),
-                        )),
-                ),
+                .child(div().text_sm().text_color(rgb(t.muted)).child(message))
+                .child(div().flex().justify_end().child(approval_button(
+                    "확인",
+                    t.accent,
+                    0x111122,
+                    cx.listener(|this, _, _, cx| this.dismiss_notice(cx)),
+                ))),
         )
 }
 
@@ -1540,7 +1637,7 @@ fn render_settings_modal(
         .flex()
         .items_center()
         .justify_center()
-        .bg(rgb(0x10101a))
+        .bg(rgba(0x00000040))
         .on_mouse_down(MouseButton::Left, |_, _, _| {})
         .child(
             div()
@@ -1551,9 +1648,10 @@ fn render_settings_modal(
                 .p_6()
                 .bg(rgb(t.surface))
                 .border_1()
-                .border_color(rgb(t.accent))
-                .rounded_md()
-                .child(div().text_lg().child("⚙ 설정"))
+                .border_color(rgb(t.border))
+                .rounded_2xl()
+                .shadow_lg()
+                .child(div().text_lg().child("설정"))
                 .child(
                     div()
                         .text_xs()
@@ -1611,12 +1709,7 @@ fn setting_field(t: &theme::Tokens, label: &'static str, input: Entity<ChatInput
         .flex()
         .flex_col()
         .gap_1()
-        .child(
-            div()
-                .text_xs()
-                .text_color(rgb(t.muted))
-                .child(label),
-        )
+        .child(div().text_xs().text_color(rgb(t.muted)).child(label))
         .child(
             div()
                 .px_3()
@@ -1645,10 +1738,7 @@ fn finalize_last_agent_message_markdown(s: &mut SessionUiState, cx: &mut Context
     }) else {
         return;
     };
-    let ChatItem::Message {
-        text, segments, ..
-    } = item
-    else {
+    let ChatItem::Message { text, segments, .. } = item else {
         return;
     };
     if segments.is_some() {
@@ -1686,9 +1776,15 @@ fn has_markdown_markers(raw: &str) -> bool {
 #[derive(Debug, PartialEq, Eq)]
 enum RawSegment {
     Paragraph(String),
-    Heading { level: u8, body: String },
+    Heading {
+        level: u8,
+        body: String,
+    },
     ListItem(String),
-    Code { body: String, language: Option<String> },
+    Code {
+        body: String,
+        language: Option<String>,
+    },
 }
 
 /// `raw`를 RawSegment로 자른다 (entity 없음 → 테스트 가능).
@@ -1874,15 +1970,21 @@ fn parse_markdown_segments(raw: &str, cx: &mut Context<MainView>) -> Vec<Message
             }
             RawSegment::Heading { level, body } => {
                 let entity = selectable_from_markdown_inline(body, theme::TOKENS.fg, cx);
-                MessageSegment::Heading { level, body: entity }
+                MessageSegment::Heading {
+                    level,
+                    body: entity,
+                }
             }
             RawSegment::ListItem(body) => {
                 let entity = selectable_from_markdown_inline(body, theme::TOKENS.fg, cx);
                 MessageSegment::ListItem { body: entity }
             }
             RawSegment::Code { body, language } => {
-                let entity = cx.new(|cx| SelectableText::new(body, 0xc0d8e8, cx));
-                MessageSegment::Code { body: entity, language }
+                let entity = cx.new(|cx| SelectableText::new(body, theme::TOKENS.fg, cx));
+                MessageSegment::Code {
+                    body: entity,
+                    language,
+                }
             }
         })
         .collect()
@@ -1923,16 +2025,28 @@ mod markdown_tests {
 
     #[test]
     fn status_label_tracks_reasoning_before_answer() {
-        assert_eq!(turn_status_label(false, false, false, 0, 0), "세션 여는 중…");
+        assert_eq!(
+            turn_status_label(false, false, false, 0, 0),
+            "세션 여는 중…"
+        );
         assert_eq!(turn_status_label(true, false, false, 0, 0), "대기");
-        assert_eq!(turn_status_label(true, true, false, 0, 0), "응답 기다리는 중");
+        assert_eq!(
+            turn_status_label(true, true, false, 0, 0),
+            "응답 기다리는 중"
+        );
         assert_eq!(turn_status_label(true, true, false, 10, 0), "생각 중");
         assert_eq!(
             turn_status_label(true, true, false, LONG_REASONING_CHARS, 0),
             "생각이 길어지는 중"
         );
-        assert_eq!(turn_status_label(true, true, false, 10_000, 1), "답변 작성 중");
-        assert_eq!(turn_status_label(true, true, true, 10_000, 0), "중단 요청 중");
+        assert_eq!(
+            turn_status_label(true, true, false, 10_000, 1),
+            "답변 작성 중"
+        );
+        assert_eq!(
+            turn_status_label(true, true, true, 10_000, 0),
+            "중단 요청 중"
+        );
     }
 
     #[test]
@@ -2045,9 +2159,18 @@ mod markdown_tests {
         assert_eq!(
             segs,
             vec![
-                RawSegment::Heading { level: 1, body: "h1".into() },
-                RawSegment::Heading { level: 2, body: "h2".into() },
-                RawSegment::Heading { level: 3, body: "h3".into() },
+                RawSegment::Heading {
+                    level: 1,
+                    body: "h1".into()
+                },
+                RawSegment::Heading {
+                    level: 2,
+                    body: "h2".into()
+                },
+                RawSegment::Heading {
+                    level: 3,
+                    body: "h3".into()
+                },
             ]
         );
     }
@@ -2084,11 +2207,17 @@ mod markdown_tests {
         assert_eq!(
             segs,
             vec![
-                RawSegment::Heading { level: 1, body: "안녕".into() },
+                RawSegment::Heading {
+                    level: 1,
+                    body: "안녕".into()
+                },
                 RawSegment::Paragraph("첫 단락.".into()),
                 RawSegment::ListItem("항목 1".into()),
                 RawSegment::ListItem("항목 2".into()),
-                RawSegment::Code { body: "fn main() {}".into(), language: Some("rs".into()) },
+                RawSegment::Code {
+                    body: "fn main() {}".into(),
+                    language: Some("rs".into())
+                },
                 RawSegment::Paragraph("끝.".into()),
             ]
         );

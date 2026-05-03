@@ -175,10 +175,10 @@ impl ToolKind {
     }
     pub fn icon(self) -> &'static str {
         match self {
-            Self::CommandExecution => "⚙",
-            Self::FileChange => "📄",
-            Self::McpToolCall => "🔌",
-            Self::WebSearch => "🌐",
+            Self::CommandExecution => "⌘",
+            Self::FileChange => "□",
+            Self::McpToolCall => "◇",
+            Self::WebSearch => "⌕",
             Self::Other => "•",
         }
     }
