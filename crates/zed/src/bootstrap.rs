@@ -69,12 +69,7 @@ use workspace::{
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-#[allow(dead_code)]
-pub(crate) enum LaunchMode {
-    Zed,
-    Stcode,
-}
+pub(crate) use workspace::AppLaunchMode as LaunchMode;
 
 fn files_not_created_on_launch(errors: HashMap<io::ErrorKind, Vec<&Path>>) {
     let message = "Zed failed to launch";
@@ -660,6 +655,7 @@ pub(crate) fn run(launch_mode: LaunchMode) {
             session: app_session,
         });
         AppState::set_global(app_state.clone(), cx);
+        LaunchMode::set_global(launch_mode, cx);
 
         auto_update::init(client.clone(), cx);
         dap_adapters::init(cx);

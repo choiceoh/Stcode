@@ -12,6 +12,7 @@ The first shell milestone keeps the runtime shared with the current `zed` binary
 The `stcode` binary should:
 
 - initialize through the shared bootstrap path
+- publish `AppLaunchMode::Stcode` so shared UI code can branch without new bootstrap wiring
 - restore or create workspaces normally
 - leave user settings files unchanged
 - avoid persisting its simplified shell layout into the restored Zed workspace state
@@ -23,6 +24,8 @@ The terminal panel is hidden by default in Stcode mode because users should not 
 ## What Stays Shared
 
 For now, Stcode still relies on Zed's app bootstrap, settings, themes, workspace restoration, editor buffers, project state, Git integration, terminal runtime, and agent UI initialization. This is intentional. The first goal is to make the Stcode entrypoint real without duplicating a large and fragile startup path.
+
+Shared crates should read `workspace::AppLaunchMode` when they need to adjust visible copy, onboarding, panel policy, or other Stcode-specific shell behavior. That keeps the launch-mode split explicit without threading another boolean through every initializer.
 
 ## Later Extraction Point
 
