@@ -96,6 +96,15 @@ impl ChatInput {
         cx.notify();
     }
 
+    /// 초기값 set — 설정 모달 같이 기존 값을 prefill 해야 할 때.
+    pub fn set_content(&mut self, content: impl Into<SharedString>, cx: &mut Context<Self>) {
+        self.content = content.into();
+        self.selected_range = self.content.len()..self.content.len();
+        self.selection_reversed = false;
+        self.marked_range = None;
+        cx.notify();
+    }
+
     pub fn focus(&self, window: &mut Window, cx: &mut App) {
         window.focus(&self.focus_handle, cx);
     }
