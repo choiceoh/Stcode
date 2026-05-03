@@ -47,6 +47,25 @@ cargo run -p stcode-app
 - `STCODE_VLLM_COMPAT=1` — fork patch 활성 (Stcode bridge.rs가 자동 set)
 - `RUST_LOG=info,stcode=debug` — 더 자세한 로그
 
+## .app 번들 빌드 (사내 배포용)
+
+```bash
+bash scripts/build-app.sh                 # release + ad-hoc codesign
+bash scripts/build-app.sh --debug         # debug 빌드 (디버깅용)
+bash scripts/build-app.sh --no-codesign   # CI 등
+```
+
+결과: `dist/Stcode.app`. 더블클릭으로 실행. **첫 실행 시** Gatekeeper 경고가
+뜨면 Finder 우클릭 → 열기 → "열기" 한 번만. 그 다음부턴 더블클릭 그대로.
+
+배포: `ditto -c -k --keepParent dist/Stcode.app dist/Stcode.app.zip` 으로 압축
+해서 사내 공유. Apple Developer 계정으로 notarization 까지 하려면 별도 작업
+(v1엔 ad-hoc 만 — 사내라 충분).
+
+번들엔 codex 바이너리는 **포함하지 않음**. 사용자가 fork 빌드 또는 brew로
+설치한 codex를 자동 탐지 (`STCODE_CODEX_BIN` ENV / `~/Documents/GitHub/codex-fork`
+경로 / `/opt/homebrew/bin` 순).
+
 ## 워크스페이스 구조
 
 ```
