@@ -2,34 +2,61 @@ use extension_host::ExtensionStore;
 use gpui::{App, ClipboardItem, PromptLevel, actions};
 use system_specs::{CopySystemSpecsIntoClipboard, SystemSpecs};
 use util::ResultExt;
-use workspace::Workspace;
+use workspace::{AppLaunchMode, Workspace};
 use zed_actions::feedback::{EmailZed, FileBugReport, RequestFeature};
 
 actions!(
     zed,
     [
-        /// Opens the Zed repository on GitHub.
+        /// Opens the app repository on GitHub.
         OpenZedRepo,
         /// Copies installed extensions to the clipboard for bug reports.
         CopyInstalledExtensionsIntoClipboard
     ]
 );
 
+const STCODE_REPO_URL: &str = "https://github.com/choiceoh/Stcode";
 const ZED_REPO_URL: &str = "https://github.com/zed-industries/zed";
 
 const REQUEST_FEATURE_URL: &str = "https://github.com/zed-industries/zed/discussions/new/choose";
+const STCODE_REQUEST_FEATURE_URL: &str =
+    "https://github.com/choiceoh/Stcode/issues/new?labels=enhancement";
 
-fn file_bug_report_url(specs: &SystemSpecs) -> String {
-    format!(
-        concat!(
-            "https://github.com/zed-industries/zed/issues/new",
-            "?",
-            "template=10_bug_report.yml",
-            "&",
-            "environment={}"
-        ),
-        urlencoding::encode(&specs.to_string())
-    )
+fn repo_url(is_stcode: bool) -> &'static str {
+    if is_stcode {
+        STCODE_REPO_URL
+    } else {
+        ZED_REPO_URL
+    }
+}
+
+fn request_feature_url(is_stcode: bool) -> &'static str {
+    if is_stcode {
+        STCODE_REQUEST_FEATURE_URL
+    } else {
+        REQUEST_FEATURE_URL
+    }
+}
+
+fn file_bug_report_url(specs: &SystemSpecs, is_stcode: bool) -> String {
+    if is_stcode {
+        let body = format!("\n\nSystem Information:\n\n{}", specs);
+        format!(
+            "https://github.com/choiceoh/Stcode/issues/new?title=Bug%20report&body={}",
+            urlencoding::encode(&body)
+        )
+    } else {
+        format!(
+            concat!(
+                "https://github.com/zed-industries/zed/issues/new",
+                "?",
+                "template=10_bug_report.yml",
+                "&",
+                "environment={}"
+            ),
+            urlencoding::encode(&specs.to_string())
+        )
+    }
 }
 
 fn email_zed_url(specs: &SystemSpecs) -> String {
@@ -80,14 +107,15 @@ pub fn init(cx: &mut App) {
                 ));
             })
             .register_action(|_, _: &RequestFeature, _, cx| {
-                cx.open_url(REQUEST_FEATURE_URL);
+                cx.open_url(request_feature_url(AppLaunchMode::is_stcode(cx)));
             })
             .register_action(move |_, _: &FileBugReport, window, cx| {
                 let specs = SystemSpecs::new(window, cx);
+                let is_stcode = AppLaunchMode::is_stcode(cx);
                 cx.spawn_in(window, async move |_, cx| {
                     let specs = specs.await;
                     cx.update(|_, cx| {
-                        cx.open_url(&file_bug_report_url(&specs));
+                        cx.open_url(&file_bug_report_url(&specs, is_stcode));
                     })
                     .log_err();
                 })
@@ -105,7 +133,7 @@ pub fn init(cx: &mut App) {
                 .detach();
             })
             .register_action(move |_, _: &OpenZedRepo, _, cx| {
-                cx.open_url(ZED_REPO_URL);
+                cx.open_url(repo_url(AppLaunchMode::is_stcode(cx)));
             });
     })
     .detach();

@@ -57,7 +57,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use settings::{LanguageModelSelection, Settings as _, SettingsStore};
 use std::any::TypeId;
-use workspace::Workspace;
+use workspace::{AppLaunchMode, Workspace};
 
 use crate::agent_configuration::{ConfigureContextServerModal, ManageProfilesModal};
 pub use crate::agent_panel::{AgentPanel, AgentPanelEvent, MaxIdleRetainedThreads};
@@ -304,6 +304,14 @@ impl Agent {
             Self::Custom { id, .. } => id.0.clone(),
             #[cfg(any(test, feature = "test-support"))]
             Self::Stub => "Stub Agent".into(),
+        }
+    }
+
+    pub fn label_for_app(&self, cx: &App) -> SharedString {
+        if matches!(self, Self::NativeAgent) && AppLaunchMode::is_stcode(cx) {
+            "Stcode Agent".into()
+        } else {
+            self.label()
         }
     }
 

@@ -2991,10 +2991,10 @@ impl AgentPanel {
 
                 let label = store
                     .agent_display_name(&id)
-                    .unwrap_or_else(|| self.selected_agent.label());
+                    .unwrap_or_else(|| self.selected_agent.label_for_app(cx));
                 (icon, label)
             } else {
-                (None, self.selected_agent.label())
+                (None, self.selected_agent.label_for_app(cx))
             };
 
         let active_thread = match &self.base_view {
@@ -3047,7 +3047,7 @@ impl AgentPanel {
                             }
                         })
                         .item(
-                            ContextMenuEntry::new("Zed Agent")
+                            ContextMenuEntry::new(Agent::NativeAgent.label_for_app(cx))
                                 .when(is_agent_selected(Agent::NativeAgent), |this| {
                                     this.action(Box::new(NewExternalAgentThread { agent: None }))
                                 })

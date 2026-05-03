@@ -18,6 +18,7 @@ use std::sync::Arc;
 use client::{Client, UserStore, zed_urls};
 use gpui::{AnyElement, Entity, IntoElement, ParentElement};
 use ui::{Divider, RegisterComponent, Tooltip, Vector, VectorName, prelude::*};
+use workspace::AppLaunchMode;
 
 #[derive(PartialEq)]
 pub enum SignInStatus {
@@ -147,32 +148,55 @@ impl ZedAiOnboarding {
         })
     }
 
-    fn render_sign_in_disclaimer(&self, _cx: &mut App) -> AnyElement {
+    fn ai_name(cx: &App) -> &'static str {
+        if AppLaunchMode::is_stcode(cx) {
+            "Stcode AI"
+        } else {
+            "Zed AI"
+        }
+    }
+
+    fn plan_name(cx: &App, plan: &str) -> String {
+        let app_name = if AppLaunchMode::is_stcode(cx) {
+            "Stcode"
+        } else {
+            "Zed"
+        };
+        format!("{app_name} {plan}")
+    }
+
+    fn render_sign_in_disclaimer(&self, cx: &mut App) -> AnyElement {
         let signing_in = matches!(self.sign_in_status, SignInStatus::SigningIn);
 
         v_flex()
             .w_full()
             .relative()
             .gap_1()
-            .child(Headline::new("Welcome to Zed AI"))
+            .child(Headline::new(format!("Welcome to {}", Self::ai_name(cx))))
             .child(
-                Label::new("Sign in to try Zed Pro for 14 days, no credit card required.")
-                    .color(Color::Muted)
-                    .mb_2(),
+                Label::new(format!(
+                    "Sign in to try {} for 14 days, no credit card required.",
+                    Self::plan_name(cx, "Pro")
+                ))
+                .color(Color::Muted)
+                .mb_2(),
             )
-            .child(PlanDefinitions.pro_plan())
+            .child(PlanDefinitions.pro_plan(cx))
             .child(
-                Button::new("sign_in", "Try Zed Pro for Free")
-                    .disabled(signing_in)
-                    .full_width()
-                    .style(ButtonStyle::Tinted(ui::TintColor::Accent))
-                    .on_click({
-                        let callback = self.sign_in.clone();
-                        move |_, window, cx| {
-                            telemetry::event!("Start Trial Clicked", state = "pre-sign-in");
-                            callback(window, cx)
-                        }
-                    }),
+                Button::new(
+                    "sign_in",
+                    format!("Try {} for Free", Self::plan_name(cx, "Pro")),
+                )
+                .disabled(signing_in)
+                .full_width()
+                .style(ButtonStyle::Tinted(ui::TintColor::Accent))
+                .on_click({
+                    let callback = self.sign_in.clone();
+                    move |_, window, cx| {
+                        telemetry::event!("Start Trial Clicked", state = "pre-sign-in");
+                        callback(window, cx)
+                    }
+                }),
             )
             .children(self.render_dismiss_button())
             .into_any_element()
@@ -184,7 +208,7 @@ impl ZedAiOnboarding {
                 .relative()
                 .min_w_0()
                 .gap_1()
-                .child(Headline::new("Welcome to Zed AI"))
+                .child(Headline::new(format!("Welcome to {}", Self::ai_name(cx))))
                 .child(YoungAccountBanner)
                 .child(
                     v_flex()
@@ -201,7 +225,7 @@ impl ZedAiOnboarding {
                                 )
                                 .child(Divider::horizontal()),
                         )
-                        .child(PlanDefinitions.pro_plan())
+                        .child(PlanDefinitions.pro_plan(cx))
                         .child(
                             Button::new("pro", "Get Started")
                                 .full_width()
@@ -221,7 +245,7 @@ impl ZedAiOnboarding {
                 .w_full()
                 .relative()
                 .gap_1()
-                .child(Headline::new("Welcome to Zed AI"))
+                .child(Headline::new(format!("Welcome to {}", Self::ai_name(cx))))
                 .child(
                     v_flex()
                         .mt_2()
@@ -245,7 +269,7 @@ impl ZedAiOnboarding {
                                 )
                                 .child(Divider::horizontal()),
                         )
-                        .child(PlanDefinitions.free_plan()),
+                        .child(PlanDefinitions.free_plan(cx)),
                 )
                 .children(self.render_dismiss_button())
                 .child(
@@ -263,7 +287,7 @@ impl ZedAiOnboarding {
                                 )
                                 .child(Divider::horizontal()),
                         )
-                        .child(PlanDefinitions.pro_trial(true))
+                        .child(PlanDefinitions.pro_trial(cx, true))
                         .child(
                             Button::new("pro", "Start Free Trial")
                                 .full_width()
@@ -287,13 +311,16 @@ impl ZedAiOnboarding {
             .relative()
             .gap_1()
             .child(Self::pro_trial_stamp(cx))
-            .child(Headline::new("Welcome to the Zed Pro Trial"))
+            .child(Headline::new(format!(
+                "Welcome to the {}",
+                Self::plan_name(cx, "Pro Trial")
+            )))
             .child(
                 Label::new("Here's what you get for the next 14 days:")
                     .color(Color::Muted)
                     .mb_2(),
             )
-            .child(PlanDefinitions.pro_trial(false))
+            .child(PlanDefinitions.pro_trial(cx, false))
             .children(self.render_dismiss_button())
             .into_any_element()
     }
@@ -304,13 +331,16 @@ impl ZedAiOnboarding {
             .relative()
             .gap_1()
             .child(Self::certified_user_stamp(cx))
-            .child(Headline::new("Welcome to Zed Pro"))
+            .child(Headline::new(format!(
+                "Welcome to {}",
+                Self::plan_name(cx, "Pro")
+            )))
             .child(
                 Label::new("Here's what you get:")
                     .color(Color::Muted)
                     .mb_2(),
             )
-            .child(PlanDefinitions.pro_plan())
+            .child(PlanDefinitions.pro_plan(cx))
             .children(self.render_dismiss_button())
             .into_any_element()
     }
@@ -321,7 +351,10 @@ impl ZedAiOnboarding {
             .relative()
             .gap_1()
             .child(Self::business_stamp(cx))
-            .child(Headline::new("Welcome to Zed Business"))
+            .child(Headline::new(format!(
+                "Welcome to {}",
+                Self::plan_name(cx, "Business")
+            )))
             .child(
                 Label::new("Here's what you get:")
                     .color(Color::Muted)
@@ -338,13 +371,16 @@ impl ZedAiOnboarding {
             .relative()
             .gap_1()
             .child(Self::student_stamp(cx))
-            .child(Headline::new("Welcome to Zed Student"))
+            .child(Headline::new(format!(
+                "Welcome to {}",
+                Self::plan_name(cx, "Student")
+            )))
             .child(
                 Label::new("Here's what you get:")
                     .color(Color::Muted)
                     .mb_2(),
             )
-            .child(PlanDefinitions.student_plan())
+            .child(PlanDefinitions.student_plan(cx))
             .children(self.render_dismiss_button())
             .into_any_element()
     }
