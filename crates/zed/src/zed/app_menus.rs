@@ -59,6 +59,50 @@ pub fn app_menus(cx: &mut App) -> Vec<Menu> {
         view_items.push(MenuItem::separator());
     }
 
+    let is_stcode = workspace::AppLaunchMode::is_stcode(cx);
+    let mut help_items = vec![
+        MenuItem::action(
+            "View Release Notes Locally",
+            auto_update_ui::ViewReleaseNotesLocally,
+        ),
+        MenuItem::action("View Telemetry", zed_actions::OpenTelemetryLog),
+        MenuItem::action("View Dependency Licenses", zed_actions::OpenLicenses),
+        MenuItem::action("Show Welcome", onboarding::ShowWelcome),
+        MenuItem::separator(),
+        MenuItem::action("File Bug Report...", zed_actions::feedback::FileBugReport),
+        MenuItem::action("Request Feature...", zed_actions::feedback::RequestFeature),
+    ];
+
+    if is_stcode {
+        help_items.push(MenuItem::separator());
+        help_items.push(MenuItem::action("Stcode Repository", feedback::OpenZedRepo));
+    } else {
+        help_items.push(MenuItem::action(
+            "Email Us...",
+            zed_actions::feedback::EmailZed,
+        ));
+        help_items.push(MenuItem::separator());
+        help_items.push(MenuItem::action(
+            "Documentation",
+            super::OpenBrowser {
+                url: "https://zed.dev/docs".into(),
+            },
+        ));
+        help_items.push(MenuItem::action("Zed Repository", feedback::OpenZedRepo));
+        help_items.push(MenuItem::action(
+            "Zed Twitter",
+            super::OpenBrowser {
+                url: "https://twitter.com/zeddotdev".into(),
+            },
+        ));
+        help_items.push(MenuItem::action(
+            "Join the Team",
+            super::OpenBrowser {
+                url: "https://zed.dev/jobs".into(),
+            },
+        ));
+    }
+
     vec![
         Menu {
             name: app_name.into(),
@@ -296,39 +340,7 @@ pub fn app_menus(cx: &mut App) -> Vec<Menu> {
         Menu {
             name: "Help".into(),
             disabled: false,
-            items: vec![
-                MenuItem::action(
-                    "View Release Notes Locally",
-                    auto_update_ui::ViewReleaseNotesLocally,
-                ),
-                MenuItem::action("View Telemetry", zed_actions::OpenTelemetryLog),
-                MenuItem::action("View Dependency Licenses", zed_actions::OpenLicenses),
-                MenuItem::action("Show Welcome", onboarding::ShowWelcome),
-                MenuItem::separator(),
-                MenuItem::action("File Bug Report...", zed_actions::feedback::FileBugReport),
-                MenuItem::action("Request Feature...", zed_actions::feedback::RequestFeature),
-                MenuItem::action("Email Us...", zed_actions::feedback::EmailZed),
-                MenuItem::separator(),
-                MenuItem::action(
-                    "Documentation",
-                    super::OpenBrowser {
-                        url: "https://zed.dev/docs".into(),
-                    },
-                ),
-                MenuItem::action("Zed Repository", feedback::OpenZedRepo),
-                MenuItem::action(
-                    "Zed Twitter",
-                    super::OpenBrowser {
-                        url: "https://twitter.com/zeddotdev".into(),
-                    },
-                ),
-                MenuItem::action(
-                    "Join the Team",
-                    super::OpenBrowser {
-                        url: "https://zed.dev/jobs".into(),
-                    },
-                ),
-            ],
+            items: help_items,
         },
     ]
 }

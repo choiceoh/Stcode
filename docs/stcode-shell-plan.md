@@ -20,6 +20,7 @@ The `stcode` binary should:
 - open and focus the agent panel as the main work surface
 - show Stcode as the visible app name in app-level menu and about surfaces
 - use Stcode names in first-run AI onboarding, native agent labels, and usage-limit prompts
+- route visible Help-menu repository, bug-report, and feature-request paths to Stcode in Stcode mode
 
 The terminal panel is hidden by default in Stcode mode because users should not need to operate a terminal directly. This does not remove terminal or execution support. Agent tools and workspace execution surfaces remain available; Stcode should surface progress through the agent panel, tool cards, and later a dedicated activity timeline.
 
