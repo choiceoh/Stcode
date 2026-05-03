@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use gpui::{
-    div, prelude::*, px, rgb, size, App, Bounds, Context, Entity, IntoElement, MouseButton,
+    div, prelude::*, px, rgb, rgba, size, App, Bounds, Context, Entity, IntoElement, MouseButton,
     MouseDownEvent, ParentElement, Render, ScrollHandle, SharedString, Styled, Window, WindowBounds,
     WindowOptions,
 };
@@ -14,7 +14,9 @@ mod theme;
 
 use chat_input::ChatInput;
 use selectable_text::{InlineKind, InlineSpan, SelectableText};
-use stcode_codex::bridge::{ApprovalDecision, Bridge, SessionId, ToolKind, UiCommand, UiEvent};
+use stcode_codex::bridge::{
+    ApprovalDecision, Bridge, SessionId, ToolKind, UiCommand, UiEvent, WorkspaceMode,
+};
 use stcode_vibe::{friendly_translate, settings, Settings};
 
 // ─── 화면 / 상태 ──────────────────────────────────────────
@@ -194,6 +196,8 @@ struct MainView {
     settings: Settings,
     /// 설정 모달이 열려 있으면 Some.
     settings_draft: Option<SettingsDraft>,
+    /// 세션이 이미 닫힌 뒤에도 보여야 하는 짧은 친화적 알림.
+    notice: Option<String>,
 }
 
 impl MainView {
@@ -204,7 +208,13 @@ impl MainView {
             pending_approval: None,
             settings: settings::load(),
             settings_draft: None,
+            notice: None,
         }
+    }
+
+    fn dismiss_notice(&mut self, cx: &mut Context<Self>) {
+        self.notice = None;
+        cx.notify();
     }
 
     fn open_settings(&mut self, cx: &mut Context<Self>) {
@@ -427,10 +437,14 @@ impl MainView {
             UiEvent::SessionStarted {
                 session_id,
                 project: _,
-                thread_id,
+                thread_id: _,
+                workspace_mode,
             } => {
-                let intro =
-                    ChatItem::message(Speaker::System, format!("세션 시작 ({thread_id})"), cx);
+                let intro = ChatItem::message(
+                    Speaker::System,
+                    session_started_message(workspace_mode),
+                    cx,
+                );
                 self.with_session(&session_id, |s| {
                     s.thread_started = true;
                     s.messages.clear();
@@ -449,6 +463,12 @@ impl MainView {
             UiEvent::SessionClosed { session_id } => {
                 // 사이드바에서 close_session으로 이미 정리됨 — 이벤트는 확인용.
                 tracing::info!("[{session_id}] 세션 닫힘");
+            }
+            UiEvent::WorkspaceCleanup {
+                session_id: _,
+                message,
+            } => {
+                self.notice = Some(message);
             }
             UiEvent::AgentDelta { session_id, text } => {
                 let mut new_msg = None;
@@ -682,6 +702,10 @@ impl Render for MainView {
             .settings_draft
             .as_ref()
             .map(|d| render_settings_modal(t, d, cx));
+        let notice_modal = self
+            .notice
+            .as_ref()
+            .map(|n| render_notice_modal(t, n.clone(), cx));
         div()
             .relative()
             .flex()
@@ -693,6 +717,16 @@ impl Render for MainView {
             .child(body)
             .when_some(approval_modal, |d, m| d.child(m))
             .when_some(settings_modal, |d, m| d.child(m))
+            .when_some(notice_modal, |d, m| d.child(m))
+    }
+}
+
+fn session_started_message(workspace_mode: WorkspaceMode) -> &'static str {
+    match workspace_mode {
+        WorkspaceMode::Isolated => {
+            "작업공간 준비됨\n원본 폴더는 그대로 두고 이 세션 전용 공간에서 진행해요.\n에이전트 연결됨"
+        }
+        WorkspaceMode::Direct => "작업공간 준비됨\n에이전트 연결됨",
     }
 }
 
@@ -1411,6 +1445,55 @@ fn approval_button(
         .on_mouse_down(MouseButton::Left, on_click)
 }
 
+fn render_notice_modal(
+    t: &theme::Tokens,
+    message: String,
+    cx: &mut Context<MainView>,
+) -> gpui::Div {
+    div()
+        .absolute()
+        .inset_0()
+        .flex()
+        .items_center()
+        .justify_center()
+        .bg(rgba(0x00000040))
+        .on_mouse_down(
+            MouseButton::Left,
+            cx.listener(|this, _, _, cx| this.dismiss_notice(cx)),
+        )
+        .child(
+            div()
+                .flex()
+                .flex_col()
+                .gap_3()
+                .w(px(360.))
+                .p_5()
+                .bg(rgb(t.surface))
+                .border_1()
+                .border_color(rgb(t.border))
+                .rounded_md()
+                .on_mouse_down(MouseButton::Left, |_, _, _| {})
+                .child(div().text_lg().child("작업공간"))
+                .child(
+                    div()
+                        .text_sm()
+                        .text_color(rgb(t.muted))
+                        .child(message),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .justify_end()
+                        .child(approval_button(
+                            "확인",
+                            t.accent,
+                            0x111122,
+                            cx.listener(|this, _, _, cx| this.dismiss_notice(cx)),
+                        )),
+                ),
+        )
+}
+
 // ─── 설정 모달 ───────────────────────────────────────────
 
 fn render_settings_modal(
@@ -1821,6 +1904,18 @@ mod markdown_tests {
         );
         assert_eq!(turn_status_label(true, true, false, 10_000, 1), "답변 작성 중");
         assert_eq!(turn_status_label(true, true, true, 10_000, 0), "중단 요청 중");
+    }
+
+    #[test]
+    fn session_started_message_is_user_facing() {
+        let isolated = session_started_message(WorkspaceMode::Isolated);
+        assert!(isolated.contains("작업공간 준비됨"));
+        assert!(isolated.contains("원본 폴더는 그대로"));
+        assert!(!isolated.contains("branch"));
+        assert!(!isolated.contains("worktree"));
+
+        let direct = session_started_message(WorkspaceMode::Direct);
+        assert_eq!(direct, "작업공간 준비됨\n에이전트 연결됨");
     }
 
     #[test]

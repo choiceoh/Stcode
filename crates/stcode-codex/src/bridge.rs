@@ -11,12 +11,13 @@
 //! - git auto-commit / revert 는 handler_loop 측에서 ProjectState 들고 처리.
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::{
-    method, ApprovalPolicy, ClientInfo, SandboxMode, SpawnOptions, ThreadEvent, ThreadSession,
-    ThreadStartParams, TurnStatus,
+    ApprovalPolicy, ClientInfo, SandboxMode, SpawnOptions, ThreadEvent, ThreadSession,
+    ThreadStartParams, TurnStatus, method,
 };
+use stcode_vibe::SessionWorktree;
 use tokio::sync::mpsc;
 
 /// 클라이언트가 부여하는 세션 식별자. UI가 자체 counter로 발급.
@@ -33,10 +34,7 @@ pub enum UiCommand {
         model: String,
     },
     /// 특정 세션에 사용자 텍스트 전달.
-    SendText {
-        session_id: SessionId,
-        text: String,
-    },
+    SendText { session_id: SessionId, text: String },
     /// (희소) 승인 요청 응답 — 자동 모드에선 거의 호출 안 됨.
     ApprovalDecision {
         session_id: SessionId,
@@ -77,6 +75,7 @@ pub enum UiEvent {
         session_id: SessionId,
         project: PathBuf,
         thread_id: String,
+        workspace_mode: WorkspaceMode,
     },
     /// 세션 시작 실패.
     SessionFailed {
@@ -85,6 +84,11 @@ pub enum UiEvent {
     },
     /// 세션 종료(사용자 닫음 또는 codex 끊김).
     SessionClosed { session_id: SessionId },
+    /// 세션 작업공간 정리 결과.
+    WorkspaceCleanup {
+        session_id: SessionId,
+        message: String,
+    },
     /// agentMessage delta.
     AgentDelta { session_id: SessionId, text: String },
     /// reasoning text delta.
@@ -139,6 +143,14 @@ pub enum UiEvent {
     },
     /// 세션과 묶지 못하는 글로벌 에러.
     Error(String),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WorkspaceMode {
+    /// 원본 폴더를 건드리지 않는 세션 전용 작업공간.
+    Isolated,
+    /// 빈 폴더처럼 별도 작업공간을 만들 수 없어 선택한 경로에서 바로 시작.
+    Direct,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -207,7 +219,10 @@ impl Bridge {
 
 /// handler_loop가 세션별로 들고 있는 정보.
 struct ManagedSession {
+    /// 실제 codex가 작업하는 경로. git repo면 세션용 worktree, 빈/non-git 폴더면 원본 path.
     path: PathBuf,
+    /// 세션 전용 worktree. None이면 원본 path에서 직접 작업.
+    worktree: Option<SessionWorktree>,
     /// 가장 최근 SendText 시점의 prompt — turn 종료 후 commit 메시지로 사용.
     pending_prompt: Option<String>,
     /// turn 시작 직전 HEAD oid (revert 대상).
@@ -226,6 +241,11 @@ enum SessionInternalCmd {
     Shutdown { interrupt_turn: bool },
 }
 
+enum SessionTaskEvent {
+    Thread(ThreadEvent),
+    Exited,
+}
+
 fn request_session_shutdown(s: &ManagedSession, interrupt_turn: bool) {
     let _ = s
         .cmd_tx
@@ -239,9 +259,9 @@ async fn handler_loop(
     evt_tx: mpsc::UnboundedSender<UiEvent>,
 ) {
     let mut sessions: HashMap<SessionId, ManagedSession> = HashMap::new();
-    // 모든 세션 task가 이리로 (sid, ThreadEvent) 를 던진다.
+    // 모든 세션 task가 이리로 (sid, event) 를 던진다.
     let (unified_evt_tx, mut unified_evt_rx) =
-        mpsc::unbounded_channel::<(SessionId, ThreadEvent)>();
+        mpsc::unbounded_channel::<(SessionId, SessionTaskEvent)>();
 
     loop {
         tokio::select! {
@@ -250,11 +270,18 @@ async fn handler_loop(
                 let Some(cmd) = cmd_opt else { break; };
                 match cmd {
                     UiCommand::NewSession { session_id, path, provider, model } => {
-                        // git repo 자동 init.
-                        if let Err(e) = stcode_vibe::ensure_repo(&path) {
-                            tracing::warn!("[{session_id}] git 초기화 실패: {e}");
-                        }
-                        match start_session(&path, &provider, &model).await {
+                        let prepared = match prepare_session_workspace(&session_id, &path) {
+                            Ok(prepared) => prepared,
+                            Err(e) => {
+                                let _ = evt_tx.send(UiEvent::SessionFailed {
+                                    session_id,
+                                    error: format!("작업공간 준비 실패: {e}"),
+                                });
+                                continue;
+                            }
+                        };
+                        let workspace_mode = prepared.workspace_mode();
+                        match start_session(&prepared.runtime_path, &provider, &model).await {
                             Ok(thread_session) => {
                                 let thread_id = thread_session.thread_id.clone();
                                 let (s_cmd_tx, s_cmd_rx) = mpsc::unbounded_channel();
@@ -272,7 +299,8 @@ async fn handler_loop(
                                 sessions.insert(
                                     session_id.clone(),
                                     ManagedSession {
-                                        path: path.clone(),
+                                        path: prepared.runtime_path,
+                                        worktree: prepared.worktree,
                                         pending_prompt: None,
                                         pending_snapshot: None,
                                         last_revert_to: None,
@@ -283,9 +311,19 @@ async fn handler_loop(
                                     session_id,
                                     project: path,
                                     thread_id,
+                                    workspace_mode,
                                 });
                             }
                             Err(e) => {
+                                if let Some(worktree) = &prepared.worktree {
+                                    if let Err(cleanup_error) =
+                                        stcode_vibe::cleanup_session_worktree(worktree)
+                                    {
+                                        tracing::warn!(
+                                            "[{session_id}] 세션 시작 실패 후 작업공간 정리 실패: {cleanup_error}"
+                                        );
+                                    }
+                                }
                                 let _ = evt_tx.send(UiEvent::SessionFailed {
                                     session_id,
                                     error: e.to_string(),
@@ -358,9 +396,8 @@ async fn handler_loop(
                         }
                     }
                     UiCommand::CloseSession { session_id } => {
-                        if let Some(s) = sessions.remove(&session_id) {
+                        if let Some(s) = sessions.get(&session_id) {
                             request_session_shutdown(&s, true);
-                            let _ = evt_tx.send(UiEvent::SessionClosed { session_id });
                         }
                     }
                     UiCommand::Shutdown => break,
@@ -368,7 +405,17 @@ async fn handler_loop(
             }
             event = unified_evt_rx.recv() => {
                 let Some((sid, ev)) = event else { continue; };
-                handle_thread_event(sid, ev, &evt_tx, &mut sessions).await;
+                match ev {
+                    SessionTaskEvent::Thread(ev) => {
+                        handle_thread_event(sid, ev, &evt_tx, &mut sessions).await;
+                    }
+                    SessionTaskEvent::Exited => {
+                        if let Some(s) = sessions.remove(&sid) {
+                            cleanup_session_workspace(&sid, &s, &evt_tx);
+                        }
+                        let _ = evt_tx.send(UiEvent::SessionClosed { session_id: sid });
+                    }
+                }
             }
         }
     }
@@ -386,7 +433,7 @@ async fn handler_loop(
 async fn session_task(
     mut session: ThreadSession,
     mut cmd_rx: mpsc::UnboundedReceiver<SessionInternalCmd>,
-    evt_tx: mpsc::UnboundedSender<(SessionId, ThreadEvent)>,
+    evt_tx: mpsc::UnboundedSender<(SessionId, SessionTaskEvent)>,
     session_id: SessionId,
 ) {
     loop {
@@ -442,13 +489,17 @@ async fn session_task(
                         continue;
                     }
                 }
-                if evt_tx.send((session_id.clone(), ev)).is_err() {
+                if evt_tx
+                    .send((session_id.clone(), SessionTaskEvent::Thread(ev)))
+                    .is_err()
+                {
                     break;
                 }
             }
         }
     }
     session.shutdown().await;
+    let _ = evt_tx.send((session_id, SessionTaskEvent::Exited));
 }
 
 // ─── handle_thread_event ────────────────────────────────
@@ -610,6 +661,98 @@ fn item_card_completion(kind: &ToolKind, params: &serde_json::Value) -> (bool, O
     }
 }
 
+struct PreparedSessionWorkspace {
+    runtime_path: PathBuf,
+    worktree: Option<SessionWorktree>,
+}
+
+impl PreparedSessionWorkspace {
+    fn workspace_mode(&self) -> WorkspaceMode {
+        if self.worktree.is_some() {
+            WorkspaceMode::Isolated
+        } else {
+            WorkspaceMode::Direct
+        }
+    }
+}
+
+fn prepare_session_workspace(
+    session_id: &SessionId,
+    source_path: &PathBuf,
+) -> anyhow::Result<PreparedSessionWorkspace> {
+    let worktrees_root = stcode_vibe::default_worktrees_root()
+        .ok_or_else(|| anyhow::anyhow!("worktree 저장 위치를 찾을 수 없어요"))?;
+    prepare_session_workspace_with_root(session_id, source_path, &worktrees_root)
+}
+
+fn prepare_session_workspace_with_root(
+    session_id: &SessionId,
+    source_path: &PathBuf,
+    worktrees_root: &Path,
+) -> anyhow::Result<PreparedSessionWorkspace> {
+    stcode_vibe::ensure_repo(source_path)?;
+    if stcode_vibe::current_head(source_path)?.is_none() {
+        return Ok(PreparedSessionWorkspace {
+            runtime_path: source_path.clone(),
+            worktree: None,
+        });
+    }
+
+    let worktree = stcode_vibe::prepare_session_worktree(source_path, session_id, worktrees_root)?;
+    tracing::info!(
+        "[{session_id}] 세션 작업공간 준비: {}",
+        worktree.worktree_path.display()
+    );
+    Ok(PreparedSessionWorkspace {
+        runtime_path: worktree.worktree_path.clone(),
+        worktree: Some(worktree),
+    })
+}
+
+fn cleanup_session_workspace(
+    session_id: &SessionId,
+    session: &ManagedSession,
+    evt_tx: &mpsc::UnboundedSender<UiEvent>,
+) {
+    let Some(worktree) = &session.worktree else {
+        return;
+    };
+    match stcode_vibe::cleanup_session_worktree(worktree) {
+        Ok(cleanup) => {
+            tracing::info!(
+                "[{session_id}] 세션 작업공간 정리: removed_worktree={} deleted_branch={} kept={:?}",
+                cleanup.removed_worktree,
+                cleanup.deleted_branch,
+                cleanup.kept_branch_reason
+            );
+            let _ = evt_tx.send(UiEvent::WorkspaceCleanup {
+                session_id: session_id.clone(),
+                message: workspace_cleanup_message(&cleanup),
+            });
+        }
+        Err(e) => {
+            tracing::warn!("[{session_id}] 세션 작업공간 정리 실패: {e}");
+            let _ = evt_tx.send(UiEvent::Error(format!("작업공간 정리 실패: {e}")));
+        }
+    }
+}
+
+fn workspace_cleanup_message(cleanup: &stcode_vibe::WorktreeCleanup) -> String {
+    match (
+        cleanup.removed_worktree,
+        cleanup.deleted_branch,
+        cleanup.kept_branch_reason.as_deref(),
+    ) {
+        (true, true, _) => "작업공간 정리됨".into(),
+        (false, false, Some(reason)) if reason.contains("저장되지 않은 변경") => {
+            "저장되지 않은 변경이 있어 작업공간을 보관했어요".into()
+        }
+        (true, false, Some(_)) => "작업 결과가 남아 있어 보관했어요".into(),
+        (false, false, Some(_)) => "작업공간을 보관했어요".into(),
+        _ => "작업공간 상태를 확인했어요".into(),
+    }
+}
+
 async fn start_session(
     path: &PathBuf,
     provider: &str,
@@ -646,17 +789,117 @@ async fn start_session(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
+    use std::process::Command;
+
+    fn git(repo: &Path, args: &[&str]) {
+        let output = Command::new("git")
+            .arg("-C")
+            .arg(repo)
+            .args(args)
+            .output()
+            .expect("git command spawn");
+        assert!(
+            output.status.success(),
+            "git -C {} {} failed\nstdout:\n{}\nstderr:\n{}",
+            repo.display(),
+            args.join(" "),
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    fn init_repo(path: &Path) {
+        git(path, &["init", "-b", "main"]);
+        git(path, &["config", "user.name", "Stcode Test"]);
+        git(path, &["config", "user.email", "stcode-test@example.local"]);
+        fs::write(path.join("README.md"), "# test\n").expect("write readme");
+        git(path, &["add", "README.md"]);
+        git(path, &["commit", "-m", "initial"]);
+    }
 
     fn managed_session_for_test(
         cmd_tx: mpsc::UnboundedSender<SessionInternalCmd>,
     ) -> ManagedSession {
         ManagedSession {
             path: PathBuf::from("/tmp/stcode-test"),
+            worktree: None,
             pending_prompt: None,
             pending_snapshot: None,
             last_revert_to: None,
             cmd_tx,
         }
+    }
+
+    #[test]
+    fn prepare_session_workspace_uses_worktree_for_committed_repo() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let repo = tmp.path().join("repo");
+        fs::create_dir(&repo).expect("repo dir");
+        init_repo(&repo);
+        let worktrees_root = tmp.path().join("worktrees");
+
+        let prepared = prepare_session_workspace_with_root(&"s1".into(), &repo, &worktrees_root)
+            .expect("prepare workspace");
+
+        let worktree = prepared.worktree.expect("session worktree");
+        assert_eq!(prepared.runtime_path, worktree.worktree_path);
+        assert!(prepared.runtime_path.exists());
+        assert_ne!(
+            prepared.runtime_path,
+            repo.canonicalize().expect("canonical repo")
+        );
+        assert_eq!(worktree.branch, "stcode/s1");
+
+        stcode_vibe::cleanup_session_worktree(&worktree).expect("cleanup worktree");
+    }
+
+    #[test]
+    fn prepare_session_workspace_keeps_empty_repo_on_source_path() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let source = tmp.path().join("empty");
+        fs::create_dir(&source).expect("source dir");
+        let worktrees_root = tmp.path().join("worktrees");
+
+        let prepared =
+            prepare_session_workspace_with_root(&"s-empty".into(), &source, &worktrees_root)
+                .expect("prepare workspace");
+
+        assert_eq!(prepared.runtime_path, source);
+        assert!(prepared.worktree.is_none());
+        assert!(prepared.runtime_path.join(".git").exists());
+    }
+
+    #[test]
+    fn prepared_workspace_reports_user_facing_mode() {
+        assert_eq!(
+            PreparedSessionWorkspace {
+                runtime_path: PathBuf::from("/tmp/direct"),
+                worktree: None,
+            }
+            .workspace_mode(),
+            WorkspaceMode::Direct
+        );
+    }
+
+    #[test]
+    fn workspace_cleanup_message_hides_git_terms() {
+        assert_eq!(
+            workspace_cleanup_message(&stcode_vibe::WorktreeCleanup {
+                removed_worktree: true,
+                deleted_branch: true,
+                kept_branch_reason: None,
+            }),
+            "작업공간 정리됨"
+        );
+        assert_eq!(
+            workspace_cleanup_message(&stcode_vibe::WorktreeCleanup {
+                removed_worktree: true,
+                deleted_branch: false,
+                kept_branch_reason: Some("branch에 세션 작업 commit이 남아 있어요".into()),
+            }),
+            "작업 결과가 남아 있어 보관했어요"
+        );
     }
 
     #[test]
