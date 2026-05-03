@@ -58,6 +58,10 @@ name = "zed"
 path = "src/main.rs"
 
 [[bin]]
+name = "stcode"
+path = "src/stcode_main.rs"
+
+[[bin]]
 name = "zed_visual_test_runner"
 path = "src/visual_test_runner.rs"
 required-features = ["visual-tests"]

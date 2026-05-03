@@ -1,5 +1,4 @@
-use crate::handle_open_request;
-use crate::restore_or_create_workspace;
+use crate::bootstrap::{handle_open_request, restore_or_create_workspace};
 use agent_ui::ExternalSourcePrompt;
 use anyhow::{Context as _, Result, anyhow};
 use cli::{CliRequest, CliResponse, CliResponseSink};

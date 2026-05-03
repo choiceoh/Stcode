@@ -6318,7 +6318,7 @@ mod tests {
         );
 
         let mut async_cx = cx.to_async();
-        crate::restore_or_create_workspace(app_state.clone(), &mut async_cx)
+        crate::bootstrap::restore_or_create_workspace(app_state.clone(), &mut async_cx)
             .await
             .expect("failed to restore workspaces");
         cx.run_until_parked();
@@ -6477,7 +6477,7 @@ mod tests {
         });
 
         let mut async_cx = cx.to_async();
-        crate::restore_or_create_workspace(app_state.clone(), &mut async_cx)
+        crate::bootstrap::restore_or_create_workspace(app_state.clone(), &mut async_cx)
             .await
             .expect("failed to restore workspace");
         cx.run_until_parked();
