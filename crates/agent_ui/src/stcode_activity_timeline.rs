@@ -1,8 +1,15 @@
 use acp_thread::{AcpThread, AgentThreadEntry, ThreadStatus, ToolCall, ToolCallStatus};
 use agent_client_protocol as acp;
-use gpui::{Entity, IntoElement, RenderOnce};
-use ui::{Icon, IconName, Label, LabelSize, prelude::*};
+use anyhow::Result;
+use git::repository::DiffType;
+use gpui::{Action, Entity, IntoElement, RenderOnce};
+use project::{
+    Project,
+    git_store::{Repository, StatusEntry},
+};
+use ui::{Button, ButtonStyle, Icon, IconName, Label, LabelSize, prelude::*};
 use util::truncate_and_trailoff;
+use zed_actions::{agent::ReviewBranchDiff, git as zed_git};
 
 const MAX_TIMELINE_ENTRIES: usize = 4;
 const MAX_ENTRY_LABEL_CHARS: usize = 72;
@@ -10,11 +17,12 @@ const MAX_ENTRY_LABEL_CHARS: usize = 72;
 #[derive(IntoElement)]
 pub(crate) struct StcodeActivityTimeline {
     thread: Option<Entity<AcpThread>>,
+    project: Entity<Project>,
 }
 
 impl StcodeActivityTimeline {
-    pub(crate) fn new(thread: Option<Entity<AcpThread>>) -> Self {
-        Self { thread }
+    pub(crate) fn new(thread: Option<Entity<AcpThread>>, project: Entity<Project>) -> Self {
+        Self { thread, project }
     }
 }
 
@@ -27,6 +35,7 @@ impl RenderOnce for StcodeActivityTimeline {
             }
             None => ActivitySnapshot::empty(),
         };
+        let smart_start = SmartStartSnapshot::from_project(&self.project, cx);
 
         v_flex()
             .id("stcode-activity-timeline")
@@ -74,8 +83,92 @@ impl RenderOnce for StcodeActivityTimeline {
                             ),
                     ),
             )
+            .children(smart_start.map(|snapshot| render_smart_start_guard(snapshot, cx)))
             .children(snapshot.entries.into_iter().map(render_activity_entry))
     }
+}
+
+fn render_smart_start_guard(snapshot: SmartStartSnapshot, cx: &mut App) -> impl IntoElement {
+    let review_repository = snapshot.repository.clone();
+    let worktree_action = zed_git::Worktree.boxed_clone();
+    let stash_repository = snapshot.repository.clone();
+    let commit_action = git::ExpandCommitEditor.boxed_clone();
+
+    v_flex()
+        .id("stcode-smart-start-guard")
+        .mt_1()
+        .gap_2()
+        .rounded_sm()
+        .border_1()
+        .border_color(cx.theme().status().warning_border)
+        .bg(cx.theme().status().warning_background)
+        .p_2()
+        .child(
+            h_flex()
+                .w_full()
+                .gap_2()
+                .items_start()
+                .child(
+                    Icon::new(IconName::Warning)
+                        .size(IconSize::Small)
+                        .color(Color::Warning),
+                )
+                .child(
+                    v_flex()
+                        .min_w_0()
+                        .flex_1()
+                        .gap_0p5()
+                        .child(
+                            Label::new("AI Smart Start")
+                                .size(LabelSize::Small)
+                                .color(Color::Default),
+                        )
+                        .child(
+                            Label::new(snapshot.detail)
+                                .size(LabelSize::XSmall)
+                                .color(Color::Muted)
+                                .truncate(),
+                        ),
+                ),
+        )
+        .child(
+            h_flex()
+                .w_full()
+                .gap_1()
+                .flex_wrap()
+                .child(
+                    Button::new("stcode-smart-start-review", "Review")
+                        .label_size(LabelSize::XSmall)
+                        .style(ButtonStyle::Outlined)
+                        .on_click(move |_, window, cx| {
+                            review_leftover_changes(review_repository.clone(), window, cx);
+                        }),
+                )
+                .child(
+                    Button::new("stcode-smart-start-worktree", "Split Worktree")
+                        .label_size(LabelSize::XSmall)
+                        .style(ButtonStyle::Outlined)
+                        .on_click(move |_, window, cx| {
+                            window.dispatch_action(worktree_action.boxed_clone(), cx);
+                        }),
+                )
+                .child(
+                    Button::new("stcode-smart-start-stash", "Stash")
+                        .label_size(LabelSize::XSmall)
+                        .style(ButtonStyle::Outlined)
+                        .on_click(move |_, _window, cx| {
+                            stash_leftover_changes(stash_repository.clone(), cx);
+                        }),
+                )
+                .child(
+                    Button::new("stcode-smart-start-commit", "Commit")
+                        .label_size(LabelSize::XSmall)
+                        .style(ButtonStyle::Outlined)
+                        .on_click(move |_, window, cx| {
+                            window.dispatch_action(commit_action.boxed_clone(), cx);
+                        }),
+                ),
+        )
 }
 
 fn render_activity_entry(entry: ActivityEntry) -> impl IntoElement {
@@ -107,6 +200,103 @@ fn render_activity_entry(entry: ActivityEntry) -> impl IntoElement {
                         .color(entry.tone.color()),
                 ),
         )
+}
+
+#[derive(Clone)]
+struct SmartStartSnapshot {
+    repository: Entity<Repository>,
+    detail: String,
+}
+
+impl SmartStartSnapshot {
+    fn from_project(project: &Entity<Project>, cx: &App) -> Option<Self> {
+        let repository = project.read(cx).active_repository(cx)?;
+        let repository_ref = repository.read(cx);
+        let entries = repository_ref
+            .cached_status()
+            .filter(|entry| entry.status.has_changes())
+            .collect::<Vec<_>>();
+
+        if entries.is_empty() {
+            return None;
+        }
+
+        let branch_name = repository_ref
+            .branch
+            .as_ref()
+            .map(|branch| branch.name().to_string());
+        let detail = smart_start_detail(branch_name.as_deref(), &entries);
+
+        Some(Self { repository, detail })
+    }
+}
+
+fn smart_start_detail(branch_name: Option<&str>, entries: &[StatusEntry]) -> String {
+    let changed_count = entries.len();
+    let conflicted_count = entries
+        .iter()
+        .filter(|entry| entry.status.is_conflicted())
+        .count();
+    let staged_count = entries
+        .iter()
+        .filter(|entry| entry.status.staging().has_staged())
+        .count();
+    let unstaged_count = entries
+        .iter()
+        .filter(|entry| entry.status.staging().has_unstaged())
+        .count();
+
+    let branch = branch_name.unwrap_or("detached HEAD");
+    let file_label = if changed_count == 1 { "file" } else { "files" };
+
+    if conflicted_count > 0 {
+        return format!(
+            "{changed_count} changed {file_label} remain on {branch}, including {conflicted_count} conflict(s). Resolve or isolate them before starting the next session."
+        );
+    }
+
+    format!(
+        "{changed_count} changed {file_label} remain on {branch}: {staged_count} staged, {unstaged_count} unstaged. Choose how to hand them off before starting clean."
+    )
+}
+
+fn review_leftover_changes(repository: Entity<Repository>, window: &mut Window, cx: &mut App) {
+    let branch_name = repository
+        .read(cx)
+        .branch
+        .as_ref()
+        .map(|branch| branch.name().to_string())
+        .unwrap_or_else(|| "working tree".to_string());
+    let diff_receiver = repository.update(cx, |repository, cx| {
+        repository.diff(DiffType::HeadToWorktree, cx)
+    });
+
+    window
+        .spawn(cx, async move |cx| -> Result<()> {
+            let diff_text = diff_receiver.await??;
+            if diff_text.trim().is_empty() {
+                return Ok(());
+            }
+
+            cx.update(|window, cx| {
+                window.dispatch_action(
+                    Box::new(ReviewBranchDiff {
+                        diff_text: diff_text.into(),
+                        base_ref: branch_name.into(),
+                    }),
+                    cx,
+                );
+            })?;
+
+            Ok(())
+        })
+        .detach_and_log_err(cx);
+}
+
+fn stash_leftover_changes(repository: Entity<Repository>, cx: &mut App) {
+    repository
+        .update(cx, |repository, cx| repository.stash_all(cx))
+        .detach_and_log_err(cx);
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -407,5 +597,55 @@ mod tests {
             tool_status_label(&ToolCallStatus::Failed),
             ("Failed", ActivityTone::Failed)
         );
+    }
+
+    #[test]
+    fn smart_start_detail_summarizes_clean_handoff_counts() {
+        let detail = smart_start_detail(
+            Some("feature"),
+            &[
+                status_entry(git::status::FileStatus::index(
+                    git::status::StatusCode::Modified,
+                )),
+                status_entry(git::status::FileStatus::worktree(
+                    git::status::StatusCode::Modified,
+                )),
+                status_entry(git::status::FileStatus::Untracked),
+            ],
+        );
+
+        assert!(detail.contains("3 changed files remain on feature"));
+        assert!(detail.contains("1 staged"));
+        assert!(detail.contains("2 unstaged"));
+    }
+
+    #[test]
+    fn smart_start_detail_prioritizes_conflicts() {
+        let detail = smart_start_detail(
+            Some("feature"),
+            &[
+                status_entry(git::status::FileStatus::Unmerged(
+                    git::status::UnmergedStatus {
+                        first_head: git::status::UnmergedStatusCode::Updated,
+                        second_head: git::status::UnmergedStatusCode::Updated,
+                    },
+                )),
+                status_entry(git::status::FileStatus::worktree(
+                    git::status::StatusCode::Modified,
+                )),
+            ],
+        );
+
+        assert!(detail.contains("including 1 conflict"));
+        assert!(detail.contains("Resolve or isolate them"));
+    }
+
+    fn status_entry(status: git::status::FileStatus) -> StatusEntry {
+        StatusEntry {
+            repo_path: git::repository::RepoPath::new("src/main.rs")
+                .expect("test path should be a valid repo path"),
+            status,
+            diff_stat: None,
+        }
     }
 }

@@ -3632,7 +3632,10 @@ impl AgentPanel {
             return None;
         }
 
-        Some(StcodeActivityTimeline::new(self.active_agent_thread(cx)).into_any_element())
+        Some(
+            StcodeActivityTimeline::new(self.active_agent_thread(cx), self.project.clone())
+                .into_any_element(),
+        )
     }
 
     fn key_context(&self) -> KeyContext {
