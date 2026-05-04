@@ -36,6 +36,7 @@ impl RenderOnce for StcodeActivityTimeline {
             None => ActivitySnapshot::empty(),
         };
         let smart_start = SmartStartSnapshot::from_project(&self.project, cx);
+        let smart_merge = SmartMergeSnapshot::from_project(&self.project, cx);
 
         v_flex()
             .id("stcode-activity-timeline")
@@ -84,6 +85,7 @@ impl RenderOnce for StcodeActivityTimeline {
                     ),
             )
             .children(smart_start.map(|snapshot| render_smart_start_guard(snapshot, cx)))
+            .children(smart_merge.map(|snapshot| render_smart_merge_card(snapshot, cx)))
             .children(snapshot.entries.into_iter().map(render_activity_entry))
     }
 }
@@ -164,6 +166,108 @@ fn render_smart_start_guard(snapshot: SmartStartSnapshot, cx: &mut App) -> impl 
                     Button::new("stcode-smart-start-commit", "Commit")
                         .label_size(LabelSize::XSmall)
                         .style(ButtonStyle::Outlined)
+                        .on_click(move |_, window, cx| {
+                            window.dispatch_action(commit_action.boxed_clone(), cx);
+                        }),
+                ),
+        )
+}
+
+fn render_smart_merge_card(snapshot: SmartMergeSnapshot, cx: &mut App) -> impl IntoElement {
+    let review_repository = snapshot.repository.clone();
+    let create_pull_request_action = zed_git::CreatePullRequest.boxed_clone();
+    let commit_action = git::ExpandCommitEditor.boxed_clone();
+    let (border_color, background_color) = match snapshot.tone {
+        ActivityTone::Done => (
+            cx.theme().status().success_border,
+            cx.theme().status().success_background,
+        ),
+        ActivityTone::Failed => (
+            cx.theme().status().error_border,
+            cx.theme().status().error_background,
+        ),
+        _ => (
+            cx.theme().status().warning_border,
+            cx.theme().status().warning_background,
+        ),
+    };
+
+    v_flex()
+        .id("stcode-smart-merge-card")
+        .mt_1()
+        .gap_2()
+        .rounded_sm()
+        .border_1()
+        .border_color(border_color)
+        .bg(background_color)
+        .p_2()
+        .child(
+            h_flex()
+                .w_full()
+                .gap_2()
+                .items_start()
+                .child(
+                    Icon::new(snapshot.icon)
+                        .size(IconSize::Small)
+                        .color(snapshot.tone.color()),
+                )
+                .child(
+                    v_flex()
+                        .min_w_0()
+                        .flex_1()
+                        .gap_0p5()
+                        .child(
+                            h_flex()
+                                .w_full()
+                                .justify_between()
+                                .gap_2()
+                                .child(
+                                    Label::new("AI Smart Merge")
+                                        .size(LabelSize::Small)
+                                        .color(Color::Default),
+                                )
+                                .child(
+                                    Label::new(snapshot.status)
+                                        .size(LabelSize::XSmall)
+                                        .color(snapshot.tone.color()),
+                                ),
+                        )
+                        .child(
+                            Label::new(snapshot.detail)
+                                .size(LabelSize::XSmall)
+                                .color(Color::Muted)
+                                .truncate(),
+                        ),
+                ),
+        )
+        .child(
+            h_flex()
+                .w_full()
+                .gap_1()
+                .flex_wrap()
+                .child(
+                    Button::new("stcode-smart-merge-review", "Review Merge")
+                        .label_size(LabelSize::XSmall)
+                        .style(ButtonStyle::Outlined)
+                        .disabled(!snapshot.can_review)
+                        .on_click(move |_, window, cx| {
+                            review_merge_readiness(review_repository.clone(), window, cx);
+                        }),
+                )
+                .child(
+                    Button::new("stcode-smart-merge-pr", "Open PR")
+                        .label_size(LabelSize::XSmall)
+                        .style(ButtonStyle::Outlined)
+                        .disabled(!snapshot.can_create_pull_request)
+                        .on_click(move |_, window, cx| {
+                            window.dispatch_action(create_pull_request_action.boxed_clone(), cx);
+                        }),
+                )
+                .child(
+                    Button::new("stcode-smart-merge-commit", "Commit")
+                        .label_size(LabelSize::XSmall)
+                        .style(ButtonStyle::Outlined)
+                        .disabled(!snapshot.can_commit)
                         .on_click(move |_, window, cx| {
                             window.dispatch_action(commit_action.boxed_clone(), cx);
                         }),
@@ -260,6 +364,157 @@ fn smart_start_detail(branch_name: Option<&str>, entries: &[StatusEntry]) -> Str
     )
 }
 
+#[derive(Clone)]
+struct SmartMergeSnapshot {
+    repository: Entity<Repository>,
+    status: &'static str,
+    detail: String,
+    icon: IconName,
+    tone: ActivityTone,
+    can_review: bool,
+    can_create_pull_request: bool,
+    can_commit: bool,
+}
+
+impl SmartMergeSnapshot {
+    fn from_project(project: &Entity<Project>, cx: &App) -> Option<Self> {
+        let repository = project.read(cx).active_repository(cx)?;
+        let repository_ref = repository.read(cx);
+        let branch_name = repository_ref
+            .branch
+            .as_ref()
+            .map(|branch| branch.name().to_string());
+        let entries = repository_ref
+            .cached_status()
+            .filter(|entry| entry.status.has_changes())
+            .collect::<Vec<_>>();
+        let changed_count = entries.len();
+        let conflicted_count = entries
+            .iter()
+            .filter(|entry| entry.status.is_conflicted())
+            .count();
+        let state = smart_merge_state(branch_name.as_deref(), changed_count, conflicted_count);
+
+        Some(Self {
+            repository,
+            status: state.status(),
+            detail: smart_merge_detail(
+                state,
+                branch_name.as_deref(),
+                changed_count,
+                conflicted_count,
+            ),
+            icon: state.icon(),
+            tone: state.tone(),
+            can_review: branch_name
+                .as_deref()
+                .is_some_and(|branch_name| !is_merge_base_branch(branch_name)),
+            can_create_pull_request: state == SmartMergeState::Ready,
+            can_commit: changed_count > 0,
+        })
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SmartMergeState {
+    Ready,
+    NeedsCheckpoint,
+    HasConflicts,
+    ProtectedBranch,
+    Detached,
+}
+
+impl SmartMergeState {
+    fn status(self) -> &'static str {
+        match self {
+            SmartMergeState::Ready => "Ready",
+            SmartMergeState::NeedsCheckpoint => "Checkpoint needed",
+            SmartMergeState::HasConflicts => "Blocked",
+            SmartMergeState::ProtectedBranch => "Base branch",
+            SmartMergeState::Detached => "No branch",
+        }
+    }
+
+    fn icon(self) -> IconName {
+        match self {
+            SmartMergeState::Ready => IconName::PullRequest,
+            SmartMergeState::NeedsCheckpoint => IconName::GitCommit,
+            SmartMergeState::HasConflicts => IconName::GitMergeConflict,
+            SmartMergeState::ProtectedBranch | SmartMergeState::Detached => IconName::GitBranch,
+        }
+    }
+
+    fn tone(self) -> ActivityTone {
+        match self {
+            SmartMergeState::Ready => ActivityTone::Done,
+            SmartMergeState::HasConflicts => ActivityTone::Failed,
+            SmartMergeState::NeedsCheckpoint
+            | SmartMergeState::ProtectedBranch
+            | SmartMergeState::Detached => ActivityTone::Waiting,
+        }
+    }
+}
+
+fn smart_merge_state(
+    branch_name: Option<&str>,
+    changed_count: usize,
+    conflicted_count: usize,
+) -> SmartMergeState {
+    let Some(branch_name) = branch_name else {
+        return SmartMergeState::Detached;
+    };
+
+    if conflicted_count > 0 {
+        return SmartMergeState::HasConflicts;
+    }
+
+    if changed_count > 0 {
+        return SmartMergeState::NeedsCheckpoint;
+    }
+
+    if is_merge_base_branch(branch_name) {
+        return SmartMergeState::ProtectedBranch;
+    }
+
+    SmartMergeState::Ready
+}
+
+fn smart_merge_detail(
+    state: SmartMergeState,
+    branch_name: Option<&str>,
+    changed_count: usize,
+    conflicted_count: usize,
+) -> String {
+    let branch = branch_name.unwrap_or("detached HEAD");
+
+    match state {
+        SmartMergeState::Ready => format!(
+            "{branch} is clean locally. Review the merge diff or open a PR so checks can take over."
+        ),
+        SmartMergeState::NeedsCheckpoint => {
+            let file_label = if changed_count == 1 { "file" } else { "files" };
+            format!(
+                "{changed_count} changed {file_label} remain on {branch}. Commit or stash them before Smart Merge can prepare a clean PR."
+            )
+        }
+        SmartMergeState::HasConflicts => format!(
+            "{conflicted_count} conflict(s) remain on {branch}. Resolve them before Smart Merge can make this merge-ready."
+        ),
+        SmartMergeState::ProtectedBranch => format!(
+            "{branch} is the base branch. Split into a task branch before asking Smart Merge to prepare a PR."
+        ),
+        SmartMergeState::Detached => {
+            "This workspace is detached. Create a task branch before Smart Merge can prepare a PR."
+                .to_string()
+        }
+    }
+}
+
+fn is_merge_base_branch(branch_name: &str) -> bool {
+    let branch_name = branch_name.rsplit('/').next().unwrap_or(branch_name);
+    matches!(branch_name, "main" | "master" | "trunk")
+}
+
 fn review_leftover_changes(repository: Entity<Repository>, window: &mut Window, cx: &mut App) {
     let branch_name = repository
         .read(cx)
@@ -283,6 +538,46 @@ fn review_leftover_changes(repository: Entity<Repository>, window: &mut Window, 
                     Box::new(ReviewBranchDiff {
                         diff_text: diff_text.into(),
                         base_ref: branch_name.into(),
+                    }),
+                    cx,
+                );
+            })?;
+
+            Ok(())
+        })
+        .detach_and_log_err(cx);
+}
+
+fn review_merge_readiness(repository: Entity<Repository>, window: &mut Window, cx: &mut App) {
+    let default_branch_receiver =
+        repository.update(cx, |repository, _| repository.default_branch(true));
+
+    window
+        .spawn(cx, async move |cx| -> Result<()> {
+            let base_ref = default_branch_receiver
+                .await??
+                .unwrap_or_else(|| "main".into());
+            let diff_base_ref = base_ref.clone();
+            let diff_receiver = cx.update(|_, cx| {
+                repository.update(cx, |repository, cx| {
+                    repository.diff(
+                        DiffType::MergeBase {
+                            base_ref: diff_base_ref,
+                        },
+                        cx,
+                    )
+                })
+            })?;
+            let diff_text = diff_receiver.await??;
+            if diff_text.trim().is_empty() {
+                return Ok(());
+            }
+
+            cx.update(|window, cx| {
+                window.dispatch_action(
+                    Box::new(ReviewBranchDiff {
+                        diff_text: diff_text.into(),
+                        base_ref,
                     }),
                     cx,
                 );
@@ -638,6 +933,55 @@ mod tests {
 
         assert!(detail.contains("including 1 conflict"));
         assert!(detail.contains("Resolve or isolate them"));
+    }
+
+    #[test]
+    fn smart_merge_state_requires_a_branch() {
+        assert_eq!(smart_merge_state(None, 0, 0), SmartMergeState::Detached);
+    }
+
+    #[test]
+    fn smart_merge_state_blocks_base_branches() {
+        assert_eq!(
+            smart_merge_state(Some("main"), 0, 0),
+            SmartMergeState::ProtectedBranch
+        );
+        assert_eq!(
+            smart_merge_state(Some("origin/master"), 0, 0),
+            SmartMergeState::ProtectedBranch
+        );
+    }
+
+    #[test]
+    fn smart_merge_state_blocks_dirty_work() {
+        assert_eq!(
+            smart_merge_state(Some("feature"), 2, 0),
+            SmartMergeState::NeedsCheckpoint
+        );
+    }
+
+    #[test]
+    fn smart_merge_state_prioritizes_conflicts() {
+        assert_eq!(
+            smart_merge_state(Some("feature"), 2, 1),
+            SmartMergeState::HasConflicts
+        );
+    }
+
+    #[test]
+    fn smart_merge_state_accepts_clean_feature_branch() {
+        assert_eq!(
+            smart_merge_state(Some("feature"), 0, 0),
+            SmartMergeState::Ready
+        );
+    }
+
+    #[test]
+    fn smart_merge_detail_explains_checkpoint_requirement() {
+        let detail = smart_merge_detail(SmartMergeState::NeedsCheckpoint, Some("feature"), 3, 0);
+
+        assert!(detail.contains("3 changed files remain on feature"));
+        assert!(detail.contains("Commit or stash"));
     }
 
     fn status_entry(status: git::status::FileStatus) -> StatusEntry {
