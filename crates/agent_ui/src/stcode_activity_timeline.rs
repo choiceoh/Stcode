@@ -1,20 +1,21 @@
 use acp_thread::{AcpThread, AgentThreadEntry, ThreadStatus, ToolCall, ToolCallStatus};
 use agent_client_protocol as acp;
 use anyhow::Result;
-use git::repository::DiffType;
+use git::{repository::DiffType, status::FileStatus};
 use gpui::{Action, Entity, IntoElement, RenderOnce};
 use project::{
     Project,
     git_store::{Repository, StatusEntry},
 };
 use ui::{Button, ButtonStyle, Icon, IconName, Label, LabelSize, prelude::*};
-use util::truncate_and_trailoff;
+use util::{paths::PathStyle, truncate_and_trailoff};
 use zed_actions::{
     CreateWorktree, NewWorktreeBranchTarget, agent::ReviewBranchDiff, git as zed_git,
 };
 
 const MAX_TIMELINE_ENTRIES: usize = 4;
 const MAX_ENTRY_LABEL_CHARS: usize = 72;
+const MAX_SMART_PANEL_FILES: usize = 3;
 
 #[derive(IntoElement)]
 pub(crate) struct StcodeActivityTimeline {
@@ -38,6 +39,7 @@ impl RenderOnce for StcodeActivityTimeline {
             None => ActivitySnapshot::empty(),
         };
         let smart_start = SmartStartSnapshot::from_project(&self.project, cx);
+        let smart_panel = SmartPanelSnapshot::from_project(&self.project, cx);
         let smart_parallel = SmartParallelSnapshot::from_project(&self.project, cx);
         let smart_merge = SmartMergeSnapshot::from_project(&self.project, cx);
 
@@ -87,6 +89,7 @@ impl RenderOnce for StcodeActivityTimeline {
                             ),
                     ),
             )
+            .children(smart_panel.map(|snapshot| render_smart_panel_card(snapshot, cx)))
             .children(smart_start.map(|snapshot| render_smart_start_guard(snapshot, cx)))
             .children(smart_parallel.map(|snapshot| render_smart_parallel_card(snapshot, cx)))
             .children(smart_merge.map(|snapshot| render_smart_merge_card(snapshot, cx)))
@@ -173,6 +176,216 @@ fn render_smart_start_guard(snapshot: SmartStartSnapshot, cx: &mut App) -> impl 
                         .on_click(move |_, window, cx| {
                             window.dispatch_action(commit_action.boxed_clone(), cx);
                         }),
+                ),
+        )
+}
+
+fn render_smart_panel_card(snapshot: SmartPanelSnapshot, cx: &mut App) -> impl IntoElement {
+    let review_repository = snapshot.repository.clone();
+    let commit_action = git::ExpandCommitEditor.boxed_clone();
+    let has_files = !snapshot.files.is_empty();
+    let counts = snapshot.counts;
+    let (border_color, background_color) = match snapshot.tone {
+        ActivityTone::Done => (
+            cx.theme().status().success_border,
+            cx.theme().status().success_background,
+        ),
+        ActivityTone::Failed => (
+            cx.theme().status().error_border,
+            cx.theme().status().error_background,
+        ),
+        _ => (
+            cx.theme().status().warning_border,
+            cx.theme().status().warning_background,
+        ),
+    };
+
+    v_flex()
+        .id("stcode-smart-panel-card")
+        .mt_1()
+        .gap_2()
+        .rounded_sm()
+        .border_1()
+        .border_color(border_color)
+        .bg(background_color)
+        .p_2()
+        .child(
+            h_flex()
+                .w_full()
+                .gap_2()
+                .items_start()
+                .child(
+                    Icon::new(snapshot.icon)
+                        .size(IconSize::Small)
+                        .color(snapshot.tone.color()),
+                )
+                .child(
+                    v_flex()
+                        .min_w_0()
+                        .flex_1()
+                        .gap_0p5()
+                        .child(
+                            h_flex()
+                                .w_full()
+                                .justify_between()
+                                .gap_2()
+                                .child(
+                                    Label::new("AI Smart Panel")
+                                        .size(LabelSize::Small)
+                                        .color(Color::Default),
+                                )
+                                .child(
+                                    Label::new(snapshot.status)
+                                        .size(LabelSize::XSmall)
+                                        .color(snapshot.tone.color()),
+                                ),
+                        )
+                        .child(
+                            Label::new(snapshot.detail)
+                                .size(LabelSize::XSmall)
+                                .color(Color::Muted)
+                                .truncate(),
+                        ),
+                ),
+        )
+        .child(
+            h_flex()
+                .w_full()
+                .gap_1()
+                .flex_wrap()
+                .child(render_smart_panel_metric(
+                    "changed",
+                    counts.changed_count,
+                    "files",
+                    snapshot.tone,
+                    cx,
+                ))
+                .child(render_smart_panel_metric(
+                    "staged",
+                    counts.staged_count,
+                    "staged",
+                    ActivityTone::Done,
+                    cx,
+                ))
+                .child(render_smart_panel_metric(
+                    "unstaged",
+                    counts.unstaged_count,
+                    "unstaged",
+                    ActivityTone::Waiting,
+                    cx,
+                ))
+                .when(counts.conflicted_count > 0, |this| {
+                    this.child(render_smart_panel_metric(
+                        "conflicts",
+                        counts.conflicted_count,
+                        "conflicts",
+                        ActivityTone::Failed,
+                        cx,
+                    ))
+                })
+                .when(counts.added_lines + counts.removed_lines > 0, |this| {
+                    this.child(
+                        ui::DiffStat::new(
+                            "stcode-smart-panel-diff-stat",
+                            counts.added_lines,
+                            counts.removed_lines,
+                        )
+                        .label_size(LabelSize::XSmall),
+                    )
+                }),
+        )
+        .child(
+            v_flex()
+                .w_full()
+                .gap_1()
+                .when(!has_files, |this| {
+                    this.child(
+                        Label::new("No local file changes")
+                            .size(LabelSize::XSmall)
+                            .color(Color::Muted),
+                    )
+                })
+                .children(snapshot.files.into_iter().map(render_smart_panel_file)),
+        )
+        .child(
+            h_flex()
+                .w_full()
+                .gap_1()
+                .flex_wrap()
+                .child(
+                    Button::new("stcode-smart-panel-review", "Review Files")
+                        .label_size(LabelSize::XSmall)
+                        .style(ButtonStyle::Outlined)
+                        .disabled(!snapshot.can_review)
+                        .on_click(move |_, window, cx| {
+                            review_leftover_changes(review_repository.clone(), window, cx);
+                        }),
+                )
+                .child(
+                    Button::new("stcode-smart-panel-commit", "Commit")
+                        .label_size(LabelSize::XSmall)
+                        .style(ButtonStyle::Outlined)
+                        .disabled(!snapshot.can_commit)
+                        .on_click(move |_, window, cx| {
+                            window.dispatch_action(commit_action.boxed_clone(), cx);
+                        }),
+                ),
+        )
+}
+
+fn render_smart_panel_metric(
+    id: &'static str,
+    value: usize,
+    label: &'static str,
+    tone: ActivityTone,
+    cx: &mut App,
+) -> impl IntoElement {
+    h_flex()
+        .id(format!("stcode-smart-panel-metric-{id}"))
+        .gap_1()
+        .px_1p5()
+        .py_0p5()
+        .rounded_sm()
+        .border_1()
+        .border_color(cx.theme().colors().border)
+        .child(
+            Label::new(value.to_string())
+                .size(LabelSize::XSmall)
+                .color(tone.color()),
+        )
+        .child(
+            Label::new(label)
+                .size(LabelSize::XSmall)
+                .color(Color::Muted),
+        )
+}
+
+fn render_smart_panel_file(file: SmartPanelFile) -> impl IntoElement {
+    h_flex()
+        .id(("stcode-smart-panel-file", file.id))
+        .w_full()
+        .min_w_0()
+        .gap_2()
+        .child(
+            Icon::new(file.icon)
+                .size(IconSize::XSmall)
+                .color(file.tone.color()),
+        )
+        .child(
+            h_flex()
+                .min_w_0()
+                .flex_1()
+                .gap_2()
+                .child(
+                    Label::new(file.path)
+                        .size(LabelSize::XSmall)
+                        .color(Color::Default)
+                        .truncate(),
+                )
+                .child(
+                    Label::new(file.status)
+                        .size(LabelSize::XSmall)
+                        .color(file.tone.color()),
                 ),
         )
 }
@@ -460,6 +673,249 @@ fn smart_start_detail(branch_name: Option<&str>, entries: &[StatusEntry]) -> Str
     format!(
         "{changed_count} changed {file_label} remain on {branch}: {staged_count} staged, {unstaged_count} unstaged. Choose how to hand them off before starting clean."
     )
+}
+
+#[derive(Clone)]
+struct SmartPanelSnapshot {
+    repository: Entity<Repository>,
+    status: &'static str,
+    detail: String,
+    icon: IconName,
+    tone: ActivityTone,
+    counts: SmartPanelCounts,
+    files: Vec<SmartPanelFile>,
+    can_review: bool,
+    can_commit: bool,
+}
+
+impl SmartPanelSnapshot {
+    fn from_project(project: &Entity<Project>, cx: &App) -> Option<Self> {
+        let repository = project.read(cx).active_repository(cx)?;
+        let repository_ref = repository.read(cx);
+        let branch_name = repository_ref
+            .branch
+            .as_ref()
+            .map(|branch| branch.name().to_string());
+        let entries = repository_ref
+            .cached_status()
+            .filter(|entry| entry.status.has_changes())
+            .collect::<Vec<_>>();
+        let counts = smart_panel_counts(
+            &entries,
+            repository_ref.linked_worktrees().len(),
+            repository_ref.is_linked_worktree(),
+        );
+        let state = smart_panel_state(counts.changed_count, counts.conflicted_count);
+        let files = entries
+            .iter()
+            .take(MAX_SMART_PANEL_FILES)
+            .enumerate()
+            .map(|(id, entry)| {
+                SmartPanelFile::from_status_entry(id, entry, repository_ref.path_style)
+            })
+            .collect();
+
+        Some(Self {
+            repository,
+            status: state.status(),
+            detail: smart_panel_detail(state, branch_name.as_deref(), counts),
+            icon: state.icon(),
+            tone: state.tone(),
+            counts,
+            files,
+            can_review: counts.changed_count > 0,
+            can_commit: counts.changed_count > 0,
+        })
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct SmartPanelCounts {
+    changed_count: usize,
+    staged_count: usize,
+    unstaged_count: usize,
+    conflicted_count: usize,
+    untracked_count: usize,
+    added_lines: usize,
+    removed_lines: usize,
+    linked_worktree_count: usize,
+    is_linked_worktree: bool,
+}
+
+#[derive(Clone)]
+struct SmartPanelFile {
+    id: usize,
+    path: String,
+    status: &'static str,
+    icon: IconName,
+    tone: ActivityTone,
+}
+
+impl SmartPanelFile {
+    fn from_status_entry(id: usize, entry: &StatusEntry, path_style: PathStyle) -> Self {
+        let (status, icon, tone) = smart_panel_file_status(entry.status);
+
+        Self {
+            id,
+            path: entry.repo_path.display(path_style).to_string(),
+            status,
+            icon,
+            tone,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SmartPanelState {
+    Clean,
+    InProgress,
+    Blocked,
+}
+
+impl SmartPanelState {
+    fn status(self) -> &'static str {
+        match self {
+            SmartPanelState::Clean => "Clean",
+            SmartPanelState::InProgress => "In progress",
+            SmartPanelState::Blocked => "Blocked",
+        }
+    }
+
+    fn icon(self) -> IconName {
+        match self {
+            SmartPanelState::Clean => IconName::ListTodo,
+            SmartPanelState::InProgress => IconName::Diff,
+            SmartPanelState::Blocked => IconName::GitMergeConflict,
+        }
+    }
+
+    fn tone(self) -> ActivityTone {
+        match self {
+            SmartPanelState::Clean => ActivityTone::Done,
+            SmartPanelState::InProgress => ActivityTone::Waiting,
+            SmartPanelState::Blocked => ActivityTone::Failed,
+        }
+    }
+}
+
+fn smart_panel_counts(
+    entries: &[StatusEntry],
+    linked_worktree_count: usize,
+    is_linked_worktree: bool,
+) -> SmartPanelCounts {
+    SmartPanelCounts {
+        changed_count: entries.len(),
+        staged_count: entries
+            .iter()
+            .filter(|entry| entry.status.staging().has_staged())
+            .count(),
+        unstaged_count: entries
+            .iter()
+            .filter(|entry| entry.status.staging().has_unstaged())
+            .count(),
+        conflicted_count: entries
+            .iter()
+            .filter(|entry| entry.status.is_conflicted())
+            .count(),
+        untracked_count: entries
+            .iter()
+            .filter(|entry| entry.status.is_untracked())
+            .count(),
+        added_lines: entries
+            .iter()
+            .filter_map(|entry| entry.diff_stat)
+            .map(|stat| stat.added as usize)
+            .sum(),
+        removed_lines: entries
+            .iter()
+            .filter_map(|entry| entry.diff_stat)
+            .map(|stat| stat.deleted as usize)
+            .sum(),
+        linked_worktree_count,
+        is_linked_worktree,
+    }
+}
+
+fn smart_panel_state(changed_count: usize, conflicted_count: usize) -> SmartPanelState {
+    if conflicted_count > 0 {
+        SmartPanelState::Blocked
+    } else if changed_count > 0 {
+        SmartPanelState::InProgress
+    } else {
+        SmartPanelState::Clean
+    }
+}
+
+fn smart_panel_detail(
+    state: SmartPanelState,
+    branch_name: Option<&str>,
+    counts: SmartPanelCounts,
+) -> String {
+    let branch = branch_name.unwrap_or("detached HEAD");
+
+    match state {
+        SmartPanelState::Clean => {
+            let lane_detail = if counts.is_linked_worktree {
+                "this session is isolated"
+            } else if counts.linked_worktree_count > 0 {
+                "linked lanes are available"
+            } else {
+                "create a lane before parallel work"
+            };
+            format!("{branch}: no local file changes; {lane_detail}.")
+        }
+        SmartPanelState::InProgress => {
+            let file_label = if counts.changed_count == 1 {
+                "file"
+            } else {
+                "files"
+            };
+            let line_detail = if counts.added_lines + counts.removed_lines > 0 {
+                format!(", +{} -{}", counts.added_lines, counts.removed_lines)
+            } else {
+                String::new()
+            };
+            let untracked_detail = if counts.untracked_count > 0 {
+                format!(", {} new", counts.untracked_count)
+            } else {
+                String::new()
+            };
+            format!(
+                "{branch}: {} changed {file_label}, {} staged, {} unstaged{untracked_detail}{line_detail}.",
+                counts.changed_count, counts.staged_count, counts.unstaged_count
+            )
+        }
+        SmartPanelState::Blocked => {
+            let file_label = if counts.changed_count == 1 {
+                "file"
+            } else {
+                "files"
+            };
+            format!(
+                "{branch}: {} conflict(s) across {} changed {file_label}. Resolve blockers before continuing.",
+                counts.conflicted_count, counts.changed_count
+            )
+        }
+    }
+}
+
+fn smart_panel_file_status(status: FileStatus) -> (&'static str, IconName, ActivityTone) {
+    if status.is_conflicted() {
+        return ("Conflict", IconName::GitMergeConflict, ActivityTone::Failed);
+    }
+
+    if status.is_untracked() {
+        return ("New", IconName::File, ActivityTone::Waiting);
+    }
+
+    let staging = status.staging();
+    if staging.has_staged() && staging.has_unstaged() {
+        ("Partial", IconName::Diff, ActivityTone::Waiting)
+    } else if staging.has_staged() {
+        ("Staged", IconName::Check, ActivityTone::Done)
+    } else {
+        ("Changed", IconName::Diff, ActivityTone::Waiting)
+    }
 }
 
 #[derive(Clone)]
@@ -1187,6 +1643,115 @@ mod tests {
     }
 
     #[test]
+    fn smart_panel_counts_summarize_work_scope() {
+        let counts = smart_panel_counts(
+            &[
+                status_entry_with_diff(
+                    git::status::FileStatus::index(git::status::StatusCode::Modified),
+                    10,
+                    2,
+                ),
+                status_entry_with_diff(git::status::FileStatus::Untracked, 0, 0),
+                status_entry(git::status::FileStatus::Unmerged(
+                    git::status::UnmergedStatus {
+                        first_head: git::status::UnmergedStatusCode::Updated,
+                        second_head: git::status::UnmergedStatusCode::Updated,
+                    },
+                )),
+            ],
+            2,
+            true,
+        );
+
+        assert_eq!(counts.changed_count, 3);
+        assert_eq!(counts.staged_count, 1);
+        assert_eq!(counts.unstaged_count, 2);
+        assert_eq!(counts.conflicted_count, 1);
+        assert_eq!(counts.untracked_count, 1);
+        assert_eq!(counts.added_lines, 10);
+        assert_eq!(counts.removed_lines, 2);
+        assert_eq!(counts.linked_worktree_count, 2);
+        assert!(counts.is_linked_worktree);
+    }
+
+    #[test]
+    fn smart_panel_state_prioritizes_blockers() {
+        assert_eq!(smart_panel_state(0, 0), SmartPanelState::Clean);
+        assert_eq!(smart_panel_state(2, 0), SmartPanelState::InProgress);
+        assert_eq!(smart_panel_state(2, 1), SmartPanelState::Blocked);
+    }
+
+    #[test]
+    fn smart_panel_detail_summarizes_dirty_scope() {
+        let detail = smart_panel_detail(
+            SmartPanelState::InProgress,
+            Some("feature"),
+            SmartPanelCounts {
+                changed_count: 3,
+                staged_count: 1,
+                unstaged_count: 2,
+                conflicted_count: 0,
+                untracked_count: 1,
+                added_lines: 12,
+                removed_lines: 4,
+                linked_worktree_count: 0,
+                is_linked_worktree: false,
+            },
+        );
+
+        assert!(detail.contains("feature: 3 changed files"));
+        assert!(detail.contains("1 staged"));
+        assert!(detail.contains("2 unstaged"));
+        assert!(detail.contains("1 new"));
+        assert!(detail.contains("+12 -4"));
+    }
+
+    #[test]
+    fn smart_panel_detail_summarizes_clean_lane() {
+        let detail = smart_panel_detail(
+            SmartPanelState::Clean,
+            Some("feature"),
+            SmartPanelCounts {
+                changed_count: 0,
+                staged_count: 0,
+                unstaged_count: 0,
+                conflicted_count: 0,
+                untracked_count: 0,
+                added_lines: 0,
+                removed_lines: 0,
+                linked_worktree_count: 1,
+                is_linked_worktree: true,
+            },
+        );
+
+        assert!(detail.contains("feature: no local file changes"));
+        assert!(detail.contains("this session is isolated"));
+    }
+
+    #[test]
+    fn smart_panel_file_status_is_review_facing() {
+        assert_eq!(
+            smart_panel_file_status(git::status::FileStatus::Untracked),
+            ("New", IconName::File, ActivityTone::Waiting)
+        );
+        assert_eq!(
+            smart_panel_file_status(git::status::FileStatus::index(
+                git::status::StatusCode::Modified,
+            )),
+            ("Staged", IconName::Check, ActivityTone::Done)
+        );
+        assert_eq!(
+            smart_panel_file_status(git::status::FileStatus::Unmerged(
+                git::status::UnmergedStatus {
+                    first_head: git::status::UnmergedStatusCode::Updated,
+                    second_head: git::status::UnmergedStatusCode::Updated,
+                },
+            )),
+            ("Conflict", IconName::GitMergeConflict, ActivityTone::Failed)
+        );
+    }
+
+    #[test]
     fn smart_parallel_state_recommends_lane_for_main_checkout() {
         assert_eq!(
             smart_parallel_state(false, 0),
@@ -1291,6 +1856,19 @@ mod tests {
                 .expect("test path should be a valid repo path"),
             status,
             diff_stat: None,
+        }
+    }
+
+    fn status_entry_with_diff(
+        status: git::status::FileStatus,
+        added: u32,
+        deleted: u32,
+    ) -> StatusEntry {
+        StatusEntry {
+            repo_path: git::repository::RepoPath::new("src/main.rs")
+                .expect("test path should be a valid repo path"),
+            status,
+            diff_stat: Some(git::status::DiffStat { added, deleted }),
         }
     }
 }
