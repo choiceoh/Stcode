@@ -47,7 +47,8 @@ use ui::{
 use update_version::UpdateVersion;
 use util::ResultExt;
 use workspace::{
-    MultiWorkspace, ToggleWorktreeSecurity, Workspace, notifications::NotifyResultExt,
+    AppLaunchMode, MultiWorkspace, ToggleWorktreeSecurity, Workspace,
+    notifications::NotifyResultExt,
 };
 
 use zed_actions::OpenRemote;
@@ -57,6 +58,65 @@ pub use onboarding_banner::restore_banner;
 const MAX_PROJECT_NAME_LENGTH: usize = 40;
 const MAX_BRANCH_NAME_LENGTH: usize = 40;
 const MAX_SHORT_SHA_LENGTH: usize = 8;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum TitleBarProjectTerminology {
+    Zed,
+    Stcode,
+}
+
+impl TitleBarProjectTerminology {
+    fn for_app(cx: &App) -> Self {
+        if AppLaunchMode::is_stcode(cx) {
+            Self::Stcode
+        } else {
+            Self::Zed
+        }
+    }
+
+    fn open_recent(self) -> &'static str {
+        match self {
+            Self::Stcode => "Open Workspace",
+            Self::Zed => "Open Recent Project",
+        }
+    }
+
+    fn recent_menu(self) -> &'static str {
+        match self {
+            Self::Stcode => "Recent Workspaces",
+            Self::Zed => "Recent Projects",
+        }
+    }
+
+    fn remote(self) -> &'static str {
+        match self {
+            Self::Stcode => "Remote Workspace",
+            Self::Zed => "Remote Project",
+        }
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    fn mock_remote(self) -> &'static str {
+        match self {
+            Self::Stcode => "Mock Remote Workspace",
+            Self::Zed => "Mock Remote Project",
+        }
+    }
+
+    fn trusted_mode_meta(self) -> &'static str {
+        match self {
+            Self::Stcode => "Mark this workspace as trusted and unlock all features",
+            Self::Zed => "Mark this project as trusted and unlock all features",
+        }
+    }
+
+    fn shared_subject(self) -> &'static str {
+        match self {
+            Self::Stcode => "workspace",
+            Self::Zed => "project",
+        }
+    }
+}
 
 actions!(
     collab,
@@ -496,6 +556,7 @@ impl TitleBar {
 
     fn render_remote_project_connection(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let workspace = self.workspace.clone();
+        let terminology = TitleBarProjectTerminology::for_app(cx);
 
         let options = self.project.read(cx).remote_connection_options(cx)?;
         let host: SharedString = options.display_name().into();
@@ -503,15 +564,15 @@ impl TitleBar {
         let (nickname, tooltip_title, icon) = match options {
             RemoteConnectionOptions::Ssh(options) => (
                 options.nickname.map(|nick| nick.into()),
-                "Remote Project",
+                terminology.remote(),
                 IconName::Server,
             ),
-            RemoteConnectionOptions::Wsl(_) => (None, "Remote Project", IconName::Linux),
+            RemoteConnectionOptions::Wsl(_) => (None, terminology.remote(), IconName::Linux),
             RemoteConnectionOptions::Docker(_dev_container_connection) => {
                 (None, "Dev Container", IconName::Box)
             }
             #[cfg(any(test, feature = "test-support"))]
-            RemoteConnectionOptions::Mock(_) => (None, "Mock Remote Project", IconName::Server),
+            RemoteConnectionOptions::Mock(_) => (None, terminology.mock_remote(), IconName::Server),
         };
 
         let nickname = nickname.unwrap_or_else(|| host.clone());
@@ -592,6 +653,7 @@ impl TitleBar {
     }
 
     pub fn render_restricted_mode(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let terminology = TitleBarProjectTerminology::for_app(cx);
         let has_restricted_worktrees = TrustedWorktrees::try_get_global(cx)
             .map(|trusted_worktrees| {
                 trusted_worktrees
@@ -612,11 +674,11 @@ impl TitleBar {
                     .size(IconSize::Small)
                     .color(Color::Warning),
             )
-            .tooltip(|_, cx| {
+            .tooltip(move |_, cx| {
                 Tooltip::with_meta(
                     "You're in Restricted Mode",
                     Some(&ToggleWorktreeSecurity),
-                    "Mark this project as trusted and unlock all features",
+                    terminology.trusted_mode_meta(),
                     cx,
                 )
             })
@@ -655,6 +717,7 @@ impl TitleBar {
 
         let host = self.project.read(cx).host()?;
         let host_user = self.user_store.read(cx).get_cached_user(host.user_id)?;
+        let terminology = TitleBarProjectTerminology::for_app(cx);
         let participant_index = self
             .user_store
             .read(cx)
@@ -667,8 +730,9 @@ impl TitleBar {
                 .label_size(LabelSize::Small)
                 .tooltip(move |_, cx| {
                     let tooltip_title = format!(
-                        "{} is sharing this project. Click to follow.",
-                        host_user.github_login
+                        "{} is sharing this {}. Click to follow.",
+                        host_user.github_login,
+                        terminology.shared_subject()
                     );
 
                     Tooltip::with_meta(tooltip_title, None, "Click to Follow", cx)
@@ -694,13 +758,14 @@ impl TitleBar {
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let workspace = self.workspace.clone();
+        let terminology = TitleBarProjectTerminology::for_app(cx);
 
         let is_project_selected = name.is_some();
 
         let display_name = if let Some(ref name) = name {
             util::truncate_and_trailoff(name, MAX_PROJECT_NAME_LENGTH)
         } else {
-            "Open Recent Project".to_string()
+            terminology.open_recent().to_string()
         };
 
         let is_sidebar_open = self
@@ -761,7 +826,7 @@ impl TitleBar {
                     .when(!is_project_selected, |s| s.color(Color::Muted)),
                 move |_window, cx| {
                     Tooltip::for_action(
-                        "Recent Projects",
+                        terminology.recent_menu(),
                         &zed_actions::OpenRecent {
                             create_new_window: false,
                         },
@@ -780,6 +845,7 @@ impl TitleBar {
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let workspace = self.workspace.clone();
+        let terminology = TitleBarProjectTerminology::for_app(cx);
 
         let focus_handle = workspace
             .upgrade()
@@ -818,7 +884,7 @@ impl TitleBar {
                     .when(!is_project_selected, |s| s.color(Color::Muted)),
                 move |_window, cx| {
                     Tooltip::for_action(
-                        "Recent Projects",
+                        terminology.recent_menu(),
                         &zed_actions::OpenRecent {
                             create_new_window: false,
                         },
@@ -1305,5 +1371,49 @@ impl TitleBar {
                 .into()
             })
             .anchor(Anchor::TopRight)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::TitleBarProjectTerminology;
+
+    #[test]
+    fn test_title_bar_project_terminology_copy() {
+        assert_eq!(
+            TitleBarProjectTerminology::Zed.open_recent(),
+            "Open Recent Project"
+        );
+        assert_eq!(
+            TitleBarProjectTerminology::Zed.recent_menu(),
+            "Recent Projects"
+        );
+        assert_eq!(TitleBarProjectTerminology::Zed.remote(), "Remote Project");
+        assert_eq!(
+            TitleBarProjectTerminology::Zed.trusted_mode_meta(),
+            "Mark this project as trusted and unlock all features"
+        );
+        assert_eq!(TitleBarProjectTerminology::Zed.shared_subject(), "project");
+
+        assert_eq!(
+            TitleBarProjectTerminology::Stcode.open_recent(),
+            "Open Workspace"
+        );
+        assert_eq!(
+            TitleBarProjectTerminology::Stcode.recent_menu(),
+            "Recent Workspaces"
+        );
+        assert_eq!(
+            TitleBarProjectTerminology::Stcode.remote(),
+            "Remote Workspace"
+        );
+        assert_eq!(
+            TitleBarProjectTerminology::Stcode.trusted_mode_meta(),
+            "Mark this workspace as trusted and unlock all features"
+        );
+        assert_eq!(
+            TitleBarProjectTerminology::Stcode.shared_subject(),
+            "workspace"
+        );
     }
 }

@@ -244,6 +244,12 @@ fn stcode_app_menu(app_name: &'static str) -> Menu {
             MenuItem::submenu(Menu::new("Settings").items([
                 MenuItem::action("Open Settings", zed_actions::OpenSettings),
                 MenuItem::action("Open Settings File", super::OpenSettingsFile),
+                MenuItem::action("Open Workspace Settings", zed_actions::OpenProjectSettings),
+                MenuItem::action(
+                    "Open Workspace Settings File",
+                    super::OpenProjectSettingsFile,
+                ),
+                MenuItem::separator(),
                 MenuItem::action("Open Default Settings", super::OpenDefaultSettings),
                 MenuItem::separator(),
                 MenuItem::action("Open Keymap", zed_actions::OpenKeymap),
@@ -334,33 +340,28 @@ fn stcode_file_menu() -> Menu {
             MenuItem::separator(),
             #[cfg(not(target_os = "macos"))]
             MenuItem::action("Open File...", workspace::OpenFiles),
+            MenuItem::action("Open Workspace...", workspace::Open::default()),
             MenuItem::action(
-                if cfg!(not(target_os = "macos")) {
-                    "Open Folder..."
-                } else {
-                    "Open…"
-                },
-                workspace::Open::default(),
-            ),
-            MenuItem::action(
-                "Open Recent...",
+                "Open Recent Workspaces...",
                 zed_actions::OpenRecent {
                     create_new_window: false,
                 },
             ),
             MenuItem::action(
-                "Open Remote...",
+                "Open Remote Workspace...",
                 zed_actions::OpenRemote {
                     create_new_window: false,
                     from_existing_connection: false,
                 },
             ),
             MenuItem::separator(),
+            MenuItem::action("Add Folder to Workspace…", workspace::AddFolderToProject),
+            MenuItem::separator(),
             MenuItem::action("Save", workspace::Save { save_intent: None }),
             MenuItem::action("Save As…", workspace::SaveAs),
             MenuItem::action("Save All", workspace::SaveAll { save_intent: None }),
             MenuItem::separator(),
-            MenuItem::action("Close Project", workspace::CloseProject),
+            MenuItem::action("Close Workspace", workspace::CloseProject),
             MenuItem::action("Close Window", workspace::CloseWindow),
         ],
     }
@@ -563,5 +564,58 @@ fn window_menu() -> Menu {
             MenuItem::action("Zoom", super::Zoom),
             MenuItem::separator(),
         ],
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use gpui::{Menu, MenuItem};
+
+    fn action_names(menu: &Menu) -> Vec<String> {
+        menu.items
+            .iter()
+            .filter_map(|item| match item {
+                MenuItem::Action { name, .. } => Some(name.to_string()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn submenu<'a>(menu: &'a Menu, name: &str) -> &'a Menu {
+        menu.items
+            .iter()
+            .find_map(|item| match item {
+                MenuItem::Submenu(submenu) if submenu.name.as_ref() == name => Some(submenu),
+                _ => None,
+            })
+            .expect("submenu should exist")
+    }
+
+    #[test]
+    fn test_stcode_file_menu_uses_workspace_terms() {
+        let file_menu = super::stcode_file_menu();
+        let labels = action_names(&file_menu);
+
+        assert!(labels.contains(&"Open Workspace...".to_string()));
+        assert!(labels.contains(&"Open Recent Workspaces...".to_string()));
+        assert!(labels.contains(&"Open Remote Workspace...".to_string()));
+        assert!(labels.contains(&"Add Folder to Workspace…".to_string()));
+        assert!(labels.contains(&"Close Workspace".to_string()));
+
+        assert!(!labels.contains(&"Open Recent...".to_string()));
+        assert!(!labels.contains(&"Open Remote...".to_string()));
+        assert!(!labels.contains(&"Close Project".to_string()));
+    }
+
+    #[test]
+    fn test_stcode_settings_menu_keeps_workspace_settings() {
+        let app_menu = super::stcode_app_menu("Stcode");
+        let settings_menu = submenu(&app_menu, "Settings");
+        let labels = action_names(settings_menu);
+
+        assert!(labels.contains(&"Open Workspace Settings".to_string()));
+        assert!(labels.contains(&"Open Workspace Settings File".to_string()));
+        assert!(!labels.contains(&"Open Project Settings".to_string()));
+        assert!(!labels.contains(&"Open Project Settings File".to_string()));
     }
 }

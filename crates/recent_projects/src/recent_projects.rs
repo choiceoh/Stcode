@@ -46,8 +46,8 @@ use ui::{
 };
 use util::{ResultExt, paths::PathExt};
 use workspace::{
-    HistoryManager, ModalView, MultiWorkspace, OpenMode, OpenOptions, OpenVisible, PathList,
-    SerializedWorkspaceLocation, Workspace, WorkspaceDb, WorkspaceId,
+    AppLaunchMode, HistoryManager, ModalView, MultiWorkspace, OpenMode, OpenOptions, OpenVisible,
+    PathList, SerializedWorkspaceLocation, Workspace, WorkspaceDb, WorkspaceId,
     notifications::DetachAndPromptErr, with_active_or_new_workspace,
 };
 use zed_actions::{OpenDevContainer, OpenRecent, OpenRemote};
@@ -56,6 +56,155 @@ actions!(
     recent_projects,
     [ToggleActionsMenu, RemoveSelected, AddToWorkspace,]
 );
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ProjectTerminology {
+    Zed,
+    Stcode,
+}
+
+impl ProjectTerminology {
+    pub(crate) fn for_app(cx: &App) -> Self {
+        if AppLaunchMode::is_stcode(cx) {
+            Self::Stcode
+        } else {
+            Self::Zed
+        }
+    }
+
+    pub(crate) fn search_placeholder(self) -> &'static str {
+        match self {
+            Self::Stcode => "Search workspaces…",
+            Self::Zed => "Search projects…",
+        }
+    }
+
+    pub(crate) fn sidebar_search_placeholder(self) -> &'static str {
+        match self {
+            Self::Stcode => "Search recent workspaces…",
+            Self::Zed => "Search recent projects…",
+        }
+    }
+
+    pub(crate) fn recent_header(self) -> &'static str {
+        match self {
+            Self::Stcode => "Recent Workspaces",
+            Self::Zed => "Recent Projects",
+        }
+    }
+
+    pub(crate) fn empty_recent_message(self) -> &'static str {
+        match self {
+            Self::Stcode => "Recently opened workspaces will show up here",
+            Self::Zed => "Recently opened projects will show up here",
+        }
+    }
+
+    pub(crate) fn failed_to_open(self) -> &'static str {
+        match self {
+            Self::Stcode => "Failed to open workspace",
+            Self::Zed => "Failed to open project",
+        }
+    }
+
+    pub(crate) fn remove_from_window(self) -> &'static str {
+        match self {
+            Self::Stcode => "Remove Workspace from Window",
+            Self::Zed => "Remove Project from Window",
+        }
+    }
+
+    pub(crate) fn add_folders_title(self) -> &'static str {
+        match self {
+            Self::Stcode => "Add Folders to this Workspace",
+            Self::Zed => "Add Folders to this Project",
+        }
+    }
+
+    pub(crate) fn add_folders_description(self) -> &'static str {
+        match self {
+            Self::Stcode => "As a multi-root workspace",
+            Self::Zed => "As a multi-root folder project",
+        }
+    }
+
+    pub(crate) fn open_in_new_window(self) -> &'static str {
+        match self {
+            Self::Stcode => "Open Workspace in New Window",
+            Self::Zed => "Open Project in New Window",
+        }
+    }
+
+    pub(crate) fn open_in_this_window(self) -> &'static str {
+        match self {
+            Self::Stcode => "Open Workspace in This Window",
+            Self::Zed => "Open Project in This Window",
+        }
+    }
+
+    pub(crate) fn delete_recent(self) -> &'static str {
+        match self {
+            Self::Stcode => "Delete from Recent Workspaces",
+            Self::Zed => "Delete from Recent Projects",
+        }
+    }
+
+    pub(crate) fn open_local_folders(self) -> &'static str {
+        match self {
+            Self::Stcode => "Open Local Workspace",
+            Self::Zed => "Open Local Folders",
+        }
+    }
+
+    pub(crate) fn open_remote_folder(self) -> &'static str {
+        match self {
+            Self::Stcode => "Open Remote Workspace",
+            Self::Zed => "Open Remote Folder",
+        }
+    }
+
+    pub(crate) fn add_local_folders(self) -> &'static str {
+        match self {
+            Self::Stcode => "Add Local Workspace",
+            Self::Zed => "Add Local Folders",
+        }
+    }
+
+    pub(crate) fn add_remote_folder(self) -> &'static str {
+        match self {
+            Self::Stcode => "Add Remote Workspace",
+            Self::Zed => "Add Remote Folder",
+        }
+    }
+
+    pub(crate) fn remote_headline(self) -> &'static str {
+        match self {
+            Self::Stcode => "Remote Workspaces",
+            Self::Zed => "Remote Projects",
+        }
+    }
+
+    pub(crate) fn no_remote_entries(self) -> &'static str {
+        match self {
+            Self::Stcode => "No workspaces.",
+            Self::Zed => "No projects.",
+        }
+    }
+
+    pub(crate) fn open_folder(self) -> &'static str {
+        match self {
+            Self::Stcode => "Open Workspace",
+            Self::Zed => "Open Folder",
+        }
+    }
+
+    pub(crate) fn delete_remote(self) -> &'static str {
+        match self {
+            Self::Stcode => "Delete Remote Workspace",
+            Self::Zed => "Delete Remote Project",
+        }
+    }
+}
 
 #[derive(Clone, Debug)]
 pub struct RecentProjectEntry {
@@ -882,8 +1031,8 @@ impl EventEmitter<DismissEvent> for RecentProjectsDelegate {}
 impl PickerDelegate for RecentProjectsDelegate {
     type ListItem = AnyElement;
 
-    fn placeholder_text(&self, _window: &mut Window, _cx: &mut App) -> Arc<str> {
-        "Search projects…".into()
+    fn placeholder_text(&self, _window: &mut Window, cx: &mut App) -> Arc<str> {
+        ProjectTerminology::for_app(cx).search_placeholder().into()
     }
 
     fn render_editor(
@@ -1057,7 +1206,9 @@ impl PickerDelegate for RecentProjectsDelegate {
         };
 
         if has_recent_to_show {
-            entries.push(ProjectPickerEntry::Header("Recent Projects".into()));
+            entries.push(ProjectPickerEntry::Header(
+                ProjectTerminology::for_app(cx).recent_header().into(),
+            ));
 
             if is_empty_query {
                 for (id, (workspace_id, _, paths, _)) in self.workspaces.iter().enumerate() {
@@ -1192,7 +1343,7 @@ impl PickerDelegate for RecentProjectsDelegate {
                                         cx,
                                     )
                                     .detach_and_prompt_err(
-                                        "Failed to open project",
+                                        ProjectTerminology::for_app(cx).failed_to_open(),
                                         window,
                                         cx,
                                         |_, _, _| None,
@@ -1226,7 +1377,7 @@ impl PickerDelegate for RecentProjectsDelegate {
                                 .await
                             })
                             .detach_and_prompt_err(
-                                "Failed to open project",
+                                ProjectTerminology::for_app(cx).failed_to_open(),
                                 window,
                                 cx,
                                 |_, _, _| None,
@@ -1242,9 +1393,11 @@ impl PickerDelegate for RecentProjectsDelegate {
 
     fn dismissed(&mut self, _window: &mut Window, _: &mut Context<Picker<Self>>) {}
 
-    fn no_matches_text(&self, _window: &mut Window, _cx: &mut App) -> Option<SharedString> {
+    fn no_matches_text(&self, _window: &mut Window, cx: &mut App) -> Option<SharedString> {
         let text = if self.workspaces.is_empty() && self.open_folders.is_empty() {
-            "Recently opened projects will show up here".into()
+            ProjectTerminology::for_app(cx)
+                .empty_recent_message()
+                .into()
         } else {
             "No matches".into()
         };
@@ -1405,13 +1558,14 @@ impl PickerDelegate for RecentProjectsDelegate {
                 };
 
                 let project_group_key = key.clone();
+                let terminology = ProjectTerminology::for_app(cx);
                 let secondary_actions = h_flex()
                     .gap_1()
                     .when(!is_active, |this| {
                         this.child(
                             IconButton::new("remove_open_project", IconName::Close)
                                 .icon_size(IconSize::Small)
-                                .tooltip(Tooltip::text("Remove Project from Window"))
+                                .tooltip(Tooltip::text(terminology.remove_from_window()))
                                 .on_click({
                                     let project_group_key = project_group_key.clone();
                                     cx.listener(move |picker, _, window, cx| {
@@ -1500,6 +1654,7 @@ impl PickerDelegate for RecentProjectsDelegate {
                 };
 
                 let focus_handle = self.focus_handle.clone();
+                let terminology = ProjectTerminology::for_app(cx);
 
                 let secondary_actions = h_flex()
                     .gap_px()
@@ -1509,9 +1664,9 @@ impl PickerDelegate for RecentProjectsDelegate {
                                 .icon_size(IconSize::Small)
                                 .tooltip(move |_, cx| {
                                     Tooltip::with_meta(
-                                        "Add Folders to this Project",
+                                        terminology.add_folders_title(),
                                         None,
-                                        "As a multi-root folder project",
+                                        terminology.add_folders_description(),
                                         cx,
                                     )
                                 })
@@ -1535,7 +1690,7 @@ impl PickerDelegate for RecentProjectsDelegate {
                             .tooltip({
                                 move |_, cx| {
                                     Tooltip::for_action_in(
-                                        "Open Project in New Window",
+                                        terminology.open_in_new_window(),
                                         &menu::SecondaryConfirm,
                                         &focus_handle,
                                         cx,
@@ -1552,7 +1707,7 @@ impl PickerDelegate for RecentProjectsDelegate {
                     .child(
                         IconButton::new("delete", IconName::Close)
                             .icon_size(IconSize::Small)
-                            .tooltip(Tooltip::text("Delete from Recent Projects"))
+                            .tooltip(Tooltip::text(terminology.delete_recent()))
                             .on_click(cx.listener(move |this, _event, window, cx| {
                                 cx.stop_propagation();
                                 window.prevent_default();
@@ -1588,7 +1743,7 @@ impl PickerDelegate for RecentProjectsDelegate {
                                 })
                                 .tooltip(move |_, cx| {
                                     Tooltip::with_meta(
-                                        "Open Project in This Window",
+                                        terminology.open_in_this_window(),
                                         None,
                                         tooltip_path.clone(),
                                         cx,
@@ -1605,6 +1760,7 @@ impl PickerDelegate for RecentProjectsDelegate {
 
     fn render_footer(&self, _: &mut Window, cx: &mut Context<Picker<Self>>) -> Option<AnyElement> {
         let focus_handle = self.focus_handle.clone();
+        let terminology = ProjectTerminology::for_app(cx);
         let popover_style = matches!(self.style, ProjectPickerStyle::Popover);
         let is_already_open_entry = matches!(
             self.filtered_entries.get(self.selected_index),
@@ -1626,7 +1782,7 @@ impl PickerDelegate for RecentProjectsDelegate {
                                     .w_full()
                                     .gap_1()
                                     .justify_between()
-                                    .child(Label::new("Open Local Folders"))
+                                    .child(Label::new(terminology.open_local_folders()))
                                     .child(KeyBinding::for_action_in(
                                         &workspace::Open {
                                             create_new_window: self.create_new_window,
@@ -1655,7 +1811,7 @@ impl PickerDelegate for RecentProjectsDelegate {
                                     .w_full()
                                     .gap_1()
                                     .justify_between()
-                                    .child(Label::new("Open Remote Folder"))
+                                    .child(Label::new(terminology.open_remote_folder()))
                                     .child(KeyBinding::for_action(
                                         &OpenRemote {
                                             from_existing_connection: false,
@@ -1828,7 +1984,7 @@ impl PickerDelegate for RecentProjectsDelegate {
                                                 .separator()
                                             })
                                             .entry(
-                                                "Open Local Folders",
+                                                terminology.open_local_folders(),
                                                 Some(open_action.boxed_clone()),
                                                 {
                                                     let workspace_handle = workspace_handle.clone();
@@ -1843,7 +1999,7 @@ impl PickerDelegate for RecentProjectsDelegate {
                                                 },
                                             )
                                             .action(
-                                                "Open Remote Folder",
+                                                terminology.open_remote_folder(),
                                                 OpenRemote {
                                                     from_existing_connection: false,
                                                     create_new_window: false,
@@ -2152,6 +2308,37 @@ mod tests {
     use workspace::{AppState, open_paths};
 
     use super::*;
+
+    #[test]
+    fn test_project_terminology_copy() {
+        assert_eq!(
+            ProjectTerminology::Zed.search_placeholder(),
+            "Search projects…"
+        );
+        assert_eq!(ProjectTerminology::Zed.recent_header(), "Recent Projects");
+        assert_eq!(
+            ProjectTerminology::Zed.open_in_this_window(),
+            "Open Project in This Window"
+        );
+        assert_eq!(ProjectTerminology::Zed.remote_headline(), "Remote Projects");
+
+        assert_eq!(
+            ProjectTerminology::Stcode.search_placeholder(),
+            "Search workspaces…"
+        );
+        assert_eq!(
+            ProjectTerminology::Stcode.recent_header(),
+            "Recent Workspaces"
+        );
+        assert_eq!(
+            ProjectTerminology::Stcode.open_in_this_window(),
+            "Open Workspace in This Window"
+        );
+        assert_eq!(
+            ProjectTerminology::Stcode.remote_headline(),
+            "Remote Workspaces"
+        );
+    }
 
     #[gpui::test]
     async fn test_open_dev_container_action_with_single_config(cx: &mut TestAppContext) {
