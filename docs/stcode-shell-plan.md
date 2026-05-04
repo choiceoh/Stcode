@@ -28,8 +28,9 @@ The `stcode` binary should:
 - use Stcode workspace terminology in recent workspace pickers, sidebars, and remote workspace selection surfaces
 - use Stcode workspace terminology in title bar workspace controls, remote workspace status, trust prompts, and shared-workspace hints
 - use Stcode workspace terminology in the File and Settings menus, including workspace-specific settings and multi-root workspace actions
+- render a Stcode-only workspace activity timeline in the agent panel so users can see whether the agent is ready, working, waiting for approval, or blocked by a failed tool
 
-The terminal panel is hidden by default in Stcode mode because users should not need to operate a terminal directly. This does not remove terminal or execution support. Agent tools and workspace execution surfaces remain available; Stcode should surface progress through the agent panel, tool cards, and later a dedicated activity timeline.
+The terminal panel is hidden by default in Stcode mode because users should not need to operate a terminal directly. This does not remove terminal or execution support. Agent tools and workspace execution surfaces remain available; Stcode surfaces progress through the agent panel, tool cards, and the workspace activity timeline.
 
 ## What Stays Shared
 

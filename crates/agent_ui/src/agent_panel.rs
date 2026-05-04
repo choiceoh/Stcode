@@ -41,6 +41,7 @@ use crate::{
     ToggleNewThreadMenu, ToggleOptionsMenu,
     agent_configuration::{AgentConfiguration, AssistantConfigurationEvent},
     conversation_view::{AcpThreadViewEvent, ThreadView},
+    stcode_activity_timeline::StcodeActivityTimeline,
     ui::EndTrialUpsell,
 };
 use crate::{
@@ -79,7 +80,7 @@ use ui::{
 };
 use util::ResultExt as _;
 use workspace::{
-    CollaboratorId, DraggedSelection, DraggedTab, PathList, SerializedPathList,
+    AppLaunchMode, CollaboratorId, DraggedSelection, DraggedTab, PathList, SerializedPathList,
     ToggleWorkspaceSidebar, ToggleZoom, Workspace, WorkspaceId,
     dock::{DockPosition, Panel, PanelEvent},
 };
@@ -3626,6 +3627,14 @@ impl AgentPanel {
         )
     }
 
+    fn render_stcode_activity_timeline(&self, cx: &Context<Self>) -> Option<AnyElement> {
+        if !AppLaunchMode::is_stcode(cx) {
+            return None;
+        }
+
+        Some(StcodeActivityTimeline::new(self.active_agent_thread(cx)).into_any_element())
+    }
+
     fn key_context(&self) -> KeyContext {
         let mut key_context = KeyContext::new_with_defaults();
         key_context.add("AgentPanel");
@@ -3676,6 +3685,7 @@ impl Render for AgentPanel {
             }))
             .child(self.render_toolbar(window, cx))
             .children(self.render_workspace_trust_message(cx))
+            .children(self.render_stcode_activity_timeline(cx))
             .children(self.render_new_user_onboarding(window, cx))
             .map(|parent| match self.visible_surface() {
                 VisibleSurface::Uninitialized => parent,
