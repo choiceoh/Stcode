@@ -1,4 +1,5 @@
 use crate::{
+    ProjectTerminology,
     remote_connections::{
         Connection, RemoteConnectionModal, RemoteConnectionPrompt, RemoteSettings, SshConnection,
         SshConnectionHeader, connect, determine_paths_with_positions, open_remote_project,
@@ -1331,6 +1332,7 @@ impl RemoteServerProjects {
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let connection = remote_server.connection().into_owned();
+        let terminology = ProjectTerminology::for_app(cx);
 
         let (main_label, aux_label, is_wsl) = match &connection {
             Connection::Ssh(connection) => {
@@ -1394,7 +1396,7 @@ impl RemoteServerProjects {
                 } => {
                     let index = *index;
                     List::new()
-                        .empty_message("No projects.")
+                        .empty_message(terminology.no_remote_entries())
                         .children(projects.iter().enumerate().map(|(pix, p)| {
                             v_flex().gap_0p5().child(self.render_remote_project(
                                 index,
@@ -1429,7 +1431,7 @@ impl RemoteServerProjects {
                                         .inset(true)
                                         .spacing(ui::ListItemSpacing::Sparse)
                                         .start_slot(Icon::new(IconName::Plus).color(Color::Muted))
-                                        .child(Label::new("Open Folder"))
+                                        .child(Label::new(terminology.open_folder()))
                                         .on_click(cx.listener({
                                             let connection = connection.clone();
                                             move |this, _, window, cx| {
@@ -1506,7 +1508,7 @@ impl RemoteServerProjects {
                                 .inset(true)
                                 .spacing(ui::ListItemSpacing::Sparse)
                                 .start_slot(Icon::new(IconName::Plus).color(Color::Muted))
-                                .child(Label::new("Open Folder"))
+                                .child(Label::new(terminology.open_folder()))
                                 .on_click(cx.listener({
                                     let host = host.clone();
                                     move |this, _, window, cx| {
@@ -1534,6 +1536,7 @@ impl RemoteServerProjects {
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let create_new_window = self.create_new_window;
+        let terminology = ProjectTerminology::for_app(cx);
         let is_from_zed = server.is_from_zed();
         let element_id_base = SharedString::from(format!(
             "remote-project-{}",
@@ -1640,7 +1643,7 @@ impl RemoteServerProjects {
                                             .icon_size(IconSize::Small)
                                             .shape(IconButtonShape::Square)
                                             .size(ButtonSize::Large)
-                                            .tooltip(Tooltip::text("Delete Remote Project"))
+                                            .tooltip(Tooltip::text(terminology.delete_remote()))
                                             .on_click(cx.listener(move |this, _, _, cx| {
                                                 this.delete_remote_project(server_ix, &project, cx)
                                             }))
@@ -2563,6 +2566,7 @@ impl RemoteServerProjects {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
+        let terminology = ProjectTerminology::for_app(cx);
         let ssh_settings = RemoteSettings::get_global(cx);
         let mut should_rebuild = false;
 
@@ -2802,7 +2806,7 @@ impl RemoteServerProjects {
         });
 
         Modal::new("remote-projects", None)
-            .header(ModalHeader::new().headline("Remote Projects"))
+            .header(ModalHeader::new().headline(terminology.remote_headline()))
             .section(
                 Section::new().padded(false).child(
                     v_flex()

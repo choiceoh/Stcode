@@ -22,7 +22,9 @@ use workspace::{
 
 use zed_actions::OpenRemote;
 
-use crate::{highlights_for_path, icon_for_remote_connection, open_remote_project};
+use crate::{
+    ProjectTerminology, highlights_for_path, icon_for_remote_connection, open_remote_project,
+};
 
 pub struct SidebarRecentProjects {
     pub picker: Entity<Picker<SidebarRecentProjectsDelegate>>,
@@ -150,8 +152,10 @@ impl EventEmitter<DismissEvent> for SidebarRecentProjectsDelegate {}
 impl PickerDelegate for SidebarRecentProjectsDelegate {
     type ListItem = AnyElement;
 
-    fn placeholder_text(&self, _window: &mut Window, _cx: &mut App) -> Arc<str> {
-        "Search recent projects…".into()
+    fn placeholder_text(&self, _window: &mut Window, cx: &mut App) -> Arc<str> {
+        ProjectTerminology::for_app(cx)
+            .sidebar_search_placeholder()
+            .into()
     }
 
     fn render_editor(
@@ -296,7 +300,7 @@ impl PickerDelegate for SidebarRecentProjectsDelegate {
                             .await
                     })
                     .detach_and_prompt_err(
-                        "Failed to open project",
+                        ProjectTerminology::for_app(cx).failed_to_open(),
                         window,
                         cx,
                         |_, _, _| None,
@@ -309,9 +313,9 @@ impl PickerDelegate for SidebarRecentProjectsDelegate {
 
     fn dismissed(&mut self, _window: &mut Window, _cx: &mut Context<Picker<Self>>) {}
 
-    fn no_matches_text(&self, _window: &mut Window, _cx: &mut App) -> Option<SharedString> {
+    fn no_matches_text(&self, _window: &mut Window, cx: &mut App) -> Option<SharedString> {
         let text = if self.workspaces.is_empty() {
-            "Recently opened projects will show up here"
+            ProjectTerminology::for_app(cx).empty_recent_message()
         } else {
             "No matches"
         };
@@ -375,6 +379,7 @@ impl PickerDelegate for SidebarRecentProjectsDelegate {
             SerializedWorkspaceLocation::Local => None,
             SerializedWorkspaceLocation::Remote(options) => Some(options),
         });
+        let terminology = ProjectTerminology::for_app(cx);
 
         Some(
             ListItem::new(ix)
@@ -392,7 +397,7 @@ impl PickerDelegate for SidebarRecentProjectsDelegate {
                 )
                 .tooltip(move |_, cx| {
                     Tooltip::with_meta(
-                        "Open Project in This Window",
+                        terminology.open_in_this_window(),
                         None,
                         tooltip_path.clone(),
                         cx,
@@ -404,6 +409,7 @@ impl PickerDelegate for SidebarRecentProjectsDelegate {
 
     fn render_footer(&self, _: &mut Window, cx: &mut Context<Picker<Self>>) -> Option<AnyElement> {
         let focus_handle = self.focus_handle.clone();
+        let terminology = ProjectTerminology::for_app(cx);
 
         Some(
             v_flex()
@@ -423,7 +429,7 @@ impl PickerDelegate for SidebarRecentProjectsDelegate {
                                 .w_full()
                                 .gap_1()
                                 .justify_between()
-                                .child(Label::new("Add Local Folders"))
+                                .child(Label::new(terminology.add_local_folders()))
                                 .child(KeyBinding::for_action_in(&open_action, &focus_handle, cx)),
                         )
                         .on_click(cx.listener(move |_, _, window, cx| {
@@ -438,7 +444,7 @@ impl PickerDelegate for SidebarRecentProjectsDelegate {
                                 .w_full()
                                 .gap_1()
                                 .justify_between()
-                                .child(Label::new("Add Remote Folder"))
+                                .child(Label::new(terminology.add_remote_folder()))
                                 .child(KeyBinding::for_action(
                                     &OpenRemote {
                                         from_existing_connection: false,
