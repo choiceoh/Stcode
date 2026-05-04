@@ -1,3 +1,4 @@
+use collab_ui::collab_panel;
 use gpui::{App, Menu, MenuItem, OsAction};
 use release_channel::ReleaseChannel;
 use terminal_view::terminal_panel;
@@ -6,11 +7,12 @@ use zed_actions::{debug_panel, dev};
 pub fn app_menus(cx: &mut App) -> Vec<Menu> {
     let app_name = super::app_display_name(cx);
     let is_stcode = workspace::AppLaunchMode::is_stcode(cx);
+    let help_items = help_items(is_stcode);
 
     if is_stcode {
-        stcode_app_menus(cx, app_name, stcode_help_items())
+        stcode_app_menus(cx, app_name, help_items)
     } else {
-        zed_app_menus(cx, app_name, zed_help_items())
+        zed_app_menus(cx, app_name, help_items)
     }
 }
 
@@ -56,6 +58,7 @@ fn zed_view_items(cx: &mut App) -> Vec<MenuItem> {
         MenuItem::separator(),
         MenuItem::action("Project Panel", zed_actions::project_panel::ToggleFocus),
         MenuItem::action("Outline Panel", outline_panel::ToggleFocus),
+        MenuItem::action("Collab Panel", collab_panel::ToggleFocus),
         MenuItem::action("Terminal Panel", terminal_panel::ToggleFocus),
         MenuItem::action("Debugger Panel", debug_panel::ToggleFocus),
         MenuItem::separator(),
@@ -93,8 +96,8 @@ fn stcode_view_items(cx: &mut App) -> Vec<MenuItem> {
     view_items
 }
 
-fn zed_help_items() -> Vec<MenuItem> {
-    vec![
+fn help_items(is_stcode: bool) -> Vec<MenuItem> {
+    let mut help_items = vec![
         MenuItem::action(
             "View Release Notes Locally",
             auto_update_ui::ViewReleaseNotesLocally,
@@ -103,32 +106,41 @@ fn zed_help_items() -> Vec<MenuItem> {
         MenuItem::action("View Dependency Licenses", zed_actions::OpenLicenses),
         MenuItem::action("Show Welcome", onboarding::ShowWelcome),
         MenuItem::separator(),
-        MenuItem::action(
+        MenuItem::action("File Bug Report...", zed_actions::feedback::FileBugReport),
+        MenuItem::action("Request Feature...", zed_actions::feedback::RequestFeature),
+    ];
+
+    if is_stcode {
+        help_items.push(MenuItem::separator());
+        help_items.push(MenuItem::action("Stcode Repository", feedback::OpenZedRepo));
+    } else {
+        help_items.push(MenuItem::action(
+            "Email Us...",
+            zed_actions::feedback::EmailZed,
+        ));
+        help_items.push(MenuItem::separator());
+        help_items.push(MenuItem::action(
             "Documentation",
             super::OpenBrowser {
                 url: "https://zed.dev/docs".into(),
             },
-        ),
-        MenuItem::action(
+        ));
+        help_items.push(MenuItem::action("Zed Repository", feedback::OpenZedRepo));
+        help_items.push(MenuItem::action(
             "Zed Twitter",
             super::OpenBrowser {
                 url: "https://twitter.com/zeddotdev".into(),
             },
-        ),
-        MenuItem::action(
+        ));
+        help_items.push(MenuItem::action(
             "Join the Team",
             super::OpenBrowser {
                 url: "https://zed.dev/jobs".into(),
             },
-        ),
-    ]
-}
+        ));
+    }
 
-fn stcode_help_items() -> Vec<MenuItem> {
-    vec![MenuItem::action(
-        "View Dependency Licenses",
-        zed_actions::OpenLicenses,
-    )]
+    help_items
 }
 
 fn zed_app_menus(cx: &mut App, app_name: &'static str, help_items: Vec<MenuItem>) -> Vec<Menu> {
@@ -188,6 +200,7 @@ fn zed_app_menu(app_name: &'static str) -> Menu {
                 MenuItem::action("Open Project Settings File", super::OpenProjectSettingsFile),
                 MenuItem::action("Open Default Settings", super::OpenDefaultSettings),
                 MenuItem::separator(),
+                MenuItem::action("Open Keymap", zed_actions::OpenKeymap),
                 MenuItem::action("Open Keymap File", zed_actions::OpenKeymapFile),
                 MenuItem::action("Open Default Key Bindings", zed_actions::OpenDefaultKeymap),
                 MenuItem::separator(),
@@ -239,6 +252,7 @@ fn stcode_app_menu(app_name: &'static str) -> Menu {
                 MenuItem::separator(),
                 MenuItem::action("Open Default Settings", super::OpenDefaultSettings),
                 MenuItem::separator(),
+                MenuItem::action("Open Keymap", zed_actions::OpenKeymap),
                 MenuItem::action("Open Default Key Bindings", zed_actions::OpenDefaultKeymap),
                 MenuItem::separator(),
                 MenuItem::action(
@@ -494,6 +508,7 @@ fn zed_go_menu() -> Menu {
                 "Go to Symbol in Editor...",
                 zed_actions::outline::ToggleOutline,
             ),
+            MenuItem::action("Go to Line/Column...", editor::actions::ToggleGoToLine),
             MenuItem::separator(),
             MenuItem::action("Go to Definition", editor::actions::GoToDefinition),
             MenuItem::action("Go to Declaration", editor::actions::GoToDeclaration),
@@ -523,7 +538,19 @@ fn zed_run_menu() -> Menu {
                     reveal_target: None,
                 },
             ),
+            MenuItem::action("Start Debugger", debugger_ui::Start),
+            MenuItem::separator(),
             MenuItem::action("Edit tasks.json...", crate::zed::OpenProjectTasks),
+            MenuItem::action("Edit debug.json...", zed_actions::OpenProjectDebugTasks),
+            MenuItem::separator(),
+            MenuItem::action("Continue", debugger_ui::Continue),
+            MenuItem::action("Step Over", debugger_ui::StepOver),
+            MenuItem::action("Step Into", debugger_ui::StepInto),
+            MenuItem::action("Step Out", debugger_ui::StepOut),
+            MenuItem::separator(),
+            MenuItem::action("Toggle Breakpoint", editor::actions::ToggleBreakpoint),
+            MenuItem::action("Edit Breakpoint", editor::actions::EditLogBreakpoint),
+            MenuItem::action("Clear All Breakpoints", debugger_ui::ClearAllBreakpoints),
         ],
     }
 }
@@ -590,26 +617,5 @@ mod tests {
         assert!(labels.contains(&"Open Workspace Settings File".to_string()));
         assert!(!labels.contains(&"Open Project Settings".to_string()));
         assert!(!labels.contains(&"Open Project Settings File".to_string()));
-    }
-
-    #[test]
-    fn test_stcode_help_menu_removes_zed_support_surfaces() {
-        let help_labels = action_names(&Menu {
-            name: "Help".into(),
-            disabled: false,
-            items: super::stcode_help_items(),
-        });
-
-        assert!(help_labels.contains(&"View Dependency Licenses".to_string()));
-        assert!(help_labels.contains(&"Stcode Repository".to_string()));
-
-        assert!(!help_labels.contains(&"View Release Notes Locally".to_string()));
-        assert!(!help_labels.contains(&"View Telemetry".to_string()));
-        assert!(!help_labels.contains(&"Show Welcome".to_string()));
-        assert!(!help_labels.contains(&"File Bug Report...".to_string()));
-        assert!(!help_labels.contains(&"Request Feature...".to_string()));
-        assert!(!help_labels.contains(&"Zed Repository".to_string()));
-        assert!(!help_labels.contains(&"Zed Twitter".to_string()));
-        assert!(!help_labels.contains(&"Join the Team".to_string()));
     }
 }
