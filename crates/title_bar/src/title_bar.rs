@@ -1,4 +1,5 @@
 mod application_menu;
+pub mod collab;
 mod onboarding_banner;
 mod plan_chip;
 mod title_bar_settings;
@@ -20,6 +21,7 @@ use crate::application_menu::{
 };
 
 use auto_update::AutoUpdateStatus;
+use call::ActiveCall;
 use client::{Client, UserStore, zed_urls};
 use cloud_api_types::Plan;
 
@@ -39,8 +41,8 @@ use std::time::Duration;
 use theme::ActiveTheme;
 use title_bar_settings::TitleBarSettings;
 use ui::{
-    Avatar, ButtonLike, ContextMenu, IconWithIndicator, Indicator, PopoverMenu, TintColor, Tooltip,
-    prelude::*, utils::platform_title_bar_height,
+    Avatar, ButtonLike, ContextMenu, IconWithIndicator, Indicator, PopoverMenu, PopoverMenuHandle,
+    TintColor, Tooltip, prelude::*, utils::platform_title_bar_height,
 };
 use update_version::UpdateVersion;
 use util::ResultExt;
@@ -212,6 +214,8 @@ pub struct TitleBar {
     _subscriptions: Vec<Subscription>,
     banner: Option<Entity<OnboardingBanner>>,
     update_version: Entity<UpdateVersion>,
+    screen_share_popover_handle: PopoverMenuHandle<ContextMenu>,
+    _diagnostics_subscription: Option<gpui::Subscription>,
 }
 
 impl Render for TitleBar {
@@ -302,6 +306,8 @@ impl Render for TitleBar {
                 .into_any_element(),
         );
 
+        children.push(self.render_collaborator_list(window, cx).into_any_element());
+
         if title_bar_settings.show_onboarding_banner {
             if let Some(banner) = &self.banner {
                 children.push(banner.clone().into_any_element())
@@ -337,6 +343,7 @@ impl Render for TitleBar {
                 })
                 .gap_1()
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .children(self.render_call_controls(window, cx))
                 .children(self.render_connection_status(status, cx))
                 .child(self.update_version.clone())
                 .when(
@@ -415,6 +422,7 @@ impl TitleBar {
         let git_store = project.read(cx).git_store().clone();
         let user_store = workspace.app_state().user_store.clone();
         let client = workspace.app_state().client.clone();
+        let active_call = ActiveCall::global(cx);
 
         let platform_style = PlatformStyle::platform();
         let application_menu = match platform_style {
@@ -437,6 +445,8 @@ impl TitleBar {
             }),
         );
 
+        subscriptions.push(cx.observe(&active_call, |this, _, cx| this.active_call_changed(cx)));
+        subscriptions.push(cx.observe_window_activation(window, Self::window_activation_changed));
         subscriptions.push(
             cx.subscribe(&git_store, move |_, _, event, cx| match event {
                 GitStoreEvent::ActiveRepositoryChanged(_)
@@ -473,7 +483,7 @@ impl TitleBar {
             titlebar
         });
 
-        let this = Self {
+        let mut this = Self {
             platform_titlebar,
             application_menu,
             workspace: workspace.weak_handle(),
@@ -484,7 +494,11 @@ impl TitleBar {
             _subscriptions: subscriptions,
             banner: None,
             update_version,
+            screen_share_popover_handle: PopoverMenuHandle::default(),
+            _diagnostics_subscription: None,
         };
+
+        this.observe_diagnostics(cx);
 
         this
     }
@@ -553,6 +567,7 @@ impl TitleBar {
                 terminology.remote(),
                 IconName::Server,
             ),
+            RemoteConnectionOptions::Wsl(_) => (None, terminology.remote(), IconName::Linux),
             RemoteConnectionOptions::Docker(_dev_container_connection) => {
                 (None, "Dev Container", IconName::Box)
             }
@@ -1050,13 +1065,62 @@ impl TitleBar {
         )
     }
 
+    fn window_activation_changed(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if window.is_window_active() {
+            ActiveCall::global(cx)
+                .update(cx, |call, cx| call.set_location(Some(&self.project), cx))
+                .detach_and_log_err(cx);
+        } else if cx.active_window().is_none() {
+            ActiveCall::global(cx)
+                .update(cx, |call, cx| call.set_location(None, cx))
+                .detach_and_log_err(cx);
+        }
+        self.workspace
+            .update(cx, |workspace, cx| {
+                workspace.update_active_view_for_followers(window, cx);
+            })
+            .ok();
+    }
+
+    fn active_call_changed(&mut self, cx: &mut Context<Self>) {
+        self.observe_diagnostics(cx);
+        cx.notify();
+    }
+
+    fn observe_diagnostics(&mut self, cx: &mut Context<Self>) {
+        let diagnostics = ActiveCall::global(cx)
+            .read(cx)
+            .room()
+            .and_then(|room| room.read(cx).diagnostics().cloned());
+
+        if let Some(diagnostics) = diagnostics {
+            self._diagnostics_subscription = Some(cx.observe(&diagnostics, |_, _, cx| cx.notify()));
+        } else {
+            self._diagnostics_subscription = None;
+        }
+    }
+
+    fn share_project(&mut self, cx: &mut Context<Self>) {
+        let active_call = ActiveCall::global(cx);
+        let project = self.project.clone();
+        active_call
+            .update(cx, |call, cx| call.share_project(project, cx))
+            .detach_and_log_err(cx);
+    }
+
+    fn unshare_project(&mut self, _: &mut Window, cx: &mut Context<Self>) {
+        let active_call = ActiveCall::global(cx);
+        let project = self.project.clone();
+        active_call
+            .update(cx, |call, cx| call.unshare_project(project, cx))
+            .log_err();
+    }
+
     fn render_connection_status(
         &self,
         status: &client::Status,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
-        let is_stcode = AppLaunchMode::is_stcode(cx);
-
         match status {
             client::Status::ConnectionError
             | client::Status::ConnectionLost
@@ -1072,25 +1136,13 @@ impl TitleBar {
             client::Status::UpgradeRequired => {
                 let auto_updater = auto_update::AutoUpdater::get(cx);
                 let label = match auto_updater.map(|auto_update| auto_update.read(cx).status()) {
-                    Some(AutoUpdateStatus::Updated { .. }) => {
-                        if is_stcode {
-                            "Please restart Stcode to reconnect"
-                        } else {
-                            "Please restart Zed to Collaborate"
-                        }
-                    }
+                    Some(AutoUpdateStatus::Updated { .. }) => "Please restart Zed to Collaborate",
                     Some(AutoUpdateStatus::Installing { .. })
                     | Some(AutoUpdateStatus::Downloading { .. })
                     | Some(AutoUpdateStatus::Checking) => "Updating...",
                     Some(AutoUpdateStatus::Idle)
                     | Some(AutoUpdateStatus::Errored { .. })
-                    | None => {
-                        if is_stcode {
-                            "Please update Stcode to reconnect"
-                        } else {
-                            "Please update Zed to Collaborate"
-                        }
-                    }
+                    | None => "Please update Zed to Collaborate",
                 };
 
                 Some(
@@ -1112,15 +1164,10 @@ impl TitleBar {
         }
     }
 
-    pub fn render_sign_in_button(&mut self, cx: &mut Context<Self>) -> Button {
+    pub fn render_sign_in_button(&mut self, _: &mut Context<Self>) -> Button {
         let client = self.client.clone();
         let workspace = self.workspace.clone();
-        let label = if AppLaunchMode::is_stcode(cx) {
-            "Connect Account"
-        } else {
-            "Sign In"
-        };
-        Button::new("sign_in", label)
+        Button::new("sign_in", "Sign In")
             .label_size(LabelSize::Small)
             .on_click(move |_, window, cx| {
                 let client = client.clone();
@@ -1138,7 +1185,6 @@ impl TitleBar {
 
     pub fn render_user_menu_button(&mut self, cx: &mut Context<Self>) -> impl Element {
         let show_update_button = self.update_version.read(cx).show_update_in_menu_bar();
-        let is_stcode = AppLaunchMode::is_stcode(cx);
 
         let user_store = self.user_store.clone();
         let user_store_read = user_store.read(cx);
@@ -1219,15 +1265,13 @@ impl TitleBar {
                                     .w_full()
                                     .justify_between()
                                     .child(Label::new(user_login))
-                                    .when(!has_organization && !is_stcode, |parent| {
+                                    .when(!has_organization, |parent| {
                                         parent.child(PlanChip::new(plan.unwrap_or(Plan::ZedFree)))
                                     })
                                     .into_any_element()
                             },
                             move |_, cx| {
-                                if !is_stcode {
-                                    cx.open_url(&zed_urls::account_url(cx));
-                                }
+                                cx.open_url(&zed_urls::account_url(cx));
                             },
                         )
                         .separator()
@@ -1239,14 +1283,7 @@ impl TitleBar {
                                     .w_full()
                                     .gap_1()
                                     .justify_between()
-                                    .child(
-                                        Label::new(if is_stcode {
-                                            "Restart to update Stcode"
-                                        } else {
-                                            "Restart to update Zed"
-                                        })
-                                        .color(Color::Accent),
-                                    )
+                                    .child(Label::new("Restart to update Zed").color(Color::Accent))
                                     .child(
                                         Icon::new(IconName::Download)
                                             .size(IconSize::Small)
@@ -1293,9 +1330,7 @@ impl TitleBar {
                                                         )
                                                     }),
                                             )
-                                            .when(!is_stcode, |this| {
-                                                this.children(plan.map(|plan| PlanChip::new(plan)))
-                                            })
+                                            .children(plan.map(|plan| PlanChip::new(plan)))
                                             .into_any_element()
                                     }
                                 },
@@ -1315,6 +1350,7 @@ impl TitleBar {
                         this.separator()
                     })
                     .action("Settings", zed_actions::OpenSettings.boxed_clone())
+                    .action("Keymap", Box::new(zed_actions::OpenKeymap))
                     .action(
                         "Themes…",
                         zed_actions::theme_selector::Toggle::default().boxed_clone(),
