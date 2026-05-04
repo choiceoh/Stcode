@@ -30,6 +30,7 @@ The `stcode` binary should:
 - use Stcode workspace terminology in the File and Settings menus, including workspace-specific settings and multi-root workspace actions
 - render a Stcode-only workspace activity timeline in the agent panel so users can see whether the agent is ready, working, waiting for approval, or blocked by a failed tool
 - render an AI Smart Start guard when uncommitted workspace changes remain, with direct paths to review them with the agent, split into an isolated worktree, stash them, or commit them
+- render an AI Smart Parallel card that detects whether the current session is already in an isolated worktree lane, is still on the main checkout, or overlaps a branch used by another linked worktree, with direct paths to create or manage lanes
 - render an AI Smart Merge readiness card that explains whether the current branch is clean enough for merge prep, blocked by local changes or conflicts, or still on a base branch, with direct paths to review the merge diff, commit, or open a PR
 
 The terminal panel is hidden by default in Stcode mode because users should not need to operate a terminal directly. This does not remove terminal or execution support. Agent tools and workspace execution surfaces remain available; Stcode surfaces progress through the agent panel, tool cards, and the workspace activity timeline.

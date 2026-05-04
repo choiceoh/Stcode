@@ -9,7 +9,9 @@ use project::{
 };
 use ui::{Button, ButtonStyle, Icon, IconName, Label, LabelSize, prelude::*};
 use util::truncate_and_trailoff;
-use zed_actions::{agent::ReviewBranchDiff, git as zed_git};
+use zed_actions::{
+    CreateWorktree, NewWorktreeBranchTarget, agent::ReviewBranchDiff, git as zed_git,
+};
 
 const MAX_TIMELINE_ENTRIES: usize = 4;
 const MAX_ENTRY_LABEL_CHARS: usize = 72;
@@ -36,6 +38,7 @@ impl RenderOnce for StcodeActivityTimeline {
             None => ActivitySnapshot::empty(),
         };
         let smart_start = SmartStartSnapshot::from_project(&self.project, cx);
+        let smart_parallel = SmartParallelSnapshot::from_project(&self.project, cx);
         let smart_merge = SmartMergeSnapshot::from_project(&self.project, cx);
 
         v_flex()
@@ -85,6 +88,7 @@ impl RenderOnce for StcodeActivityTimeline {
                     ),
             )
             .children(smart_start.map(|snapshot| render_smart_start_guard(snapshot, cx)))
+            .children(smart_parallel.map(|snapshot| render_smart_parallel_card(snapshot, cx)))
             .children(smart_merge.map(|snapshot| render_smart_merge_card(snapshot, cx)))
             .children(snapshot.entries.into_iter().map(render_activity_entry))
     }
@@ -168,6 +172,100 @@ fn render_smart_start_guard(snapshot: SmartStartSnapshot, cx: &mut App) -> impl 
                         .style(ButtonStyle::Outlined)
                         .on_click(move |_, window, cx| {
                             window.dispatch_action(commit_action.boxed_clone(), cx);
+                        }),
+                ),
+        )
+}
+
+fn render_smart_parallel_card(snapshot: SmartParallelSnapshot, cx: &mut App) -> impl IntoElement {
+    let create_lane_action = CreateWorktree {
+        worktree_name: None,
+        branch_target: NewWorktreeBranchTarget::CurrentBranch,
+    }
+    .boxed_clone();
+    let manage_lanes_action = zed_git::Worktree.boxed_clone();
+    let (border_color, background_color) = match snapshot.tone {
+        ActivityTone::Done => (
+            cx.theme().status().success_border,
+            cx.theme().status().success_background,
+        ),
+        ActivityTone::Failed => (
+            cx.theme().status().error_border,
+            cx.theme().status().error_background,
+        ),
+        _ => (
+            cx.theme().status().warning_border,
+            cx.theme().status().warning_background,
+        ),
+    };
+
+    v_flex()
+        .id("stcode-smart-parallel-card")
+        .mt_1()
+        .gap_2()
+        .rounded_sm()
+        .border_1()
+        .border_color(border_color)
+        .bg(background_color)
+        .p_2()
+        .child(
+            h_flex()
+                .w_full()
+                .gap_2()
+                .items_start()
+                .child(
+                    Icon::new(snapshot.icon)
+                        .size(IconSize::Small)
+                        .color(snapshot.tone.color()),
+                )
+                .child(
+                    v_flex()
+                        .min_w_0()
+                        .flex_1()
+                        .gap_0p5()
+                        .child(
+                            h_flex()
+                                .w_full()
+                                .justify_between()
+                                .gap_2()
+                                .child(
+                                    Label::new("AI Smart Parallel")
+                                        .size(LabelSize::Small)
+                                        .color(Color::Default),
+                                )
+                                .child(
+                                    Label::new(snapshot.status)
+                                        .size(LabelSize::XSmall)
+                                        .color(snapshot.tone.color()),
+                                ),
+                        )
+                        .child(
+                            Label::new(snapshot.detail)
+                                .size(LabelSize::XSmall)
+                                .color(Color::Muted)
+                                .truncate(),
+                        ),
+                ),
+        )
+        .child(
+            h_flex()
+                .w_full()
+                .gap_1()
+                .flex_wrap()
+                .child(
+                    Button::new("stcode-smart-parallel-create-lane", "Create Lane")
+                        .label_size(LabelSize::XSmall)
+                        .style(ButtonStyle::Outlined)
+                        .on_click(move |_, window, cx| {
+                            window.dispatch_action(create_lane_action.boxed_clone(), cx);
+                        }),
+                )
+                .child(
+                    Button::new("stcode-smart-parallel-manage-lanes", "Manage Lanes")
+                        .label_size(LabelSize::XSmall)
+                        .style(ButtonStyle::Outlined)
+                        .on_click(move |_, window, cx| {
+                            window.dispatch_action(manage_lanes_action.boxed_clone(), cx);
                         }),
                 ),
         )
@@ -362,6 +460,159 @@ fn smart_start_detail(branch_name: Option<&str>, entries: &[StatusEntry]) -> Str
     format!(
         "{changed_count} changed {file_label} remain on {branch}: {staged_count} staged, {unstaged_count} unstaged. Choose how to hand them off before starting clean."
     )
+}
+
+#[derive(Clone)]
+struct SmartParallelSnapshot {
+    status: &'static str,
+    detail: String,
+    icon: IconName,
+    tone: ActivityTone,
+}
+
+impl SmartParallelSnapshot {
+    fn from_project(project: &Entity<Project>, cx: &App) -> Option<Self> {
+        let repository = project.read(cx).active_repository(cx)?;
+        let repository_ref = repository.read(cx);
+        let branch_name = repository_ref
+            .branch
+            .as_ref()
+            .map(|branch| branch.name().to_string());
+        let branch_ref = repository_ref
+            .branch
+            .as_ref()
+            .map(|branch| branch.ref_name.to_string());
+        let duplicate_branch_count = branch_ref
+            .as_deref()
+            .map(|branch_ref| {
+                repository_ref
+                    .linked_worktrees()
+                    .iter()
+                    .filter(|worktree| {
+                        worktree
+                            .ref_name
+                            .as_ref()
+                            .is_some_and(|ref_name| ref_name.as_ref() == branch_ref)
+                    })
+                    .count()
+            })
+            .unwrap_or(0);
+        let linked_worktree_count = repository_ref.linked_worktrees().len();
+        let state =
+            smart_parallel_state(repository_ref.is_linked_worktree(), duplicate_branch_count);
+
+        Some(Self {
+            status: state.status(),
+            detail: smart_parallel_detail(
+                state,
+                branch_name.as_deref(),
+                linked_worktree_count,
+                duplicate_branch_count,
+            ),
+            icon: state.icon(),
+            tone: state.tone(),
+        })
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SmartParallelState {
+    Isolated,
+    NeedsLane,
+    BranchShared,
+}
+
+impl SmartParallelState {
+    fn status(self) -> &'static str {
+        match self {
+            SmartParallelState::Isolated => "Isolated",
+            SmartParallelState::NeedsLane => "Split recommended",
+            SmartParallelState::BranchShared => "Branch overlap",
+        }
+    }
+
+    fn icon(self) -> IconName {
+        match self {
+            SmartParallelState::Isolated => IconName::GitWorktree,
+            SmartParallelState::NeedsLane => IconName::GitBranchPlus,
+            SmartParallelState::BranchShared => IconName::GitMergeConflict,
+        }
+    }
+
+    fn tone(self) -> ActivityTone {
+        match self {
+            SmartParallelState::Isolated => ActivityTone::Done,
+            SmartParallelState::NeedsLane => ActivityTone::Waiting,
+            SmartParallelState::BranchShared => ActivityTone::Failed,
+        }
+    }
+}
+
+fn smart_parallel_state(
+    is_linked_worktree: bool,
+    duplicate_branch_count: usize,
+) -> SmartParallelState {
+    if duplicate_branch_count > 0 {
+        return SmartParallelState::BranchShared;
+    }
+
+    if is_linked_worktree {
+        SmartParallelState::Isolated
+    } else {
+        SmartParallelState::NeedsLane
+    }
+}
+
+fn smart_parallel_detail(
+    state: SmartParallelState,
+    branch_name: Option<&str>,
+    linked_worktree_count: usize,
+    duplicate_branch_count: usize,
+) -> String {
+    let branch = branch_name.unwrap_or("detached HEAD");
+
+    match state {
+        SmartParallelState::Isolated => {
+            if linked_worktree_count == 0 {
+                format!("{branch} is already running in an isolated lane for this session.")
+            } else {
+                let lane_label = if linked_worktree_count == 1 {
+                    "other lane"
+                } else {
+                    "other lanes"
+                };
+                format!(
+                    "{branch} is isolated from {linked_worktree_count} {lane_label}; parallel agents can work without sharing this checkout."
+                )
+            }
+        }
+        SmartParallelState::NeedsLane => {
+            if linked_worktree_count == 0 {
+                format!(
+                    "{branch} is still on the main checkout. Create a lane before starting parallel agent work."
+                )
+            } else {
+                let lane_label = if linked_worktree_count == 1 {
+                    "lane exists"
+                } else {
+                    "lanes exist"
+                };
+                format!(
+                    "{branch} is the main checkout while {linked_worktree_count} linked {lane_label}. Move this session into its own lane before parallel work."
+                )
+            }
+        }
+        SmartParallelState::BranchShared => {
+            let lane_label = if duplicate_branch_count == 1 {
+                "linked lane"
+            } else {
+                "linked lanes"
+            };
+            format!(
+                "{branch} also appears in {duplicate_branch_count} {lane_label}. Switch lanes or create a fresh lane before more agents edit it."
+            )
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -933,6 +1184,56 @@ mod tests {
 
         assert!(detail.contains("including 1 conflict"));
         assert!(detail.contains("Resolve or isolate them"));
+    }
+
+    #[test]
+    fn smart_parallel_state_recommends_lane_for_main_checkout() {
+        assert_eq!(
+            smart_parallel_state(false, 0),
+            SmartParallelState::NeedsLane
+        );
+    }
+
+    #[test]
+    fn smart_parallel_state_accepts_linked_worktree() {
+        assert_eq!(smart_parallel_state(true, 0), SmartParallelState::Isolated);
+    }
+
+    #[test]
+    fn smart_parallel_state_prioritizes_branch_overlap() {
+        assert_eq!(
+            smart_parallel_state(true, 1),
+            SmartParallelState::BranchShared
+        );
+        assert_eq!(
+            smart_parallel_state(false, 1),
+            SmartParallelState::BranchShared
+        );
+    }
+
+    #[test]
+    fn smart_parallel_detail_explains_main_checkout_risk() {
+        let detail = smart_parallel_detail(SmartParallelState::NeedsLane, Some("main"), 2, 0);
+
+        assert!(detail.contains("main is the main checkout"));
+        assert!(detail.contains("2 linked lanes exist"));
+        assert!(detail.contains("its own lane"));
+    }
+
+    #[test]
+    fn smart_parallel_detail_explains_isolated_lane() {
+        let detail = smart_parallel_detail(SmartParallelState::Isolated, Some("feature"), 1, 0);
+
+        assert!(detail.contains("feature is isolated"));
+        assert!(detail.contains("1 other lane"));
+    }
+
+    #[test]
+    fn smart_parallel_detail_explains_branch_overlap() {
+        let detail = smart_parallel_detail(SmartParallelState::BranchShared, Some("feature"), 2, 2);
+
+        assert!(detail.contains("feature also appears"));
+        assert!(detail.contains("2 linked lanes"));
     }
 
     #[test]
