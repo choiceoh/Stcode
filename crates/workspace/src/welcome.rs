@@ -20,7 +20,7 @@ use settings::Settings;
 use ui::{ButtonLike, Divider, DividerColor, KeyBinding, Vector, VectorName, prelude::*};
 use util::ResultExt;
 use zed_actions::{
-    Extensions, OpenOnboarding, OpenSettings, agent::OpenSettings as OpenAgentSettings,
+    Extensions, OpenKeymap, OpenOnboarding, OpenSettings, agent::OpenSettings as OpenAgentSettings,
     assistant::ToggleFocus, command_palette,
 };
 
@@ -188,7 +188,7 @@ impl WelcomeMode {
 
     fn tagline(self) -> &'static str {
         match self {
-            Self::Stcode => "Hand off code work to agents",
+            Self::Stcode => "The agent workspace for what's next",
             Self::Zed => "The editor for what's next",
         }
     }
@@ -202,7 +202,7 @@ impl WelcomeMode {
 
     fn agent_card_title(self) -> &'static str {
         match self {
-            Self::Stcode => "Start with a prompt",
+            Self::Stcode => "Work with Stcode Agent",
             Self::Zed => "Collaborate with Agents",
         }
     }
@@ -210,7 +210,7 @@ impl WelcomeMode {
     fn agent_card_description(self) -> &'static str {
         match self {
             Self::Stcode => {
-                "Describe the change, let agents inspect the workspace, run checks, and return a clean handoff."
+                "Start a thread, let agents inspect the workspace, run tools, and return changes without making the terminal the primary interface."
             }
             Self::Zed => {
                 "Run multiple threads at once, mix and match any ACP-compatible agent, and keep work conflict-free with worktrees."
@@ -220,20 +220,20 @@ impl WelcomeMode {
 
     fn agent_button_label(self) -> &'static str {
         match self {
-            Self::Stcode => "Start Agent Thread",
+            Self::Stcode => "Open Stcode Agent",
             Self::Zed => "Open Agent Panel",
         }
     }
 
     fn onboarding_button_label(self) -> &'static str {
         match self {
-            Self::Stcode => "Back to Setup",
+            Self::Stcode => "Return to Setup",
             Self::Zed => "Return to Onboarding",
         }
     }
 }
 
-fn zed_content() -> (Section<4>, Section<2>) {
+fn zed_content() -> (Section<4>, Section<3>) {
     (
         Section {
             title: "Get Started",
@@ -274,6 +274,12 @@ fn zed_content() -> (Section<4>, Section<2>) {
                     visibility_guard: SectionVisibility::Always,
                 },
                 SectionEntry {
+                    icon: IconName::Keyboard,
+                    title: "Customize Keymaps",
+                    action: &OpenKeymap,
+                    visibility_guard: SectionVisibility::Always,
+                },
+                SectionEntry {
                     icon: IconName::Blocks,
                     title: "Explore Extensions",
                     action: &Extensions {
@@ -287,14 +293,14 @@ fn zed_content() -> (Section<4>, Section<2>) {
     )
 }
 
-fn stcode_content() -> (Section<4>, Section<2>) {
+fn stcode_content() -> (Section<4>, Section<3>) {
     (
         Section {
-            title: "Start Work",
+            title: "Get Started",
             entries: [
                 SectionEntry {
                     icon: IconName::ZedAgent,
-                    title: "Start Agent Thread",
+                    title: "Open Stcode Agent",
                     action: &ToggleFocus,
                     visibility_guard: SectionVisibility::Always,
                 },
@@ -306,7 +312,7 @@ fn stcode_content() -> (Section<4>, Section<2>) {
                 },
                 SectionEntry {
                     icon: IconName::CloudDownload,
-                    title: "Clone Workspace",
+                    title: "Clone Repository",
                     action: &GitClone,
                     visibility_guard: SectionVisibility::Always,
                 },
@@ -319,12 +325,18 @@ fn stcode_content() -> (Section<4>, Section<2>) {
             ],
         },
         Section {
-            title: "Tune Setup",
+            title: "Configure",
             entries: [
                 SectionEntry {
                     icon: IconName::Settings,
                     title: "Open App Settings",
                     action: &OpenSettings,
+                    visibility_guard: SectionVisibility::Always,
+                },
+                SectionEntry {
+                    icon: IconName::Keyboard,
+                    title: "Customize Keymaps",
+                    action: &OpenKeymap,
                     visibility_guard: SectionVisibility::Always,
                 },
                 SectionEntry {
@@ -842,7 +854,7 @@ mod tests {
         );
         assert_eq!(
             WelcomeMode::Stcode.agent_button_label(),
-            "Start Agent Thread"
+            "Open Stcode Agent"
         );
     }
 }
