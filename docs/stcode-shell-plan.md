@@ -28,8 +28,9 @@ The `stcode` binary should:
 - use Stcode workspace terminology in recent workspace pickers, sidebars, and remote workspace selection surfaces
 - use Stcode workspace terminology in title bar workspace controls, remote workspace status, trust prompts, and shared-workspace hints
 - use Stcode workspace terminology in the File and Settings menus, including workspace-specific settings and multi-root workspace actions
-- render a Stcode-only workspace activity timeline in the agent panel so users can see whether the agent is ready, working, waiting for approval, or blocked by a failed tool
+- render a Stcode-only workspace activity timeline in the agent panel so users can see whether the agent is ready, working, blocked by tool permission, or blocked by a failed tool
 - render an AI Smart Panel work snapshot that summarizes the active branch, local changed files, staged and unstaged counts, conflicts, line-level diff stats, and the first files that need review
+- render an AI Smart Todo card that summarizes the live agent plan, next action, autonomy blockers, tool failures, and completed/pending progress
 - render an AI Smart Start guard when uncommitted workspace changes remain, with direct paths to review them with the agent, split into an isolated worktree, stash them, or commit them
 - render an AI Smart Parallel card that detects whether the current session is already in an isolated worktree lane, is still on the main checkout, or overlaps a branch used by another linked worktree, with direct paths to create or manage lanes
 - render an AI Smart Merge readiness card that explains whether the current branch is clean enough for merge prep, blocked by local changes or conflicts, or still on a base branch, with direct paths to review the merge diff, commit, or open a PR

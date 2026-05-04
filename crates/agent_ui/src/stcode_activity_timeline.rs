@@ -16,6 +16,8 @@ use zed_actions::{
 const MAX_TIMELINE_ENTRIES: usize = 4;
 const MAX_ENTRY_LABEL_CHARS: usize = 72;
 const MAX_SMART_PANEL_FILES: usize = 3;
+const MAX_SMART_TODO_ENTRIES: usize = 4;
+const MAX_TODO_LABEL_CHARS: usize = 84;
 
 #[derive(IntoElement)]
 pub(crate) struct StcodeActivityTimeline {
@@ -31,12 +33,15 @@ impl StcodeActivityTimeline {
 
 impl RenderOnce for StcodeActivityTimeline {
     fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
-        let snapshot = match self.thread {
+        let (snapshot, smart_todo) = match self.thread {
             Some(thread) => {
                 let thread = thread.read(cx);
-                ActivitySnapshot::from_thread(thread, cx)
+                (
+                    ActivitySnapshot::from_thread(thread, cx),
+                    SmartTodoSnapshot::from_thread(thread, cx),
+                )
             }
-            None => ActivitySnapshot::empty(),
+            None => (ActivitySnapshot::empty(), None),
         };
         let smart_start = SmartStartSnapshot::from_project(&self.project, cx);
         let smart_panel = SmartPanelSnapshot::from_project(&self.project, cx);
@@ -90,6 +95,7 @@ impl RenderOnce for StcodeActivityTimeline {
                     ),
             )
             .children(smart_panel.map(|snapshot| render_smart_panel_card(snapshot, cx)))
+            .children(smart_todo.map(|snapshot| render_smart_todo_card(snapshot, cx)))
             .children(smart_start.map(|snapshot| render_smart_start_guard(snapshot, cx)))
             .children(smart_parallel.map(|snapshot| render_smart_parallel_card(snapshot, cx)))
             .children(smart_merge.map(|snapshot| render_smart_merge_card(snapshot, cx)))
@@ -386,6 +392,154 @@ fn render_smart_panel_file(file: SmartPanelFile) -> impl IntoElement {
                     Label::new(file.status)
                         .size(LabelSize::XSmall)
                         .color(file.tone.color()),
+                ),
+        )
+}
+
+fn render_smart_todo_card(snapshot: SmartTodoSnapshot, cx: &mut App) -> impl IntoElement {
+    let (border_color, background_color) = match snapshot.tone {
+        ActivityTone::Done => (
+            cx.theme().status().success_border,
+            cx.theme().status().success_background,
+        ),
+        ActivityTone::Failed => (
+            cx.theme().status().error_border,
+            cx.theme().status().error_background,
+        ),
+        _ => (
+            cx.theme().status().warning_border,
+            cx.theme().status().warning_background,
+        ),
+    };
+
+    v_flex()
+        .id("stcode-smart-todo-card")
+        .mt_1()
+        .gap_2()
+        .rounded_sm()
+        .border_1()
+        .border_color(border_color)
+        .bg(background_color)
+        .p_2()
+        .child(
+            h_flex()
+                .w_full()
+                .gap_2()
+                .items_start()
+                .child(
+                    Icon::new(snapshot.icon)
+                        .size(IconSize::Small)
+                        .color(snapshot.tone.color()),
+                )
+                .child(
+                    v_flex()
+                        .min_w_0()
+                        .flex_1()
+                        .gap_0p5()
+                        .child(
+                            h_flex()
+                                .w_full()
+                                .justify_between()
+                                .gap_2()
+                                .child(
+                                    Label::new("AI Smart Todo")
+                                        .size(LabelSize::Small)
+                                        .color(Color::Default),
+                                )
+                                .child(
+                                    Label::new(snapshot.status)
+                                        .size(LabelSize::XSmall)
+                                        .color(snapshot.tone.color()),
+                                ),
+                        )
+                        .child(
+                            Label::new(snapshot.detail)
+                                .size(LabelSize::XSmall)
+                                .color(Color::Muted)
+                                .truncate(),
+                        ),
+                ),
+        )
+        .child(
+            h_flex()
+                .w_full()
+                .gap_1()
+                .flex_wrap()
+                .child(render_smart_todo_metric(
+                    "progress",
+                    snapshot.progress_label,
+                    ActivityTone::Done,
+                    cx,
+                ))
+                .child(render_smart_todo_metric(
+                    "left",
+                    snapshot.left_label,
+                    snapshot.tone,
+                    cx,
+                )),
+        )
+        .child(
+            v_flex()
+                .w_full()
+                .gap_1()
+                .when(snapshot.items.is_empty(), |this| {
+                    this.child(
+                        Label::new("No active todo items")
+                            .size(LabelSize::XSmall)
+                            .color(Color::Muted),
+                    )
+                })
+                .children(snapshot.items.into_iter().map(render_smart_todo_item)),
+        )
+}
+
+fn render_smart_todo_metric(
+    id: &'static str,
+    label: String,
+    tone: ActivityTone,
+    cx: &mut App,
+) -> impl IntoElement {
+    h_flex()
+        .id(format!("stcode-smart-todo-metric-{id}"))
+        .gap_1()
+        .px_1p5()
+        .py_0p5()
+        .rounded_sm()
+        .border_1()
+        .border_color(cx.theme().colors().border)
+        .child(
+            Label::new(label)
+                .size(LabelSize::XSmall)
+                .color(tone.color()),
+        )
+}
+
+fn render_smart_todo_item(item: SmartTodoItem) -> impl IntoElement {
+    h_flex()
+        .id(("stcode-smart-todo-item", item.id))
+        .w_full()
+        .min_w_0()
+        .gap_2()
+        .child(
+            Icon::new(item.icon)
+                .size(IconSize::XSmall)
+                .color(item.tone.color()),
+        )
+        .child(
+            h_flex()
+                .min_w_0()
+                .flex_1()
+                .gap_2()
+                .child(
+                    Label::new(item.label)
+                        .size(LabelSize::XSmall)
+                        .color(Color::Default)
+                        .truncate(),
+                )
+                .child(
+                    Label::new(item.status)
+                        .size(LabelSize::XSmall)
+                        .color(item.tone.color()),
                 ),
         )
 }
@@ -919,6 +1073,274 @@ fn smart_panel_file_status(status: FileStatus) -> (&'static str, IconName, Activ
 }
 
 #[derive(Clone)]
+struct SmartTodoSnapshot {
+    status: &'static str,
+    detail: String,
+    icon: IconName,
+    tone: ActivityTone,
+    progress_label: String,
+    left_label: String,
+    items: Vec<SmartTodoItem>,
+}
+
+impl SmartTodoSnapshot {
+    fn from_thread(thread: &AcpThread, cx: &App) -> Option<Self> {
+        let has_entries = !thread.entries().is_empty();
+        let plan = thread.plan();
+        let has_plan = !plan.is_empty();
+
+        if !has_entries && !has_plan {
+            return None;
+        }
+
+        let stats = plan.stats();
+        let total = plan.entries.len() as u32;
+        let completed = stats.completed;
+        let pending = stats.pending;
+        let current_label = stats
+            .in_progress_entry
+            .map(|entry| plan_entry_label(entry, cx));
+        let latest_tool = latest_tool_snapshot(thread, cx);
+        let latest_tool_label = latest_tool.as_ref().map(|tool| tool.label.clone());
+        let latest_tool_tone = latest_tool.as_ref().map(|tool| tool.tone);
+        let state = smart_todo_state(
+            has_plan,
+            pending,
+            thread.is_waiting_for_confirmation(),
+            thread.status() == ThreadStatus::Generating,
+            thread.has_in_progress_tool_calls(),
+            thread.had_error(),
+            latest_tool_tone,
+        );
+        let mut items = plan
+            .entries
+            .iter()
+            .enumerate()
+            .take(MAX_SMART_TODO_ENTRIES)
+            .map(|(id, entry)| SmartTodoItem::from_plan_entry(id, entry, cx))
+            .collect::<Vec<_>>();
+
+        if items.is_empty()
+            && let Some(tool) = latest_tool
+        {
+            items.push(SmartTodoItem {
+                id: 0,
+                label: tool.label,
+                status: tool.status,
+                icon: tool.icon,
+                tone: tool.tone,
+            });
+        }
+
+        Some(Self {
+            status: state.status(),
+            detail: smart_todo_detail(
+                state,
+                current_label.as_deref(),
+                latest_tool_label.as_deref(),
+                pending,
+                completed,
+                total,
+            ),
+            icon: state.icon(),
+            tone: state.tone(),
+            progress_label: smart_todo_progress_label(completed, total),
+            left_label: smart_todo_left_label(pending),
+            items,
+        })
+    }
+}
+
+#[derive(Clone)]
+struct SmartTodoItem {
+    id: usize,
+    label: String,
+    status: &'static str,
+    icon: IconName,
+    tone: ActivityTone,
+}
+
+impl SmartTodoItem {
+    fn from_plan_entry(id: usize, entry: &acp_thread::PlanEntry, cx: &App) -> Self {
+        let (status, icon, tone) = plan_entry_status(entry.status.clone());
+
+        Self {
+            id,
+            label: plan_entry_label(entry, cx),
+            status,
+            icon,
+            tone,
+        }
+    }
+}
+
+struct LatestToolSnapshot {
+    label: String,
+    status: &'static str,
+    icon: IconName,
+    tone: ActivityTone,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SmartTodoState {
+    Empty,
+    Planned,
+    Working,
+    AutonomyBlocked,
+    Blocked,
+    Complete,
+}
+
+impl SmartTodoState {
+    fn status(self) -> &'static str {
+        match self {
+            SmartTodoState::Empty => "No todo",
+            SmartTodoState::Planned => "Ready",
+            SmartTodoState::Working => "Working",
+            SmartTodoState::AutonomyBlocked => "Autonomy blocked",
+            SmartTodoState::Blocked => "Blocked",
+            SmartTodoState::Complete => "Complete",
+        }
+    }
+
+    fn icon(self) -> IconName {
+        match self {
+            SmartTodoState::Empty => IconName::ListTodo,
+            SmartTodoState::Planned => IconName::TodoPending,
+            SmartTodoState::Working => IconName::TodoProgress,
+            SmartTodoState::AutonomyBlocked => IconName::Warning,
+            SmartTodoState::Blocked => IconName::XCircle,
+            SmartTodoState::Complete => IconName::TodoComplete,
+        }
+    }
+
+    fn tone(self) -> ActivityTone {
+        match self {
+            SmartTodoState::Empty => ActivityTone::Idle,
+            SmartTodoState::Planned => ActivityTone::Waiting,
+            SmartTodoState::Working => ActivityTone::Running,
+            SmartTodoState::AutonomyBlocked => ActivityTone::Waiting,
+            SmartTodoState::Blocked => ActivityTone::Failed,
+            SmartTodoState::Complete => ActivityTone::Done,
+        }
+    }
+}
+
+fn smart_todo_state(
+    has_plan: bool,
+    pending: u32,
+    is_waiting_for_confirmation: bool,
+    is_generating: bool,
+    has_in_progress_tool_calls: bool,
+    had_error: bool,
+    latest_tool_tone: Option<ActivityTone>,
+) -> SmartTodoState {
+    if is_waiting_for_confirmation {
+        return SmartTodoState::AutonomyBlocked;
+    }
+
+    if had_error || latest_tool_tone.is_some_and(ActivityTone::needs_attention) {
+        return SmartTodoState::Blocked;
+    }
+
+    if is_generating || has_in_progress_tool_calls {
+        return SmartTodoState::Working;
+    }
+
+    if has_plan && pending > 0 {
+        return SmartTodoState::Planned;
+    }
+
+    if has_plan {
+        SmartTodoState::Complete
+    } else {
+        SmartTodoState::Empty
+    }
+}
+
+fn smart_todo_detail(
+    state: SmartTodoState,
+    current_label: Option<&str>,
+    latest_tool_label: Option<&str>,
+    pending: u32,
+    completed: u32,
+    total: u32,
+) -> String {
+    match state {
+        SmartTodoState::Empty => {
+            "No live todo plan yet. Ask the agent to break the task into tracked steps.".to_string()
+        }
+        SmartTodoState::Planned => {
+            let current = current_label.unwrap_or("next planned step");
+            format!("{pending} todo step(s) remain. Next: {current}.")
+        }
+        SmartTodoState::Working => {
+            let current = current_label
+                .or(latest_tool_label)
+                .unwrap_or("workspace work is running");
+            format!("Agent is working now: {current}.")
+        }
+        SmartTodoState::AutonomyBlocked => {
+            let tool = latest_tool_label.unwrap_or("a workspace tool");
+            format!("Autonomy blocker: {tool} is waiting on tool permission.")
+        }
+        SmartTodoState::Blocked => {
+            let tool = latest_tool_label.unwrap_or("the latest workspace step");
+            format!("Blocked by {tool}. Review the failure before starting more work.")
+        }
+        SmartTodoState::Complete => format!("{completed}/{total} todo step(s) complete."),
+    }
+}
+
+fn smart_todo_progress_label(completed: u32, total: u32) -> String {
+    if total == 0 {
+        "no plan".to_string()
+    } else {
+        format!("{completed}/{total} done")
+    }
+}
+
+fn smart_todo_left_label(pending: u32) -> String {
+    if pending == 1 {
+        "1 left".to_string()
+    } else {
+        format!("{pending} left")
+    }
+}
+
+fn plan_entry_label(entry: &acp_thread::PlanEntry, cx: &App) -> String {
+    truncate_and_trailoff(entry.content.read(cx).source().trim(), MAX_TODO_LABEL_CHARS)
+}
+
+fn plan_entry_status(status: acp::PlanEntryStatus) -> (&'static str, IconName, ActivityTone) {
+    match status {
+        acp::PlanEntryStatus::InProgress => {
+            ("Doing", IconName::TodoProgress, ActivityTone::Running)
+        }
+        acp::PlanEntryStatus::Completed => ("Done", IconName::TodoComplete, ActivityTone::Done),
+        acp::PlanEntryStatus::Pending | _ => {
+            ("Queued", IconName::TodoPending, ActivityTone::Waiting)
+        }
+    }
+}
+
+fn latest_tool_snapshot(thread: &AcpThread, cx: &App) -> Option<LatestToolSnapshot> {
+    thread.entries().iter().rev().find_map(|entry| {
+        let AgentThreadEntry::ToolCall(tool_call) = entry else {
+            return None;
+        };
+
+        let (status, tone) = tool_status_label(&tool_call.status);
+        Some(LatestToolSnapshot {
+            label: tool_call_label(tool_call, cx),
+            status,
+            icon: tool_kind_icon(tool_call.kind),
+            tone,
+        })
+    })
+}
+
+#[derive(Clone)]
 struct SmartParallelSnapshot {
     status: &'static str,
     detail: String,
@@ -1436,8 +1858,8 @@ fn summarize_thread_state(
 
     if is_waiting_for_confirmation {
         return ThreadSummary {
-            status: "Needs approval",
-            detail: "A workspace tool is waiting",
+            status: "Autonomy blocked",
+            detail: "Tool permission is blocking",
             icon: IconName::Warning,
             tone: ActivityTone::Waiting,
         };
@@ -1476,7 +1898,9 @@ fn summarize_thread_state(
 fn tool_status_label(status: &ToolCallStatus) -> (&'static str, ActivityTone) {
     match status {
         ToolCallStatus::Pending => ("Queued", ActivityTone::Running),
-        ToolCallStatus::WaitingForConfirmation { .. } => ("Needs approval", ActivityTone::Waiting),
+        ToolCallStatus::WaitingForConfirmation { .. } => {
+            ("Permission blocked", ActivityTone::Waiting)
+        }
         ToolCallStatus::InProgress => ("Running", ActivityTone::Running),
         ToolCallStatus::Completed => ("Done", ActivityTone::Done),
         ToolCallStatus::Failed => ("Failed", ActivityTone::Failed),
@@ -1555,11 +1979,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn summarize_thread_state_prioritizes_approval() {
+    fn summarize_thread_state_prioritizes_autonomy_blockers() {
         let summary =
             summarize_thread_state(true, true, true, true, true, Some(ActivityTone::Failed));
 
-        assert_eq!(summary.status, "Needs approval");
+        assert_eq!(summary.status, "Autonomy blocked");
+        assert_eq!(summary.detail, "Tool permission is blocking");
         assert_eq!(summary.tone, ActivityTone::Waiting);
     }
 
@@ -1748,6 +2173,94 @@ mod tests {
                 },
             )),
             ("Conflict", IconName::GitMergeConflict, ActivityTone::Failed)
+        );
+    }
+
+    #[test]
+    fn smart_todo_state_prioritizes_autonomy_blockers() {
+        assert_eq!(
+            smart_todo_state(true, 2, true, true, true, true, Some(ActivityTone::Failed)),
+            SmartTodoState::AutonomyBlocked
+        );
+        assert_eq!(
+            smart_todo_state(true, 2, false, false, false, true, None),
+            SmartTodoState::Blocked
+        );
+        assert_eq!(
+            smart_todo_state(true, 2, false, true, false, false, None),
+            SmartTodoState::Working
+        );
+    }
+
+    #[test]
+    fn smart_todo_state_distinguishes_plan_lifecycle() {
+        assert_eq!(
+            smart_todo_state(true, 2, false, false, false, false, None),
+            SmartTodoState::Planned
+        );
+        assert_eq!(
+            smart_todo_state(true, 0, false, false, false, false, None),
+            SmartTodoState::Complete
+        );
+        assert_eq!(
+            smart_todo_state(false, 0, false, false, false, false, None),
+            SmartTodoState::Empty
+        );
+    }
+
+    #[test]
+    fn smart_todo_detail_points_to_next_action() {
+        let detail = smart_todo_detail(
+            SmartTodoState::Planned,
+            Some("Run validation"),
+            None,
+            3,
+            1,
+            4,
+        );
+
+        assert!(detail.contains("3 todo step(s) remain"));
+        assert!(detail.contains("Next: Run validation"));
+    }
+
+    #[test]
+    fn smart_todo_detail_surfaces_autonomy_and_runtime_blockers() {
+        let autonomy_blocker = smart_todo_detail(
+            SmartTodoState::AutonomyBlocked,
+            None,
+            Some("Run command"),
+            1,
+            0,
+            1,
+        );
+        let blocked = smart_todo_detail(SmartTodoState::Blocked, None, Some("Run tests"), 1, 0, 1);
+
+        assert!(autonomy_blocker.contains("Autonomy blocker: Run command"));
+        assert!(autonomy_blocker.contains("tool permission"));
+        assert!(blocked.contains("Blocked by Run tests"));
+    }
+
+    #[test]
+    fn smart_todo_labels_are_compact() {
+        assert_eq!(smart_todo_progress_label(2, 5), "2/5 done");
+        assert_eq!(smart_todo_progress_label(0, 0), "no plan");
+        assert_eq!(smart_todo_left_label(1), "1 left");
+        assert_eq!(smart_todo_left_label(3), "3 left");
+    }
+
+    #[test]
+    fn plan_entry_status_is_review_facing() {
+        assert_eq!(
+            plan_entry_status(acp::PlanEntryStatus::InProgress),
+            ("Doing", IconName::TodoProgress, ActivityTone::Running)
+        );
+        assert_eq!(
+            plan_entry_status(acp::PlanEntryStatus::Completed),
+            ("Done", IconName::TodoComplete, ActivityTone::Done)
+        );
+        assert_eq!(
+            plan_entry_status(acp::PlanEntryStatus::Pending),
+            ("Queued", IconName::TodoPending, ActivityTone::Waiting)
         );
     }
 
