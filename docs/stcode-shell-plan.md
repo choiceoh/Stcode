@@ -24,6 +24,7 @@ The `stcode` binary should:
 - use Stcode names in the general welcome/onboarding setup flow
 - replace broad IDE menu groups with an agent-focused Stcode menu bar that keeps workspace basics while removing Selection, Go, Run, debugger, terminal, dock, and panel navigation menus from the default surface
 - filter the command palette in Stcode mode so hidden IDE panels, debugger, terminal, task, pane-splitting, and project-structure actions do not reappear as primary commands
+- render the workspace welcome screen as a Stcode start surface with agent-first actions, workspace language, and Stcode-specific recent workspace labels
 
 The terminal panel is hidden by default in Stcode mode because users should not need to operate a terminal directly. This does not remove terminal or execution support. Agent tools and workspace execution surfaces remain available; Stcode should surface progress through the agent panel, tool cards, and later a dedicated activity timeline.
 

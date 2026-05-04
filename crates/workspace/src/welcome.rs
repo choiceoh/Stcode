@@ -1,6 +1,6 @@
 use crate::{
-    NewFile, Open, OpenMode, PathList, SerializedWorkspaceLocation, ToggleWorkspaceSidebar,
-    Workspace, WorkspaceId,
+    AppLaunchMode, NewFile, Open, OpenMode, PathList, SerializedWorkspaceLocation,
+    ToggleWorkspaceSidebar, Workspace, WorkspaceId,
     item::{Item, ItemEvent},
     persistence::WorkspaceDb,
 };
@@ -20,7 +20,8 @@ use settings::Settings;
 use ui::{ButtonLike, Divider, DividerColor, KeyBinding, Vector, VectorName, prelude::*};
 use util::ResultExt;
 use zed_actions::{
-    Extensions, OpenKeymap, OpenOnboarding, OpenSettings, assistant::ToggleFocus, command_palette,
+    Extensions, OpenKeymap, OpenOnboarding, OpenSettings, agent::OpenSettings as OpenAgentSettings,
+    assistant::ToggleFocus, command_palette,
 };
 
 #[derive(PartialEq, Clone, Debug, Deserialize, Serialize, JsonSchema, Action)]
@@ -161,63 +162,193 @@ impl SectionEntry {
     }
 }
 
-const CONTENT: (Section<4>, Section<3>) = (
-    Section {
-        title: "Get Started",
-        entries: [
-            SectionEntry {
-                icon: IconName::Plus,
-                title: "New File",
-                action: &NewFile,
-                visibility_guard: SectionVisibility::Always,
-            },
-            SectionEntry {
-                icon: IconName::FolderOpen,
-                title: "Open Project",
-                action: &Open::DEFAULT,
-                visibility_guard: SectionVisibility::Always,
-            },
-            SectionEntry {
-                icon: IconName::CloudDownload,
-                title: "Clone Repository",
-                action: &GitClone,
-                visibility_guard: SectionVisibility::Always,
-            },
-            SectionEntry {
-                icon: IconName::ListCollapse,
-                title: "Open Command Palette",
-                action: &command_palette::Toggle,
-                visibility_guard: SectionVisibility::Always,
-            },
-        ],
-    },
-    Section {
-        title: "Configure",
-        entries: [
-            SectionEntry {
-                icon: IconName::Settings,
-                title: "Open Settings",
-                action: &OpenSettings,
-                visibility_guard: SectionVisibility::Always,
-            },
-            SectionEntry {
-                icon: IconName::Keyboard,
-                title: "Customize Keymaps",
-                action: &OpenKeymap,
-                visibility_guard: SectionVisibility::Always,
-            },
-            SectionEntry {
-                icon: IconName::Blocks,
-                title: "Explore Extensions",
-                action: &Extensions {
-                    category_filter: None,
-                    id: None,
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum WelcomeMode {
+    Zed,
+    Stcode,
+}
+
+impl WelcomeMode {
+    fn new(cx: &App) -> Self {
+        if AppLaunchMode::is_stcode(cx) {
+            Self::Stcode
+        } else {
+            Self::Zed
+        }
+    }
+
+    fn welcome_label(self, fallback_to_recent_projects: bool) -> &'static str {
+        match (self, fallback_to_recent_projects) {
+            (Self::Stcode, true) => "Welcome back to Stcode",
+            (Self::Stcode, false) => "Welcome to Stcode",
+            (Self::Zed, true) => "Welcome back to Zed",
+            (Self::Zed, false) => "Welcome to Zed",
+        }
+    }
+
+    fn tagline(self) -> &'static str {
+        match self {
+            Self::Stcode => "The agent workspace for what's next",
+            Self::Zed => "The editor for what's next",
+        }
+    }
+
+    fn recent_workspaces_title(self) -> &'static str {
+        match self {
+            Self::Stcode => "Recent Workspaces",
+            Self::Zed => "Recent Projects",
+        }
+    }
+
+    fn agent_card_title(self) -> &'static str {
+        match self {
+            Self::Stcode => "Work with Stcode Agent",
+            Self::Zed => "Collaborate with Agents",
+        }
+    }
+
+    fn agent_card_description(self) -> &'static str {
+        match self {
+            Self::Stcode => {
+                "Start a thread, let agents inspect the workspace, run tools, and return changes without making the terminal the primary interface."
+            }
+            Self::Zed => {
+                "Run multiple threads at once, mix and match any ACP-compatible agent, and keep work conflict-free with worktrees."
+            }
+        }
+    }
+
+    fn agent_button_label(self) -> &'static str {
+        match self {
+            Self::Stcode => "Open Stcode Agent",
+            Self::Zed => "Open Agent Panel",
+        }
+    }
+
+    fn onboarding_button_label(self) -> &'static str {
+        match self {
+            Self::Stcode => "Return to Setup",
+            Self::Zed => "Return to Onboarding",
+        }
+    }
+}
+
+fn zed_content() -> (Section<4>, Section<3>) {
+    (
+        Section {
+            title: "Get Started",
+            entries: [
+                SectionEntry {
+                    icon: IconName::Plus,
+                    title: "New File",
+                    action: &NewFile,
+                    visibility_guard: SectionVisibility::Always,
                 },
-                visibility_guard: SectionVisibility::Always,
-            },
-        ],
-    },
-);
+                SectionEntry {
+                    icon: IconName::FolderOpen,
+                    title: "Open Project",
+                    action: &Open::DEFAULT,
+                    visibility_guard: SectionVisibility::Always,
+                },
+                SectionEntry {
+                    icon: IconName::CloudDownload,
+                    title: "Clone Repository",
+                    action: &GitClone,
+                    visibility_guard: SectionVisibility::Always,
+                },
+                SectionEntry {
+                    icon: IconName::ListCollapse,
+                    title: "Open Command Palette",
+                    action: &command_palette::Toggle,
+                    visibility_guard: SectionVisibility::Always,
+                },
+            ],
+        },
+        Section {
+            title: "Configure",
+            entries: [
+                SectionEntry {
+                    icon: IconName::Settings,
+                    title: "Open Settings",
+                    action: &OpenSettings,
+                    visibility_guard: SectionVisibility::Always,
+                },
+                SectionEntry {
+                    icon: IconName::Keyboard,
+                    title: "Customize Keymaps",
+                    action: &OpenKeymap,
+                    visibility_guard: SectionVisibility::Always,
+                },
+                SectionEntry {
+                    icon: IconName::Blocks,
+                    title: "Explore Extensions",
+                    action: &Extensions {
+                        category_filter: None,
+                        id: None,
+                    },
+                    visibility_guard: SectionVisibility::Always,
+                },
+            ],
+        },
+    )
+}
+
+fn stcode_content() -> (Section<4>, Section<3>) {
+    (
+        Section {
+            title: "Get Started",
+            entries: [
+                SectionEntry {
+                    icon: IconName::ZedAgent,
+                    title: "Open Stcode Agent",
+                    action: &ToggleFocus,
+                    visibility_guard: SectionVisibility::Always,
+                },
+                SectionEntry {
+                    icon: IconName::FolderOpen,
+                    title: "Open Workspace",
+                    action: &Open::DEFAULT,
+                    visibility_guard: SectionVisibility::Always,
+                },
+                SectionEntry {
+                    icon: IconName::CloudDownload,
+                    title: "Clone Repository",
+                    action: &GitClone,
+                    visibility_guard: SectionVisibility::Always,
+                },
+                SectionEntry {
+                    icon: IconName::Settings,
+                    title: "Agent Settings",
+                    action: &OpenAgentSettings,
+                    visibility_guard: SectionVisibility::Always,
+                },
+            ],
+        },
+        Section {
+            title: "Configure",
+            entries: [
+                SectionEntry {
+                    icon: IconName::Settings,
+                    title: "Open App Settings",
+                    action: &OpenSettings,
+                    visibility_guard: SectionVisibility::Always,
+                },
+                SectionEntry {
+                    icon: IconName::Keyboard,
+                    title: "Customize Keymaps",
+                    action: &OpenKeymap,
+                    visibility_guard: SectionVisibility::Always,
+                },
+                SectionEntry {
+                    icon: IconName::ListCollapse,
+                    title: "Find a Command",
+                    action: &command_palette::Toggle,
+                    visibility_guard: SectionVisibility::Always,
+                },
+            ],
+        },
+    )
+}
 
 struct Section<const COLS: usize> {
     title: &'static str,
@@ -333,11 +464,14 @@ impl WelcomePage {
         }
     }
 
-    fn render_agent_card(&self, tab_index: usize, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_agent_card(
+        &self,
+        mode: WelcomeMode,
+        tab_index: usize,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
         let focus = self.focus_handle.clone();
         let color = cx.theme().colors();
-
-        let description = "Run multiple threads at once, mix and match any ACP-compatible agent, and keep work conflict-free with worktrees.";
 
         v_flex()
             .w_full()
@@ -358,16 +492,16 @@ impl WelcomePage {
                             .color(Color::Muted)
                             .size(IconSize::Small),
                     )
-                    .child(Label::new("Collaborate with Agents")),
+                    .child(Label::new(mode.agent_card_title())),
             )
             .child(
-                Label::new(description)
+                Label::new(mode.agent_card_description())
                     .size(LabelSize::Small)
                     .color(Color::Muted)
                     .mb_2(),
             )
             .child(
-                Button::new("open-agent", "Open Agent Panel")
+                Button::new("open-agent", mode.agent_button_label())
                     .full_width()
                     .tab_index(tab_index as isize)
                     .style(ButtonStyle::Outlined)
@@ -384,11 +518,12 @@ impl WelcomePage {
 
     fn render_recent_project_section(
         &self,
+        mode: WelcomeMode,
         recent_projects: Vec<impl IntoElement>,
     ) -> impl IntoElement {
         v_flex()
             .w_full()
-            .child(SectionHeader::new("Recent Projects"))
+            .child(SectionHeader::new(mode.recent_workspaces_title()))
             .children(recent_projects)
     }
 
@@ -420,7 +555,11 @@ impl WelcomePage {
 
 impl Render for WelcomePage {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let (first_section, second_section) = CONTENT;
+        let mode = WelcomeMode::new(cx);
+        let (first_section, second_section) = match mode {
+            WelcomeMode::Stcode => stcode_content(),
+            WelcomeMode::Zed => zed_content(),
+        };
         let first_section_entries = first_section.entries.len();
         let mut next_tab_index = first_section_entries + second_section.entries.len();
 
@@ -441,18 +580,12 @@ impl Render for WelcomePage {
         let showing_recent_projects =
             self.fallback_to_recent_projects && !recent_projects.is_empty();
         let second_section = if showing_recent_projects {
-            self.render_recent_project_section(recent_projects)
+            self.render_recent_project_section(mode, recent_projects)
                 .into_any_element()
         } else {
             second_section
                 .render(first_section_entries, &self.focus_handle)
                 .into_any_element()
-        };
-
-        let welcome_label = if self.fallback_to_recent_projects {
-            "Welcome back to Zed"
-        } else {
-            "Welcome to Zed"
         };
 
         h_flex()
@@ -481,12 +614,16 @@ impl Render for WelcomePage {
                             .gap_4()
                             .child(Vector::square(VectorName::ZedLogo, rems_from_px(45.)))
                             .child(
-                                v_flex().child(Headline::new(welcome_label)).child(
-                                    Label::new("The editor for what's next")
-                                        .size(LabelSize::Small)
-                                        .color(Color::Muted)
-                                        .italic(),
-                                ),
+                                v_flex()
+                                    .child(Headline::new(
+                                        mode.welcome_label(self.fallback_to_recent_projects),
+                                    ))
+                                    .child(
+                                        Label::new(mode.tagline())
+                                            .size(LabelSize::Small)
+                                            .color(Color::Muted)
+                                            .italic(),
+                                    ),
                             ),
                     )
                     .child(first_section.render(Default::default(), &self.focus_handle))
@@ -494,12 +631,12 @@ impl Render for WelcomePage {
                     .when(ai_enabled && !showing_recent_projects, |this| {
                         let agent_tab_index = next_tab_index;
                         next_tab_index += 1;
-                        this.child(self.render_agent_card(agent_tab_index, cx))
+                        this.child(self.render_agent_card(mode, agent_tab_index, cx))
                     })
                     .when(!self.fallback_to_recent_projects, |this| {
                         this.child(
                             v_flex().gap_4().child(Divider::horizontal()).child(
-                                Button::new("welcome-exit", "Return to Onboarding")
+                                Button::new("welcome-exit", mode.onboarding_button_label())
                                     .tab_index(next_tab_index as isize)
                                     .full_width()
                                     .label_size(LabelSize::XSmall)
@@ -697,5 +834,27 @@ mod tests {
         // A bare root "/" has no file_name(), falls back to "Untitled"
         let paths = PathList::new(&["/"]);
         assert_eq!(project_name(&paths), "Untitled");
+    }
+
+    #[test]
+    fn test_welcome_mode_copy() {
+        assert_eq!(WelcomeMode::Zed.welcome_label(false), "Welcome to Zed");
+        assert_eq!(WelcomeMode::Zed.welcome_label(true), "Welcome back to Zed");
+        assert_eq!(
+            WelcomeMode::Stcode.welcome_label(false),
+            "Welcome to Stcode"
+        );
+        assert_eq!(
+            WelcomeMode::Stcode.welcome_label(true),
+            "Welcome back to Stcode"
+        );
+        assert_eq!(
+            WelcomeMode::Stcode.recent_workspaces_title(),
+            "Recent Workspaces"
+        );
+        assert_eq!(
+            WelcomeMode::Stcode.agent_button_label(),
+            "Open Stcode Agent"
+        );
     }
 }
