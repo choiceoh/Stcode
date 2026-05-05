@@ -16,9 +16,13 @@ use heapless::Vec as ArrayVec;
 use language_model::{LanguageModelEffortLevel, Speed};
 use settings::{SidebarSide, update_settings_file};
 use ui::{ButtonLike, SpinnerLabel, SpinnerVariant, SplitButton, SplitButtonStyle, Tab};
+use util::rel_path::RelPath;
 use workspace::{AppLaunchMode, SERIALIZATION_THROTTLE_TIME};
 
 use super::*;
+
+const STCODE_STARTUP_RULE_FILES: [&str; 2] = ["AGENTS.md", "CLAUDE.md"];
+const STCODE_STARTUP_RULE_MAX_BYTES: usize = 128 * 1024;
 
 #[derive(Default)]
 struct ThreadFeedbackState {
@@ -659,6 +663,62 @@ impl ThreadView {
         message_editor.update(cx, |message_editor, cx| message_editor.contents(expand, cx))
     }
 
+    fn load_stcode_startup_rules(
+        &self,
+        cx: &mut Context<Self>,
+    ) -> Option<Task<Result<Option<(Vec<acp::ContentBlock>, Vec<Entity<Buffer>>)>>>> {
+        let project = self.project.upgrade()?;
+        let rule_files = stcode_startup_rule_files(project.read(cx), cx);
+        if rule_files.is_empty() {
+            return None;
+        }
+
+        let supports_embedded_context =
+            self.session_capabilities.read().supports_embedded_context();
+        let open_tasks = project.update(cx, |project, cx| {
+            rule_files
+                .iter()
+                .map(|rule_file| project.open_buffer(rule_file.project_path.clone(), cx))
+                .collect::<Vec<_>>()
+        });
+
+        Some(cx.spawn(async move |_this, cx| {
+            let mut loaded_rule_files = Vec::new();
+            let mut tracked_buffers = Vec::new();
+
+            for (rule_file, open_task) in rule_files.into_iter().zip(open_tasks) {
+                let buffer = match open_task.await {
+                    Ok(buffer) => buffer,
+                    Err(err) => {
+                        log::warn!(
+                            "failed to load Stcode startup rule file {}: {err:#}",
+                            rule_file.display_path
+                        );
+                        continue;
+                    }
+                };
+
+                let text = buffer.read_with(cx, |buffer, _cx| buffer.text());
+                loaded_rule_files.push(LoadedStcodeStartupRuleFile {
+                    name: rule_file.name,
+                    display_path: rule_file.display_path,
+                    uri: rule_file.uri,
+                    text: truncate_stcode_startup_rule_text(text),
+                });
+                tracked_buffers.push(buffer);
+            }
+
+            if loaded_rule_files.is_empty() {
+                return Ok(None);
+            }
+
+            Ok(Some((
+                stcode_startup_rule_blocks(loaded_rule_files, supports_embedded_context),
+                tracked_buffers,
+            )))
+        }))
+    }
+
     pub fn current_model_id(&self, cx: &App) -> Option<String> {
         let selector = self.model_selector.as_ref()?;
         let model = selector.read(cx).active_model(cx)?;
@@ -1037,6 +1097,11 @@ impl ThreadView {
         let parent_session_id = self.thread.read(cx).parent_session_id().cloned();
         let agent_telemetry_id = self.thread.read(cx).connection().telemetry_id();
         let is_first_message = self.thread.read(cx).entries().is_empty();
+        let startup_rules = if is_first_message && AppLaunchMode::is_stcode(cx) {
+            self.load_stcode_startup_rules(cx)
+        } else {
+            None
+        };
         let thread = self.thread.downgrade();
 
         self.is_loading_contents = true;
@@ -1056,9 +1121,22 @@ impl ThreadView {
         };
 
         let task = cx.spawn_in(window, async move |this, cx| {
-            let Some((contents, tracked_buffers)) = contents_task.await? else {
+            let Some((mut contents, mut tracked_buffers)) = contents_task.await? else {
                 return Ok(());
             };
+
+            if let Some(startup_rules) = startup_rules {
+                match startup_rules.await {
+                    Ok(Some((mut rule_blocks, rule_buffers))) => {
+                        contents.append(&mut rule_blocks);
+                        tracked_buffers.extend(rule_buffers);
+                    }
+                    Ok(None) => {}
+                    Err(err) => {
+                        log::warn!("failed to attach Stcode startup rule files: {err:#}");
+                    }
+                }
+            }
 
             let generation = this.update(cx, |this, cx| {
                 this.clear_external_source_prompt_warning(cx);
@@ -8993,6 +9071,205 @@ impl ThreadView {
         window.defer(cx, move |window, cx| {
             menu_handle.toggle(window, cx);
         });
+    }
+}
+
+#[derive(Clone)]
+struct StcodeStartupRuleFile {
+    name: &'static str,
+    project_path: project::ProjectPath,
+    display_path: String,
+    uri: String,
+}
+
+struct LoadedStcodeStartupRuleFile {
+    name: &'static str,
+    display_path: String,
+    uri: String,
+    text: String,
+}
+
+fn stcode_startup_rule_files(project: &Project, cx: &App) -> Vec<StcodeStartupRuleFile> {
+    let mut rule_files = Vec::new();
+    let mut seen = HashSet::default();
+    let path_style = project.path_style(cx);
+
+    for worktree in project.visible_worktrees(cx) {
+        let worktree = worktree.read(cx);
+        for name in STCODE_STARTUP_RULE_FILES {
+            let Ok(path) = RelPath::unix(name) else {
+                continue;
+            };
+            if !worktree
+                .entry_for_path(path)
+                .is_some_and(|entry| entry.is_file())
+            {
+                continue;
+            }
+
+            let uri = MentionUri::File {
+                abs_path: worktree.absolutize(path).into(),
+            }
+            .to_uri()
+            .to_string();
+            if !seen.insert(uri.clone()) {
+                continue;
+            }
+
+            let display_path = worktree
+                .root_name()
+                .join(path)
+                .display(path_style)
+                .to_string();
+
+            rule_files.push(StcodeStartupRuleFile {
+                name,
+                project_path: project::ProjectPath {
+                    worktree_id: worktree.id(),
+                    path: path.into(),
+                },
+                display_path,
+                uri,
+            });
+        }
+    }
+
+    rule_files
+}
+
+fn stcode_startup_rule_blocks(
+    rule_files: Vec<LoadedStcodeStartupRuleFile>,
+    supports_embedded_context: bool,
+) -> Vec<acp::ContentBlock> {
+    if supports_embedded_context {
+        let mut blocks = vec![acp::ContentBlock::Text(acp::TextContent::new(
+            "\n\nStcode loaded these session-start instruction files automatically. Read and follow them before working:",
+        ))];
+
+        for rule_file in rule_files {
+            blocks.push(acp::ContentBlock::Text(acp::TextContent::new(format!(
+                "\n\n{} ({})",
+                rule_file.name, rule_file.display_path
+            ))));
+            blocks.push(acp::ContentBlock::Resource(acp::EmbeddedResource::new(
+                acp::EmbeddedResourceResource::TextResourceContents(
+                    acp::TextResourceContents::new(rule_file.text, rule_file.uri),
+                ),
+            )));
+        }
+
+        blocks
+    } else {
+        let mut text = String::from(
+            "\n\nStcode loaded these session-start instruction files automatically. Read and follow them before working:",
+        );
+        for rule_file in rule_files {
+            text.push_str(&format!(
+                "\n\n## {} ({})\n\n```markdown\n{}\n```",
+                rule_file.name, rule_file.display_path, rule_file.text
+            ));
+        }
+        vec![acp::ContentBlock::Text(acp::TextContent::new(text))]
+    }
+}
+
+fn truncate_stcode_startup_rule_text(text: String) -> String {
+    if text.len() <= STCODE_STARTUP_RULE_MAX_BYTES {
+        return text;
+    }
+
+    let mut end = STCODE_STARTUP_RULE_MAX_BYTES;
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+
+    format!(
+        "{}\n\n[Stcode truncated this startup rule file after {} bytes.]",
+        &text[..end],
+        STCODE_STARTUP_RULE_MAX_BYTES
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn loaded_rule_file(
+        name: &'static str,
+        display_path: &str,
+        uri: &str,
+        text: &str,
+    ) -> LoadedStcodeStartupRuleFile {
+        LoadedStcodeStartupRuleFile {
+            name,
+            display_path: display_path.to_string(),
+            uri: uri.to_string(),
+            text: text.to_string(),
+        }
+    }
+
+    #[test]
+    fn test_stcode_startup_rule_blocks_embed_resources() {
+        let blocks = stcode_startup_rule_blocks(
+            vec![loaded_rule_file(
+                "AGENTS.md",
+                "Stcode/AGENTS.md",
+                "file:///Stcode/AGENTS.md",
+                "agent rules",
+            )],
+            true,
+        );
+
+        assert_eq!(blocks.len(), 3);
+        assert!(
+            matches!(&blocks[0], acp::ContentBlock::Text(text) if text.text.contains("session-start instruction files"))
+        );
+        assert!(
+            matches!(&blocks[1], acp::ContentBlock::Text(text) if text.text.contains("Stcode/AGENTS.md"))
+        );
+        match &blocks[2] {
+            acp::ContentBlock::Resource(resource) => match &resource.resource {
+                acp::EmbeddedResourceResource::TextResourceContents(text) => {
+                    assert_eq!(text.text, "agent rules");
+                    assert_eq!(text.uri, "file:///Stcode/AGENTS.md");
+                }
+                other => panic!("expected text resource, got {other:?}"),
+            },
+            other => panic!("expected resource block, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_stcode_startup_rule_blocks_fall_back_to_text() {
+        let blocks = stcode_startup_rule_blocks(
+            vec![loaded_rule_file(
+                "CLAUDE.md",
+                "Stcode/CLAUDE.md",
+                "file:///Stcode/CLAUDE.md",
+                "claude rules",
+            )],
+            false,
+        );
+
+        assert_eq!(blocks.len(), 1);
+        match &blocks[0] {
+            acp::ContentBlock::Text(text) => {
+                assert!(text.text.contains("Stcode/CLAUDE.md"));
+                assert!(text.text.contains("claude rules"));
+            }
+            other => panic!("expected text block, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_truncate_stcode_startup_rule_text_preserves_char_boundaries() {
+        let mut text = "a".repeat(STCODE_STARTUP_RULE_MAX_BYTES - 1);
+        text.push('한');
+
+        let truncated = truncate_stcode_startup_rule_text(text);
+
+        assert!(truncated.starts_with(&"a".repeat(STCODE_STARTUP_RULE_MAX_BYTES - 1)));
+        assert!(truncated.contains("truncated this startup rule file"));
     }
 }
 
