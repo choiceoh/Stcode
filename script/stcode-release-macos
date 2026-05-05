@@ -1,0 +1,110 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  echo "usage: script/stcode-release-macos <version> [target]" >&2
+  echo "example: script/stcode-release-macos 1.2.3 aarch64-apple-darwin" >&2
+  exit 64
+}
+
+version="${1:-}"
+target="${2:-}"
+
+if [[ -z "$version" ]]; then
+  usage
+fi
+
+if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.-]+)?$ ]]; then
+  echo "Stcode release version must be semver without a leading v: $version" >&2
+  exit 64
+fi
+
+if [[ "$(uname -s)" != "Darwin" ]]; then
+  echo "macOS release packaging must run on macOS" >&2
+  exit 1
+fi
+
+if [[ -z "$target" ]]; then
+  target="$(rustc -vV | awk '/^host:/ { print $2 }')"
+fi
+
+case "$target" in
+  aarch64-apple-darwin)
+    arch="aarch64"
+    ;;
+  x86_64-apple-darwin)
+    arch="x86_64"
+    ;;
+  *)
+    echo "unsupported macOS target: $target" >&2
+    exit 64
+    ;;
+esac
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$repo_root"
+
+if ! command -v cargo >/dev/null; then
+  echo "cargo is required to build a Stcode release" >&2
+  exit 1
+fi
+
+if ! cargo bundle --help >/dev/null 2>&1; then
+  echo "cargo-bundle is required. Install it with: cargo install cargo-bundle --locked" >&2
+  exit 1
+fi
+
+export RELEASE_CHANNEL="${RELEASE_CHANNEL:-stable}"
+export ZED_APP_VERSION="${ZED_APP_VERSION:-$version}"
+export ZED_BUNDLE="${ZED_BUNDLE:-true}"
+export ZED_COMMIT_SHA="${ZED_COMMIT_SHA:-$(git rev-parse HEAD)}"
+
+cargo bundle --release --package zed --bin stcode --target "$target"
+
+bundle_dir="$repo_root/target/$target/release/bundle/osx"
+app_path="$bundle_dir/Stcode.app"
+if [[ ! -d "$app_path" ]]; then
+  echo "expected Stcode.app at $app_path" >&2
+  exit 1
+fi
+
+release_dir="$repo_root/target/stcode-release"
+stage_dir="$release_dir/stage-$target"
+dmg_path="$release_dir/Stcode-$version-$arch.dmg"
+
+rm -rf "$stage_dir" "$dmg_path" "$dmg_path.sha256"
+mkdir -p "$stage_dir" "$release_dir"
+rsync -a --delete "$app_path/" "$stage_dir/Stcode.app/"
+
+if [[ -n "${STCODE_CODESIGN_IDENTITY:-}" ]]; then
+  codesign \
+    --force \
+    --deep \
+    --options runtime \
+    --timestamp \
+    --entitlements "$repo_root/crates/zed/resources/zed.entitlements" \
+    --sign "$STCODE_CODESIGN_IDENTITY" \
+    "$stage_dir/Stcode.app"
+elif [[ "${STCODE_ADHOC_CODESIGN:-true}" != "false" ]]; then
+  codesign --force --deep --sign - "$stage_dir/Stcode.app"
+fi
+
+hdiutil create \
+  -volname "Stcode $version" \
+  -srcfolder "$stage_dir" \
+  -ov \
+  -format UDZO \
+  "$dmg_path"
+
+if [[ -n "${APPLE_ID:-}" && -n "${APPLE_TEAM_ID:-}" && -n "${APPLE_APP_SPECIFIC_PASSWORD:-}" ]]; then
+  xcrun notarytool submit "$dmg_path" \
+    --apple-id "$APPLE_ID" \
+    --team-id "$APPLE_TEAM_ID" \
+    --password "$APPLE_APP_SPECIFIC_PASSWORD" \
+    --wait
+  xcrun stapler staple "$dmg_path"
+fi
+
+shasum -a 256 "$dmg_path" > "$dmg_path.sha256"
+
+echo "$dmg_path"
