@@ -593,8 +593,6 @@ pub(crate) fn run(launch_mode: LaunchMode) {
 
         zed::init(cx);
         project::Project::init(&client, cx);
-        debugger_ui::init(cx);
-        debugger_tools::init(cx);
         client::init(&client, cx);
         feature_flags::FeatureFlagStore::init(cx);
 
@@ -656,7 +654,6 @@ pub(crate) fn run(launch_mode: LaunchMode) {
         LaunchMode::set_global(launch_mode, cx);
 
         auto_update::init(client.clone(), cx);
-        dap_adapters::init(cx);
         auto_update_ui::init(cx);
         reliability::init(client.clone(), cx);
         extension_host::init(
