@@ -40,23 +40,88 @@ fn single_line_input(
 #[derive(Clone, Copy)]
 pub enum LlmCompatibleProvider {
     OpenAi,
+    Ollama,
+    LmStudio,
+    LocalOpenAiCompatible,
 }
 
 impl LlmCompatibleProvider {
     fn name(&self) -> &'static str {
         match self {
             LlmCompatibleProvider::OpenAi => "OpenAI",
+            LlmCompatibleProvider::Ollama => "Ollama Local",
+            LlmCompatibleProvider::LmStudio => "LM Studio Local",
+            LlmCompatibleProvider::LocalOpenAiCompatible => "Local Model",
         }
     }
 
     fn api_url(&self) -> &'static str {
         match self {
             LlmCompatibleProvider::OpenAi => "https://api.openai.com/v1",
+            LlmCompatibleProvider::Ollama => "http://localhost:11434/v1",
+            LlmCompatibleProvider::LmStudio => "http://localhost:1234/v1",
+            LlmCompatibleProvider::LocalOpenAiCompatible => "http://localhost:8000/v1",
+        }
+    }
+
+    fn model_placeholder(&self) -> &'static str {
+        match self {
+            LlmCompatibleProvider::OpenAi => "e.g. gpt-5, gpt-5-mini",
+            LlmCompatibleProvider::Ollama => "e.g. qwen2.5-coder:7b, llama3.2",
+            LlmCompatibleProvider::LmStudio => "e.g. local-model, qwen2.5-coder-7b-instruct",
+            LlmCompatibleProvider::LocalOpenAiCompatible => {
+                "e.g. qwen2.5-coder, deepseek-coder, local-model"
+            }
+        }
+    }
+
+    fn api_key_label(&self) -> &'static str {
+        match self {
+            LlmCompatibleProvider::OpenAi => "API Key",
+            LlmCompatibleProvider::Ollama
+            | LlmCompatibleProvider::LmStudio
+            | LlmCompatibleProvider::LocalOpenAiCompatible => "API Key (optional)",
+        }
+    }
+
+    fn api_key_placeholder(&self) -> &'static str {
+        match self {
+            LlmCompatibleProvider::OpenAi => "000000000000000000000000000000000000000000000000",
+            LlmCompatibleProvider::Ollama
+            | LlmCompatibleProvider::LmStudio
+            | LlmCompatibleProvider::LocalOpenAiCompatible => "local",
+        }
+    }
+
+    fn fallback_api_key(&self) -> Option<&'static str> {
+        match self {
+            LlmCompatibleProvider::OpenAi => None,
+            LlmCompatibleProvider::Ollama
+            | LlmCompatibleProvider::LmStudio
+            | LlmCompatibleProvider::LocalOpenAiCompatible => Some("local"),
+        }
+    }
+
+    fn description(&self) -> &'static str {
+        match self {
+            LlmCompatibleProvider::OpenAi => {
+                "This provider will use an OpenAI compatible cloud API."
+            }
+            LlmCompatibleProvider::Ollama => {
+                "Add an Ollama model running locally through its OpenAI-compatible API."
+            }
+            LlmCompatibleProvider::LmStudio => {
+                "Add an LM Studio model running locally through its OpenAI-compatible API."
+            }
+            LlmCompatibleProvider::LocalOpenAiCompatible => {
+                "Add a local model server that exposes an OpenAI-compatible API."
+            }
         }
     }
 }
 
 struct AddLlmProviderInput {
+    provider: LlmCompatibleProvider,
     provider_name: Entity<InputField>,
     api_url: Entity<InputField>,
     api_key: Entity<InputField>,
@@ -68,29 +133,36 @@ impl AddLlmProviderInput {
         let provider_name =
             single_line_input("Provider Name", provider.name(), None, 1, window, cx);
         let api_url = single_line_input("API URL", provider.api_url(), None, 2, window, cx);
+        let api_key_label = provider.api_key_label();
+        let api_key_placeholder = provider.api_key_placeholder();
+        let fallback_api_key = provider.fallback_api_key();
         let api_key = cx.new(|cx| {
-            InputField::new(
-                window,
-                cx,
-                "000000000000000000000000000000000000000000000000",
-            )
-            .label("API Key")
-            .tab_index(3)
-            .tab_stop(true)
-            .masked(true)
+            let input = InputField::new(window, cx, api_key_placeholder)
+                .label(api_key_label)
+                .tab_index(3)
+                .tab_stop(true)
+                .masked(true);
+
+            if let Some(api_key) = fallback_api_key {
+                input.set_text(api_key, window, cx);
+            }
+
+            input
         });
 
         Self {
+            provider,
             provider_name,
             api_url,
             api_key,
-            models: vec![ModelInput::new(0, window, cx)],
+            models: vec![ModelInput::new(0, provider, window, cx)],
         }
     }
 
     fn add_model(&mut self, window: &mut Window, cx: &mut App) {
         let model_index = self.models.len();
-        self.models.push(ModelInput::new(model_index, window, cx));
+        self.models
+            .push(ModelInput::new(model_index, self.provider, window, cx));
     }
 
     fn remove_model(&mut self, index: usize) {
@@ -115,12 +187,17 @@ struct ModelInput {
 }
 
 impl ModelInput {
-    fn new(model_index: usize, window: &mut Window, cx: &mut App) -> Self {
+    fn new(
+        model_index: usize,
+        provider: LlmCompatibleProvider,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> Self {
         let base_tab_index = (3 + (model_index * 4)) as isize;
 
         let model_name = single_line_input(
             "Model Name",
-            "e.g. gpt-5, claude-opus-4, gemini-2.5-pro",
+            provider.model_placeholder(),
             None,
             base_tab_index + 1,
             window,
@@ -244,6 +321,15 @@ fn save_provider_to_settings(
     }
 
     let api_key = input.api_key.read(cx).text(cx);
+    let api_key = if api_key.is_empty() {
+        input
+            .provider
+            .fallback_api_key()
+            .unwrap_or_default()
+            .to_string()
+    } else {
+        api_key
+    };
     if api_key.is_empty() {
         return Task::ready(Err("API Key cannot be empty".into()));
     }
@@ -520,13 +606,11 @@ impl Render for AddLlmProviderModal {
             }))
             .child(
                 Modal::new("configure-context-server", None)
-                    .header(ModalHeader::new().headline("Add LLM Provider").description(
-                        match self.provider {
-                            LlmCompatibleProvider::OpenAi => {
-                                "This provider will use an OpenAI compatible API."
-                            }
-                        },
-                    ))
+                    .header(
+                        ModalHeader::new()
+                            .headline("Add LLM Provider")
+                            .description(self.provider.description()),
+                    )
                     .when_some(self.last_error.clone(), |this, error| {
                         this.section(
                             Section::new().child(
@@ -727,7 +811,7 @@ mod tests {
         let cx = setup_test(cx).await;
 
         cx.update(|window, cx| {
-            let model_input = ModelInput::new(0, window, cx);
+            let model_input = ModelInput::new(0, LlmCompatibleProvider::OpenAi, window, cx);
             model_input.name.update(cx, |input, cx| {
                 input.set_text("somemodel", window, cx);
             });
@@ -766,7 +850,7 @@ mod tests {
         let cx = setup_test(cx).await;
 
         cx.update(|window, cx| {
-            let mut model_input = ModelInput::new(0, window, cx);
+            let mut model_input = ModelInput::new(0, LlmCompatibleProvider::OpenAi, window, cx);
             model_input.name.update(cx, |input, cx| {
                 input.set_text("somemodel", window, cx);
             });
@@ -791,7 +875,7 @@ mod tests {
         let cx = setup_test(cx).await;
 
         cx.update(|window, cx| {
-            let mut model_input = ModelInput::new(0, window, cx);
+            let mut model_input = ModelInput::new(0, LlmCompatibleProvider::OpenAi, window, cx);
             model_input.name.update(cx, |input, cx| {
                 input.set_text("somemodel", window, cx);
             });
@@ -855,7 +939,12 @@ mod tests {
                 models.iter().enumerate()
             {
                 if i >= input.models.len() {
-                    input.models.push(ModelInput::new(i, window, cx));
+                    input.models.push(ModelInput::new(
+                        i,
+                        LlmCompatibleProvider::OpenAi,
+                        window,
+                        cx,
+                    ));
                 }
                 let model = &mut input.models[i];
                 set_text(&model.name, name, window, cx);

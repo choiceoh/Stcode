@@ -9,6 +9,7 @@ Stcode is a vibe-coding console for a non-coder:
 - the user describes intent
 - several AI agents split the work
 - the app shows progress in human terms
+- local models can be added from common local runtimes
 - code, terminal output, Git, tests, PRs, and merges are handled by agents
 
 The interface should feel closer to a focused operations room for AI work than a traditional editor manual.
@@ -19,6 +20,7 @@ Keep the pieces that make the experience high quality:
 
 - `ui_input` and `editor` for normal text-editing expectations
 - `agent_ui`, `agent`, and model-provider crates for AI work
+- Ollama, LM Studio, and OpenAI-compatible provider paths for local models
 - `workspace`, `project`, `worktree`, `git`, and `terminal` for actual implementation capability
 - GPUI, theme, component, assets, and platform crates needed to render the app well
 
