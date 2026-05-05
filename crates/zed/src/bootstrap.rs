@@ -5,14 +5,13 @@ use anyhow::{Context as _, Result};
 use clap::Parser;
 use cli::FORCE_CLI_MODE_ENV_VAR_NAME;
 use client::{Client, ProxySettings, RefreshLlmTokenListener, UserStore, parse_zed_link};
-use collab_ui::{CollabPanel, channel_view::ChannelView};
 use collections::HashMap;
 use crashes::InitCrashHandler;
 use db::kvp::{GlobalKeyValueStore, KeyValueStore};
 use editor::Editor;
 use extension::ExtensionHostProxy;
 use fs::{Fs, RealFs};
-use futures::{StreamExt, channel::oneshot, future};
+use futures::{StreamExt, channel::oneshot};
 use git::GitHostingProviderRegistry;
 use git_ui::{clone::clone_and_open, git_panel::GitPanel};
 use gpui::{
@@ -58,7 +57,7 @@ use std::{
 use terminal_view::terminal_panel::TerminalPanel;
 use theme::{ActiveTheme, GlobalTheme, ThemeRegistry};
 use theme_settings::load_user_theme;
-use util::{ResultExt, TryFutureExt, maybe};
+use util::ResultExt;
 use uuid::Uuid;
 use workspace::{
     AppState, MultiWorkspace, SerializedWorkspaceLocation, SessionWorkspace, Toast,
@@ -207,7 +206,6 @@ fn apply_stcode_layout_to_workspace(
         workspace.close_panel::<ProjectPanel>(window, cx);
         workspace.close_panel::<OutlinePanel>(window, cx);
         workspace.close_panel::<GitPanel>(window, cx);
-        workspace.close_panel::<CollabPanel>(window, cx);
         workspace.close_panel::<TerminalPanel>(window, cx);
 
         // Keep the Stcode shell overlay runtime-only. `focus_panel` serializes the
@@ -746,9 +744,6 @@ pub(crate) fn run(launch_mode: LaunchMode) {
         outline_panel::init(cx);
         tasks_ui::init(cx);
         snippets_ui::init(cx);
-        if launch_mode != LaunchMode::Stcode {
-            channel::init(&app_state.client.clone(), app_state.user_store.clone(), cx);
-        }
         search::init(cx);
         cx.set_global(workspace::PaneSearchBarCallbacks {
             setup_search_bar: |languages, toolbar, window, cx| {
@@ -769,13 +764,7 @@ pub(crate) fn run(launch_mode: LaunchMode) {
         theme_selector::init(cx);
         settings_profile_selector::init(cx);
         language_tools::init(cx);
-        if launch_mode != LaunchMode::Stcode {
-            call::init(app_state.client.clone(), app_state.user_store.clone(), cx);
-        }
         notifications::init(app_state.client.clone(), app_state.user_store.clone(), cx);
-        if launch_mode != LaunchMode::Stcode {
-            collab_ui::init(&app_state, cx);
-        }
         git_ui::init(cx);
         git_graph::init(cx);
         feedback::init(cx);
@@ -1298,58 +1287,7 @@ pub(crate) fn handle_open_request(request: OpenRequest, app_state: Arc<AppState>
         }));
     }
 
-    if !request.open_channel_notes.is_empty() || request.join_channel.is_some() {
-        cx.spawn(async move |cx| {
-            let result = maybe!(async {
-                if let Some(task) = task {
-                    task.await?;
-                }
-                let client = app_state.client.clone();
-                // we continue even if authentication fails as join_channel/ open channel notes will
-                // show a visible error message.
-                authenticate(client, cx).await.log_err();
-
-                if let Some(channel_id) = request.join_channel {
-                    cx.update(|cx| {
-                        workspace::join_channel(
-                            client::ChannelId(channel_id),
-                            app_state.clone(),
-                            None,
-                            None,
-                            cx,
-                        )
-                    })
-                    .await?;
-                }
-
-                let workspace_window =
-                    workspace::get_any_active_multi_workspace(app_state, cx.clone()).await?;
-
-                let workspace = workspace_window.read_with(cx, |mw, _| mw.workspace().clone())?;
-
-                let mut promises = Vec::new();
-                for (channel_id, heading) in request.open_channel_notes {
-                    promises.push(cx.update_window(workspace_window.into(), |_, window, cx| {
-                        ChannelView::open(
-                            client::ChannelId(channel_id),
-                            heading,
-                            workspace.clone(),
-                            window,
-                            cx,
-                        )
-                        .log_err()
-                    })?)
-                }
-                future::join_all(promises).await;
-                anyhow::Ok(())
-            })
-            .await;
-            if let Err(err) = result {
-                fail_to_open_window_async(err, cx);
-            }
-        })
-        .detach()
-    } else if let Some(task) = task {
+    if let Some(task) = task {
         cx.spawn(async move |cx| {
             if let Err(err) = task.await {
                 fail_to_open_window_async(err, cx);
