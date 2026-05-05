@@ -6,6 +6,7 @@ The product direction is simple:
 
 - describe what you want in normal language
 - split work across multiple AI agents
+- add local models from Ollama, LM Studio, vLLM, SGLang, or any OpenAI-compatible local server
 - keep the code, Git state, and safety checks visible without making the user learn them
 - use Zed 1.0's editor, input, agent UI, terminal, project, and GPUI foundations as the base
 
@@ -23,6 +24,7 @@ The application should make these things first-class:
 - a multi-agent work board where several agents can investigate, implement, and verify in parallel
 - an understandable activity timeline instead of raw terminal noise
 - automatic Git/worktree handling for branches, commits, PRs, and merges
+- local-model setup that does not require a cloud account when the user has a local runtime
 - enough editor and terminal power for agents to work seriously, without exposing every IDE surface to the user
 
 The editor remains part of Stcode, but its role changes. It is not the main surface for a non-coder to operate by hand; it is the agent workbench. Agents still need real buffers, cursor behavior, selections, diagnostics, search, diffs, terminals, and project context to make reliable changes.

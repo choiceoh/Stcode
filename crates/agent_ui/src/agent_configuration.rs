@@ -577,22 +577,103 @@ impl AgentConfiguration {
             .menu({
                 let workspace = self.workspace.clone();
                 move |window, cx| {
-                    Some(ContextMenu::build(window, cx, |menu, _window, _cx| {
-                        menu.header("Compatible APIs").entry("OpenAI", None, {
-                            let workspace = workspace.clone();
-                            move |window, cx| {
-                                workspace
-                                    .update(cx, |workspace, cx| {
-                                        AddLlmProviderModal::toggle(
-                                            LlmCompatibleProvider::OpenAi,
-                                            workspace,
-                                            window,
-                                            cx,
-                                        );
-                                    })
-                                    .log_err();
-                            }
-                        })
+                    Some(ContextMenu::build(window, cx, |mut menu, _window, _cx| {
+                        menu = menu
+                            .header("Local Models")
+                            .entry("Ollama", None, {
+                                let workspace = workspace.clone();
+                                move |window, cx| {
+                                    workspace
+                                        .update(cx, |workspace, cx| {
+                                            AddLlmProviderModal::toggle(
+                                                LlmCompatibleProvider::Ollama,
+                                                workspace,
+                                                window,
+                                                cx,
+                                            );
+                                        })
+                                        .log_err();
+                                }
+                            })
+                            .entry("LM Studio", None, {
+                                let workspace = workspace.clone();
+                                move |window, cx| {
+                                    workspace
+                                        .update(cx, |workspace, cx| {
+                                            AddLlmProviderModal::toggle(
+                                                LlmCompatibleProvider::LmStudio,
+                                                workspace,
+                                                window,
+                                                cx,
+                                            );
+                                        })
+                                        .log_err();
+                                }
+                            })
+                            .entry("vLLM", None, {
+                                let workspace = workspace.clone();
+                                move |window, cx| {
+                                    workspace
+                                        .update(cx, |workspace, cx| {
+                                            AddLlmProviderModal::toggle(
+                                                LlmCompatibleProvider::Vllm,
+                                                workspace,
+                                                window,
+                                                cx,
+                                            );
+                                        })
+                                        .log_err();
+                                }
+                            })
+                            .entry("SGLang", None, {
+                                let workspace = workspace.clone();
+                                move |window, cx| {
+                                    workspace
+                                        .update(cx, |workspace, cx| {
+                                            AddLlmProviderModal::toggle(
+                                                LlmCompatibleProvider::Sglang,
+                                                workspace,
+                                                window,
+                                                cx,
+                                            );
+                                        })
+                                        .log_err();
+                                }
+                            })
+                            .entry("Custom Local API", None, {
+                                let workspace = workspace.clone();
+                                move |window, cx| {
+                                    workspace
+                                        .update(cx, |workspace, cx| {
+                                            AddLlmProviderModal::toggle(
+                                                LlmCompatibleProvider::LocalOpenAiCompatible,
+                                                workspace,
+                                                window,
+                                                cx,
+                                            );
+                                        })
+                                        .log_err();
+                                }
+                            })
+                            .separator()
+                            .header("Compatible APIs")
+                            .entry("OpenAI", None, {
+                                let workspace = workspace.clone();
+                                move |window, cx| {
+                                    workspace
+                                        .update(cx, |workspace, cx| {
+                                            AddLlmProviderModal::toggle(
+                                                LlmCompatibleProvider::OpenAi,
+                                                workspace,
+                                                window,
+                                                cx,
+                                            );
+                                        })
+                                        .log_err();
+                                }
+                            });
+
+                        menu
                     }))
                 }
             })
