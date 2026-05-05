@@ -5,7 +5,7 @@ use std::{
         Arc,
         atomic::{AtomicBool, Ordering},
     },
-    time::Duration,
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use acp_thread::{AcpThread, AcpThreadEvent, MentionUri, ThreadStatus};
@@ -206,6 +206,10 @@ pub fn init(cx: &mut App) {
                 .register_action(|workspace, action: &NewThread, window, cx| {
                     match stcode_new_thread_route(workspace, cx) {
                         NewThreadRoute::NewWorktree => {
+                            let worktree_name =
+                                workspace.panel::<AgentPanel>(cx).and_then(|panel| {
+                                    panel.read(cx).stcode_worktree_name_from_active_prompt(cx)
+                                });
                             if let Some(panel) = workspace.panel::<AgentPanel>(cx) {
                                 panel.update(cx, |panel, cx| {
                                     panel.prepare_stcode_worktree_thread_transfer(cx);
@@ -214,7 +218,7 @@ pub fn init(cx: &mut App) {
                             git_ui::worktree_service::handle_create_worktree(
                                 workspace,
                                 &CreateWorktree {
-                                    worktree_name: None,
+                                    worktree_name,
                                     branch_target: NewWorktreeBranchTarget::CurrentBranch,
                                 },
                                 window,
@@ -721,6 +725,9 @@ struct SourcePanelInitialization {
     focus: bool,
 }
 
+const STCODE_WORKTREE_NAME_PREFIX: &str = "stcode";
+const STCODE_WORKTREE_NAME_SLUG_MAX_CHARACTERS: usize = 34;
+
 fn initial_content_with_auto_submit(content: AgentInitialContent) -> AgentInitialContent {
     match content {
         AgentInitialContent::ContentBlock { blocks, .. } => AgentInitialContent::ContentBlock {
@@ -729,6 +736,95 @@ fn initial_content_with_auto_submit(content: AgentInitialContent) -> AgentInitia
         },
         content => content,
     }
+}
+
+fn stcode_worktree_name_from_initial_content(
+    content: &AgentInitialContent,
+    disambiguator: u64,
+) -> Option<String> {
+    stcode_initial_content_text(content)
+        .as_deref()
+        .and_then(|text| stcode_worktree_name_from_text(text, disambiguator))
+}
+
+fn stcode_initial_content_text(content: &AgentInitialContent) -> Option<String> {
+    match content {
+        AgentInitialContent::ContentBlock { blocks, .. } => {
+            let mut text = String::new();
+            for block in blocks {
+                if let acp::ContentBlock::Text(text_content) = block {
+                    if !text.is_empty() {
+                        text.push(' ');
+                    }
+                    text.push_str(&text_content.text);
+                }
+            }
+            if text.trim().is_empty() {
+                None
+            } else {
+                Some(text)
+            }
+        }
+        AgentInitialContent::FromExternalSource(prompt) => Some(prompt.as_str().to_string()),
+        AgentInitialContent::ThreadSummary { title, .. } => title.as_ref().map(ToString::to_string),
+    }
+}
+
+fn stcode_worktree_name_from_text(text: &str, disambiguator: u64) -> Option<String> {
+    let mut slug = String::new();
+    let mut previous_was_separator = false;
+
+    for character in text.chars() {
+        if character.is_alphanumeric() {
+            for lowercase_character in character.to_lowercase() {
+                slug.push(lowercase_character);
+            }
+            previous_was_separator = false;
+        } else if !slug.is_empty() && !previous_was_separator {
+            slug.push('-');
+            previous_was_separator = true;
+        }
+
+        if slug.chars().count() >= STCODE_WORKTREE_NAME_SLUG_MAX_CHARACTERS {
+            break;
+        }
+    }
+
+    while slug.ends_with('-') {
+        slug.pop();
+    }
+
+    if slug.is_empty() {
+        return None;
+    }
+
+    Some(format!(
+        "{}-{}-{}",
+        STCODE_WORKTREE_NAME_PREFIX,
+        slug,
+        stcode_worktree_name_signature(text, disambiguator)
+    ))
+}
+
+fn stcode_worktree_name_signature(text: &str, disambiguator: u64) -> String {
+    let mut hash = 0xcbf29ce484222325_u64;
+    for byte in text
+        .as_bytes()
+        .iter()
+        .copied()
+        .chain(disambiguator.to_le_bytes())
+    {
+        hash ^= u64::from(byte);
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    format!("{:06x}", hash & 0x00ff_ffff)
+}
+
+fn stcode_worktree_name_disambiguator() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos() as u64)
+        .unwrap_or(0)
 }
 
 impl BaseView {
@@ -2721,6 +2817,14 @@ impl AgentPanel {
 
     fn consume_stcode_worktree_thread_transfer(&mut self) -> bool {
         std::mem::take(&mut self.pending_stcode_worktree_thread_transfer)
+    }
+
+    fn stcode_worktree_name_from_active_prompt(&self, cx: &App) -> Option<String> {
+        let initial_content = self.active_initial_content(cx)?;
+        stcode_worktree_name_from_initial_content(
+            &initial_content,
+            stcode_worktree_name_disambiguator(),
+        )
     }
 
     fn destination_has_meaningful_state(&self, cx: &App) -> bool {
@@ -7341,6 +7445,62 @@ mod tests {
 
         assert!(auto_submit);
         assert_eq!(blocks.len(), 1);
+    }
+
+    #[test]
+    fn test_stcode_worktree_name_uses_prompt_text() {
+        let Some(name) = stcode_worktree_name_from_text("Build smart merge, then run CI!", 7)
+        else {
+            panic!("prompt text should produce a worktree name");
+        };
+        let Some(other_name) = stcode_worktree_name_from_text("Build smart merge, then run CI!", 8)
+        else {
+            panic!("prompt text should produce a worktree name");
+        };
+
+        assert!(name.starts_with("stcode-build-smart-merge-then-run-ci-"));
+        assert_ne!(name, other_name);
+    }
+
+    #[test]
+    fn test_stcode_worktree_name_ignores_empty_prompt() {
+        assert_eq!(stcode_worktree_name_from_text(" ... --- !!! ", 0), None);
+    }
+
+    #[test]
+    fn test_stcode_worktree_name_truncates_and_cleans_edges() {
+        let Some(name) = stcode_worktree_name_from_text(
+            "alpha beta gamma delta epsilon zeta eta theta iota.",
+            0,
+        ) else {
+            panic!("prompt text should produce a worktree name");
+        };
+        let Some(rest) = name.strip_prefix("stcode-") else {
+            panic!("name should have stcode prefix");
+        };
+        let Some((slug, signature)) = rest.rsplit_once('-') else {
+            panic!("name should have signature suffix");
+        };
+
+        assert!(slug.len() <= STCODE_WORKTREE_NAME_SLUG_MAX_CHARACTERS);
+        assert!(!slug.ends_with('-'));
+        assert_eq!(signature.len(), 6);
+    }
+
+    #[test]
+    fn test_stcode_worktree_name_reads_initial_content_text_blocks() {
+        let content = AgentInitialContent::ContentBlock {
+            blocks: vec![
+                acp::ContentBlock::Text(acp::TextContent::new("Fix flaky")),
+                acp::ContentBlock::Text(acp::TextContent::new("tests")),
+            ],
+            auto_submit: false,
+        };
+        let Some(name) = stcode_worktree_name_from_initial_content(&content, 0) else {
+            panic!("initial content should produce a worktree name");
+        };
+
+        assert!(name.starts_with("stcode-fix-flaky-tests-"));
     }
 
     #[gpui::test]
