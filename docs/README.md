@@ -51,7 +51,7 @@ Remove or avoid reintroducing:
 Remove upstream material that does not help Stcode's user:
 
 - Zed website documentation
-- release and distribution automation
+- upstream release and distribution automation that targets Zed infrastructure instead of Stcode GitHub Releases
 - Cloudflare, Nix, Docker, sponsorship, and public-community operations
 - hosted Zed collaboration server and deployment tooling
 - sample extensions
