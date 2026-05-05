@@ -34,7 +34,7 @@ The `stcode` binary should:
 - open a fresh agent draft automatically in the newly-created worktree lane, even when the source workspace did not already contain typed prompt text
 - auto-submit prompt text that was already typed before Stcode created the new worktree lane, so the autonomous run starts after the lane handoff completes
 - render a Stcode-only workspace activity timeline in the agent panel so users can see whether the agent is ready, working, blocked by tool permission, or blocked by a failed tool
-- render an AI Smart Panel work snapshot that summarizes the active branch, local changed files, staged and unstaged counts, conflicts, line-level diff stats, and the first files that need review
+- render an AI Smart Panel work board that summarizes the current goal, lane isolation, latest command check, merge readiness, active branch, local changed files, staged and unstaged counts, conflicts, line-level diff stats, and the first files that need review
 - render an AI Smart Todo card that summarizes the live agent plan, next action, autonomy blockers, tool failures, and completed/pending progress
 - render an AI Smart Start guard when uncommitted workspace changes remain, with direct paths to review them with the agent, split into an isolated worktree, stash them, or commit them
 - render an AI Smart Parallel card that detects whether the current session is already in an isolated worktree lane, is still on the main checkout, or overlaps a branch used by another linked worktree, with direct paths to create or manage lanes
@@ -48,7 +48,7 @@ Stcode's product surface should make Git, CI, worktrees, and parallel agent coor
 
 - AI Smart Start: start each session from an isolated worktree when possible, route the default New Thread action to lane creation, name the new lane from the task prompt, auto-open the destination agent draft, auto-submit transferred prompt text, and surface leftover changes as a handoff task before the next session starts
 - AI Smart Parallel: keep parallel agents isolated so they do not edit the same worktree or overwrite each other's work
-- AI Smart Panel: show the current goal, todo state, context, changed files, checks, blockers, PR state, and merge readiness in a right-side work panel
+- AI Smart Panel: show the current goal, todo state, lane isolation, changed files, checks, blockers, PR state, and merge readiness in a right-side work panel
 - AI Smart Merge: take a finished task to CI-passing, non-conflicting, merge-ready state automatically, then merge once the safe conditions are met
 
 ## What Stays Shared
