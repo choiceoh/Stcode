@@ -28,6 +28,7 @@ The `stcode` binary should:
 - use Stcode workspace terminology in recent workspace pickers, sidebars, and remote workspace selection surfaces
 - use Stcode workspace terminology in title bar workspace controls, remote workspace status, trust prompts, and shared-workspace hints
 - use Stcode workspace terminology in the File and Settings menus, including workspace-specific settings and multi-root workspace actions
+- apply a Stcode autonomy policy at launch so tool confirmations become auto-run defaults, wait notifications are suppressed, and new agent threads start in isolated worktrees by default
 - render a Stcode-only workspace activity timeline in the agent panel so users can see whether the agent is ready, working, blocked by tool permission, or blocked by a failed tool
 - render an AI Smart Panel work snapshot that summarizes the active branch, local changed files, staged and unstaged counts, conflicts, line-level diff stats, and the first files that need review
 - render an AI Smart Todo card that summarizes the live agent plan, next action, autonomy blockers, tool failures, and completed/pending progress
@@ -41,7 +42,7 @@ The terminal panel is hidden by default in Stcode mode because users should not 
 
 Stcode's product surface should make Git, CI, worktrees, and parallel agent coordination feel like one managed workflow instead of separate developer tools.
 
-- AI Smart Start: start each session from an isolated worktree when possible, and ask how to hand off any leftover changes before the next session starts
+- AI Smart Start: start each session from an isolated worktree when possible, and surface leftover changes as a handoff task before the next session starts
 - AI Smart Parallel: keep parallel agents isolated so they do not edit the same worktree or overwrite each other's work
 - AI Smart Panel: show the current goal, todo state, context, changed files, checks, blockers, PR state, and merge readiness in a right-side work panel
 - AI Smart Merge: take a finished task to CI-passing, non-conflicting, merge-ready state automatically, then merge once the safe conditions are met

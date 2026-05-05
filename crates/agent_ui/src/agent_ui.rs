@@ -56,7 +56,10 @@ use project::{AgentId, DisableAiSettings};
 use prompt_store::PromptBuilder;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use settings::{LanguageModelSelection, Settings as _, SettingsStore};
+use settings::{
+    LanguageModelSelection, NewThreadLocation, NotifyWhenAgentWaiting, Settings as _,
+    SettingsStore, ToolPermissionMode,
+};
 use std::any::TypeId;
 use workspace::{AppLaunchMode, Workspace};
 
@@ -431,6 +434,7 @@ pub fn init(
     is_eval: bool,
     cx: &mut App,
 ) {
+    apply_stcode_autonomy_policy(cx);
     agent::ThreadStore::init_global(cx);
     rules_library::init(cx);
     if !is_eval {
@@ -498,6 +502,7 @@ pub fn init(
 
     // Watch for settings changes
     cx.observe_global::<SettingsStore>(|app_cx| {
+        apply_stcode_autonomy_policy(app_cx);
         // When settings change, update the command palette filter
         update_command_palette_filter(app_cx);
     })
@@ -509,6 +514,26 @@ pub fn init(
     .detach();
 
     maybe_backfill_editor_layout(fs, is_new_install, cx);
+}
+
+fn apply_stcode_autonomy_policy(cx: &mut App) {
+    if !AppLaunchMode::is_stcode(cx) {
+        return;
+    }
+
+    let mut settings = AgentSettings::get_global(cx).clone();
+    settings.tool_permissions.default = ToolPermissionMode::Allow;
+    settings.new_thread_location = NewThreadLocation::NewWorktree;
+    settings.notify_when_agent_waiting = NotifyWhenAgentWaiting::Never;
+
+    for rules in settings.tool_permissions.tools.values_mut() {
+        if rules.default == Some(ToolPermissionMode::Confirm) {
+            rules.default = Some(ToolPermissionMode::Allow);
+        }
+        rules.always_confirm.clear();
+    }
+
+    AgentSettings::override_global(settings, cx);
 }
 
 fn maybe_backfill_editor_layout(fs: Arc<dyn Fs>, is_new_install: bool, cx: &mut App) {
@@ -743,7 +768,8 @@ mod tests {
     use gpui::{BorrowAppContext, TestAppContext, px};
     use project::DisableAiSettings;
     use settings::{
-        DockPosition, NotifyWhenAgentWaiting, PlaySoundWhenAgentDone, Settings, SettingsStore,
+        DockPosition, NewThreadLocation, NotifyWhenAgentWaiting, PlaySoundWhenAgentDone, Settings,
+        SettingsStore, ToolPermissionMode,
     };
 
     fn register_command_palette_test_globals(cx: &mut App) {
@@ -939,6 +965,76 @@ mod tests {
             assert!(
                 !filter.is_hidden(&workspace::SplitRight::default()),
                 "Zed should keep pane commands visible"
+            );
+        });
+    }
+
+    #[gpui::test]
+    fn test_stcode_autonomy_policy_removes_manual_tool_confirmations(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            register_command_palette_test_globals(cx);
+            AppLaunchMode::set_global(AppLaunchMode::Stcode, cx);
+
+            let mut settings = enabled_agent_settings();
+            settings.tool_permissions.default = ToolPermissionMode::Confirm;
+            settings.tool_permissions.tools.insert(
+                Arc::from("terminal"),
+                agent_settings::ToolRules {
+                    default: Some(ToolPermissionMode::Confirm),
+                    always_confirm: vec![
+                        agent_settings::CompiledRegex::new("^cargo", false).unwrap(),
+                    ],
+                    ..Default::default()
+                },
+            );
+            settings.notify_when_agent_waiting = NotifyWhenAgentWaiting::PrimaryScreen;
+            settings.new_thread_location = NewThreadLocation::LocalProject;
+            AgentSettings::override_global(settings, cx);
+
+            apply_stcode_autonomy_policy(cx);
+
+            let settings = AgentSettings::get_global(cx);
+            assert_eq!(settings.tool_permissions.default, ToolPermissionMode::Allow);
+            assert_eq!(settings.new_thread_location, NewThreadLocation::NewWorktree);
+            assert_eq!(
+                settings.notify_when_agent_waiting,
+                NotifyWhenAgentWaiting::Never
+            );
+
+            let terminal_rules = settings.tool_permissions.tools.get("terminal").unwrap();
+            assert_eq!(
+                terminal_rules.default,
+                Some(ToolPermissionMode::Allow),
+                "Stcode should convert manual confirmations into auto-run policy"
+            );
+            assert!(
+                terminal_rules.always_confirm.is_empty(),
+                "Stcode should not leave pattern-based confirmation waits enabled"
+            );
+        });
+    }
+
+    #[gpui::test]
+    fn test_zed_keeps_configured_tool_confirmations(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            register_command_palette_test_globals(cx);
+            AppLaunchMode::set_global(AppLaunchMode::Zed, cx);
+
+            let mut settings = enabled_agent_settings();
+            settings.tool_permissions.default = ToolPermissionMode::Confirm;
+            settings.new_thread_location = NewThreadLocation::LocalProject;
+            AgentSettings::override_global(settings, cx);
+
+            apply_stcode_autonomy_policy(cx);
+
+            let settings = AgentSettings::get_global(cx);
+            assert_eq!(
+                settings.tool_permissions.default,
+                ToolPermissionMode::Confirm
+            );
+            assert_eq!(
+                settings.new_thread_location,
+                NewThreadLocation::LocalProject
             );
         });
     }
