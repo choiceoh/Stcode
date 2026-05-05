@@ -19,6 +19,7 @@ const MAX_SMART_PANEL_GOAL_CHARS: usize = 64;
 const MAX_SMART_PANEL_FILES: usize = 2;
 const MAX_SMART_TODO_ENTRIES: usize = 2;
 const MAX_TODO_LABEL_CHARS: usize = 56;
+const MAX_WORKLINE_DETAIL_CHARS: usize = 72;
 
 #[derive(IntoElement)]
 pub(crate) struct StcodeActivityTimeline {
@@ -64,6 +65,7 @@ pub(crate) enum StcodeActivityLayout {
 
 #[derive(Clone)]
 struct ActivityTimelineSnapshots {
+    has_thread_entries: bool,
     activity: ActivitySnapshot,
     smart_run: Option<StcodeSmartRunSnapshot>,
     smart_start: Option<SmartStartSnapshot>,
@@ -80,13 +82,14 @@ impl ActivityTimelineSnapshots {
         smart_run: Option<StcodeSmartRunSnapshot>,
         cx: &App,
     ) -> Self {
+        let has_thread_entries = thread.is_some_and(|thread| !thread.entries().is_empty());
         let activity = thread
             .map(|thread| ActivitySnapshot::from_thread(thread, cx))
             .unwrap_or_else(ActivitySnapshot::empty);
         let smart_todo = thread.and_then(|thread| SmartTodoSnapshot::from_thread(thread, cx));
-        let has_thread_entries = thread.is_some_and(|thread| !thread.entries().is_empty());
 
         Self {
+            has_thread_entries,
             activity,
             smart_run,
             smart_start: (!has_thread_entries)
@@ -211,6 +214,7 @@ fn render_activity_side_panel(
     cx: &mut App,
 ) -> gpui::AnyElement {
     let ActivityTimelineSnapshots {
+        has_thread_entries,
         activity,
         smart_run,
         smart_start,
@@ -219,6 +223,16 @@ fn render_activity_side_panel(
         smart_parallel,
         smart_merge,
     } = snapshots;
+    let workline = SmartWorklineSnapshot::from_snapshots(
+        has_thread_entries,
+        &activity,
+        smart_run.as_ref(),
+        smart_start.as_ref(),
+        smart_panel.as_ref(),
+        smart_todo.as_ref(),
+        smart_parallel.as_ref(),
+        smart_merge.as_ref(),
+    );
 
     v_flex()
         .id("stcode-activity-side-panel")
@@ -270,46 +284,194 @@ fn render_activity_side_panel(
                         ),
                 ),
         )
-        .children(
-            smart_run
-                .filter(StcodeSmartRunSnapshot::should_render_card)
-                .map(|snapshot| render_stcode_smart_run_card(snapshot, cx)),
-        )
-        .children(
-            smart_panel
-                .filter(SmartPanelSnapshot::should_render_card)
-                .map(|snapshot| render_smart_panel_card(snapshot, cx)),
-        )
-        .children(
-            smart_todo
-                .filter(SmartTodoSnapshot::should_render_card)
-                .map(|snapshot| render_smart_todo_card(snapshot, cx)),
-        )
-        .children(smart_start.map(|snapshot| render_smart_start_guard(snapshot, cx)))
-        .children(
-            smart_parallel
-                .filter(SmartParallelSnapshot::should_render_card)
-                .map(|snapshot| render_smart_parallel_card(snapshot, cx)),
-        )
-        .children(
-            smart_merge
-                .filter(SmartMergeSnapshot::should_render_card)
-                .map(|snapshot| render_smart_merge_card(snapshot, cx)),
-        )
+        .child(render_smart_workline_card(
+            workline,
+            smart_start,
+            smart_panel,
+            smart_todo,
+            smart_parallel,
+            smart_merge,
+            cx,
+        ))
         .children(activity.entries.into_iter().map(render_activity_entry))
         .into_any_element()
 }
 
-fn render_stcode_smart_run_card(
-    snapshot: StcodeSmartRunSnapshot,
+#[derive(Clone)]
+struct SmartWorklineSnapshot {
+    status: &'static str,
+    detail: String,
+    icon: IconName,
+    tone: ActivityTone,
+    primary_action: Option<SmartWorklineAction>,
+    stages: Vec<SmartWorklineStage>,
+}
+
+impl SmartWorklineSnapshot {
+    fn from_snapshots(
+        has_thread_entries: bool,
+        activity: &ActivitySnapshot,
+        smart_run: Option<&StcodeSmartRunSnapshot>,
+        smart_start: Option<&SmartStartSnapshot>,
+        smart_panel: Option<&SmartPanelSnapshot>,
+        smart_todo: Option<&SmartTodoSnapshot>,
+        smart_parallel: Option<&SmartParallelSnapshot>,
+        smart_merge: Option<&SmartMergeSnapshot>,
+    ) -> Self {
+        let active_stage = smart_workline_active_stage(
+            has_thread_entries,
+            activity,
+            smart_run,
+            smart_start,
+            smart_panel,
+            smart_todo,
+            smart_parallel,
+            smart_merge,
+        );
+        let stages = vec![
+            smart_workline_start_stage(smart_start, active_stage),
+            smart_workline_plan_stage(smart_todo, has_thread_entries, active_stage),
+            smart_workline_parallel_stage(smart_parallel, active_stage),
+            smart_workline_execute_stage(activity, has_thread_entries, active_stage),
+            smart_workline_review_stage(smart_panel, has_thread_entries, active_stage),
+            smart_workline_merge_stage(smart_merge, has_thread_entries, active_stage),
+        ];
+        let display_stage = stages
+            .iter()
+            .find(|stage| stage.active)
+            .or_else(|| stages.last())
+            .expect("workline always has stages");
+
+        Self {
+            status: display_stage.status,
+            detail: display_stage.detail.clone(),
+            icon: display_stage.icon,
+            tone: display_stage.tone,
+            primary_action: active_stage.map(SmartWorklineAction::from_stage),
+            stages,
+        }
+    }
+}
+
+#[derive(Clone)]
+struct SmartWorklineStage {
+    kind: SmartWorklineStageKind,
+    label: &'static str,
+    status: &'static str,
+    detail: String,
+    icon: IconName,
+    tone: ActivityTone,
+    active: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SmartWorklineStageKind {
+    Start,
+    Plan,
+    Parallel,
+    Execute,
+    Review,
+    Merge,
+}
+
+impl SmartWorklineStageKind {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Start => "Start",
+            Self::Plan => "Plan",
+            Self::Parallel => "Parallel",
+            Self::Execute => "Execute",
+            Self::Review => "Review",
+            Self::Merge => "Merge",
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum SmartWorklineAction {
+    Start,
+    Panel,
+    Parallel,
+    Merge,
+}
+
+impl SmartWorklineAction {
+    fn from_stage(stage: SmartWorklineStageKind) -> Self {
+        match stage {
+            SmartWorklineStageKind::Start => Self::Start,
+            SmartWorklineStageKind::Plan
+            | SmartWorklineStageKind::Execute
+            | SmartWorklineStageKind::Review => Self::Panel,
+            SmartWorklineStageKind::Parallel => Self::Parallel,
+            SmartWorklineStageKind::Merge => Self::Merge,
+        }
+    }
+
+    fn boxed_action(self) -> Box<dyn Action> {
+        match self {
+            Self::Start => crate::StcodeSmartStart.boxed_clone(),
+            Self::Panel => crate::StcodeSmartPanel.boxed_clone(),
+            Self::Parallel => crate::StcodeSmartParallel.boxed_clone(),
+            Self::Merge => crate::StcodeSmartMerge.boxed_clone(),
+        }
+    }
+}
+
+fn render_smart_workline_card(
+    snapshot: SmartWorklineSnapshot,
+    smart_start: Option<SmartStartSnapshot>,
+    smart_panel: Option<SmartPanelSnapshot>,
+    smart_todo: Option<SmartTodoSnapshot>,
+    smart_parallel: Option<SmartParallelSnapshot>,
+    smart_merge: Option<SmartMergeSnapshot>,
     cx: &mut App,
 ) -> impl IntoElement {
-    let (border_color, background_color) = match snapshot.phase {
-        StcodeSmartRunPhase::Complete => (
+    let detail_rows = smart_workline_detail_rows(
+        smart_panel.as_ref(),
+        smart_todo.as_ref(),
+        smart_merge.as_ref(),
+    );
+    let has_detail_rows = !detail_rows.is_empty();
+    let primary_action = snapshot
+        .primary_action
+        .map(SmartWorklineAction::boxed_action);
+    let start_review_repository = smart_start
+        .as_ref()
+        .map(|snapshot| snapshot.repository.clone());
+    let start_stash_repository = smart_start
+        .as_ref()
+        .map(|snapshot| snapshot.repository.clone());
+    let panel_review_repository = smart_panel
+        .as_ref()
+        .map(|snapshot| snapshot.repository.clone());
+    let merge_review_repository = smart_merge
+        .as_ref()
+        .map(|snapshot| snapshot.repository.clone());
+    let can_start_handoff = smart_start.is_some();
+    let can_review_files = smart_panel
+        .as_ref()
+        .is_some_and(|snapshot| snapshot.can_review);
+    let can_commit_panel = smart_panel
+        .as_ref()
+        .is_some_and(|snapshot| snapshot.can_commit);
+    let can_manage_parallel = smart_parallel
+        .as_ref()
+        .is_some_and(|snapshot| snapshot.should_render_card());
+    let can_review_merge = smart_merge
+        .as_ref()
+        .is_some_and(|snapshot| snapshot.can_review);
+    let can_open_pull_request = smart_merge
+        .as_ref()
+        .is_some_and(|snapshot| snapshot.can_create_pull_request);
+    let can_commit_merge = smart_merge
+        .as_ref()
+        .is_some_and(|snapshot| snapshot.can_commit);
+    let (border_color, background_color) = match snapshot.tone {
+        ActivityTone::Done => (
             cx.theme().status().success_border,
             cx.theme().status().success_background,
         ),
-        StcodeSmartRunPhase::Blocked => (
+        ActivityTone::Failed => (
             cx.theme().status().error_border,
             cx.theme().status().error_background,
         ),
@@ -320,7 +482,7 @@ fn render_stcode_smart_run_card(
     };
 
     v_flex()
-        .id("stcode-smart-run-card")
+        .id("stcode-smart-workline-card")
         .mt_1()
         .gap_2()
         .rounded_sm()
@@ -334,9 +496,9 @@ fn render_stcode_smart_run_card(
                 .gap_2()
                 .items_start()
                 .child(
-                    Icon::new(stcode_smart_run_phase_icon(snapshot.phase))
+                    Icon::new(snapshot.icon)
                         .size(IconSize::Small)
-                        .color(stcode_smart_run_phase_tone(snapshot.phase).color()),
+                        .color(snapshot.tone.color()),
                 )
                 .child(
                     v_flex()
@@ -349,14 +511,14 @@ fn render_stcode_smart_run_card(
                                 .justify_between()
                                 .gap_2()
                                 .child(
-                                    Label::new(snapshot.title)
+                                    Label::new("AI Smart Workline")
                                         .size(LabelSize::Default)
                                         .color(Color::Default),
                                 )
                                 .child(
                                     Label::new(snapshot.status)
                                         .size(LabelSize::XSmall)
-                                        .color(stcode_smart_run_phase_tone(snapshot.phase).color()),
+                                        .color(snapshot.tone.color()),
                                 ),
                         )
                         .child(
@@ -368,40 +530,610 @@ fn render_stcode_smart_run_card(
                 ),
         )
         .child(
-            h_flex().w_full().gap_1().flex_wrap().children(
-                snapshot
-                    .steps
-                    .into_iter()
-                    .filter(|step| step.phase != StcodeSmartRunPhase::Complete)
-                    .map(render_stcode_smart_run_step),
-            ),
+            v_flex()
+                .w_full()
+                .gap_1()
+                .children(snapshot.stages.into_iter().map(render_smart_workline_stage)),
+        )
+        .when(has_detail_rows, |this| {
+            this.child(
+                v_flex()
+                    .id("stcode-smart-workline-details")
+                    .w_full()
+                    .gap_0p5()
+                    .children(
+                        detail_rows
+                            .into_iter()
+                            .map(render_smart_workline_detail_row),
+                    ),
+            )
+        })
+        .child(
+            h_flex()
+                .w_full()
+                .gap_1()
+                .flex_wrap()
+                .when_some(primary_action, |this, action| {
+                    this.child(
+                        Button::new("stcode-smart-workline-continue", "Continue")
+                            .label_size(LabelSize::XSmall)
+                            .style(ButtonStyle::Outlined)
+                            .on_click(move |_, window, cx| {
+                                window.dispatch_action(action.boxed_clone(), cx);
+                            }),
+                    )
+                })
+                .when(can_start_handoff, |this| {
+                    this.when_some(start_review_repository, |this, repository| {
+                        this.child(
+                            Button::new("stcode-smart-workline-start-review", "Review")
+                                .label_size(LabelSize::XSmall)
+                                .style(ButtonStyle::Outlined)
+                                .on_click(move |_, window, cx| {
+                                    review_leftover_changes(repository.clone(), window, cx);
+                                }),
+                        )
+                    })
+                    .child(
+                        Button::new("stcode-smart-workline-split", "Split Worktree")
+                            .label_size(LabelSize::XSmall)
+                            .style(ButtonStyle::Outlined)
+                            .on_click(move |_, window, cx| {
+                                window.dispatch_action(zed_git::Worktree.boxed_clone(), cx);
+                            }),
+                    )
+                    .when_some(start_stash_repository, |this, repository| {
+                        this.child(
+                            Button::new("stcode-smart-workline-stash", "Stash")
+                                .label_size(LabelSize::XSmall)
+                                .style(ButtonStyle::Outlined)
+                                .on_click(move |_, _window, cx| {
+                                    stash_leftover_changes(repository.clone(), cx);
+                                }),
+                        )
+                    })
+                    .child(
+                        Button::new("stcode-smart-workline-start-commit", "Commit")
+                            .label_size(LabelSize::XSmall)
+                            .style(ButtonStyle::Outlined)
+                            .on_click(move |_, window, cx| {
+                                window.dispatch_action(git::ExpandCommitEditor.boxed_clone(), cx);
+                            }),
+                    )
+                })
+                .when(can_manage_parallel, |this| {
+                    this.child(
+                        Button::new("stcode-smart-workline-create-lane", "Create Lane")
+                            .label_size(LabelSize::XSmall)
+                            .style(ButtonStyle::Outlined)
+                            .on_click(move |_, window, cx| {
+                                window.dispatch_action(
+                                    CreateWorktree {
+                                        worktree_name: None,
+                                        branch_target: NewWorktreeBranchTarget::CurrentBranch,
+                                    }
+                                    .boxed_clone(),
+                                    cx,
+                                );
+                            }),
+                    )
+                    .child(
+                        Button::new("stcode-smart-workline-manage-lanes", "Manage Lanes")
+                            .label_size(LabelSize::XSmall)
+                            .style(ButtonStyle::Outlined)
+                            .on_click(move |_, window, cx| {
+                                window.dispatch_action(zed_git::Worktree.boxed_clone(), cx);
+                            }),
+                    )
+                })
+                .when(can_review_files, |this| {
+                    this.when_some(panel_review_repository, |this, repository| {
+                        this.child(
+                            Button::new("stcode-smart-workline-review-files", "Review Files")
+                                .label_size(LabelSize::XSmall)
+                                .style(ButtonStyle::Outlined)
+                                .on_click(move |_, window, cx| {
+                                    review_leftover_changes(repository.clone(), window, cx);
+                                }),
+                        )
+                    })
+                })
+                .when(can_commit_panel, |this| {
+                    this.child(
+                        Button::new("stcode-smart-workline-panel-commit", "Commit")
+                            .label_size(LabelSize::XSmall)
+                            .style(ButtonStyle::Outlined)
+                            .on_click(move |_, window, cx| {
+                                window.dispatch_action(git::ExpandCommitEditor.boxed_clone(), cx);
+                            }),
+                    )
+                })
+                .when(can_review_merge, |this| {
+                    this.when_some(merge_review_repository, |this, repository| {
+                        this.child(
+                            Button::new("stcode-smart-workline-review-merge", "Review Merge")
+                                .label_size(LabelSize::XSmall)
+                                .style(ButtonStyle::Outlined)
+                                .on_click(move |_, window, cx| {
+                                    review_merge_readiness(repository.clone(), window, cx);
+                                }),
+                        )
+                    })
+                })
+                .when(can_open_pull_request, |this| {
+                    this.child(
+                        Button::new("stcode-smart-workline-open-pr", "Open PR")
+                            .label_size(LabelSize::XSmall)
+                            .style(ButtonStyle::Outlined)
+                            .on_click(move |_, window, cx| {
+                                window
+                                    .dispatch_action(zed_git::CreatePullRequest.boxed_clone(), cx);
+                            }),
+                    )
+                })
+                .when(can_commit_merge, |this| {
+                    this.child(
+                        Button::new("stcode-smart-workline-merge-commit", "Commit")
+                            .label_size(LabelSize::XSmall)
+                            .style(ButtonStyle::Outlined)
+                            .on_click(move |_, window, cx| {
+                                window.dispatch_action(git::ExpandCommitEditor.boxed_clone(), cx);
+                            }),
+                    )
+                }),
         )
 }
 
-fn render_stcode_smart_run_step(step: StcodeSmartRunStep) -> impl IntoElement {
-    let tone = stcode_smart_run_phase_tone(step.phase);
+#[derive(Clone)]
+struct SmartWorklineDetailRow {
+    id: String,
+    label: String,
+    detail: String,
+    status: &'static str,
+    icon: IconName,
+    tone: ActivityTone,
+}
 
+fn smart_workline_detail_rows(
+    smart_panel: Option<&SmartPanelSnapshot>,
+    smart_todo: Option<&SmartTodoSnapshot>,
+    smart_merge: Option<&SmartMergeSnapshot>,
+) -> Vec<SmartWorklineDetailRow> {
+    let mut rows = Vec::new();
+
+    if let Some(todo) = smart_todo {
+        rows.push(SmartWorklineDetailRow {
+            id: "todo-progress".to_string(),
+            label: "Plan".to_string(),
+            detail: format!("{} · {}", todo.progress_label, todo.left_label),
+            status: todo.status,
+            icon: todo.icon,
+            tone: todo.tone,
+        });
+
+        if let Some(item) = todo
+            .items
+            .iter()
+            .find(|item| item.tone.is_live())
+            .or_else(|| todo.items.first())
+        {
+            rows.push(SmartWorklineDetailRow {
+                id: format!("todo-item-{}", item.id),
+                label: "Todo".to_string(),
+                detail: smart_panel_compact_label(&item.label, MAX_WORKLINE_DETAIL_CHARS),
+                status: item.status,
+                icon: item.icon,
+                tone: item.tone,
+            });
+        }
+    }
+
+    if let Some(panel) = smart_panel {
+        rows.push(SmartWorklineDetailRow {
+            id: "workspace".to_string(),
+            label: "Workspace".to_string(),
+            detail: smart_panel_compact_label(&panel.detail, MAX_WORKLINE_DETAIL_CHARS),
+            status: panel.status,
+            icon: panel.icon,
+            tone: panel.tone,
+        });
+
+        if let Some(item) = panel
+            .work_items
+            .iter()
+            .find(|item| item.tone.needs_attention())
+            .or_else(|| panel.work_items.iter().find(|item| item.tone.is_live()))
+            .or_else(|| panel.work_items.iter().find(|item| item.id == "goal"))
+        {
+            rows.push(SmartWorklineDetailRow {
+                id: format!("work-item-{}", item.id),
+                label: item.label.to_string(),
+                detail: smart_panel_compact_label(&item.detail, MAX_WORKLINE_DETAIL_CHARS),
+                status: item.status,
+                icon: item.icon,
+                tone: item.tone,
+            });
+        }
+
+        if let Some(file) = panel.files.first() {
+            rows.push(SmartWorklineDetailRow {
+                id: format!("file-{}", file.id),
+                label: "File".to_string(),
+                detail: smart_panel_compact_label(&file.path, MAX_WORKLINE_DETAIL_CHARS),
+                status: file.status,
+                icon: file.icon,
+                tone: file.tone,
+            });
+        }
+    }
+
+    if rows.is_empty()
+        && let Some(merge) = smart_merge
+    {
+        rows.push(SmartWorklineDetailRow {
+            id: "merge".to_string(),
+            label: "Merge".to_string(),
+            detail: smart_panel_compact_label(&merge.detail, MAX_WORKLINE_DETAIL_CHARS),
+            status: merge.status,
+            icon: merge.icon,
+            tone: merge.tone,
+        });
+    }
+
+    rows.truncate(4);
+    rows
+}
+
+fn render_smart_workline_detail_row(row: SmartWorklineDetailRow) -> impl IntoElement {
     h_flex()
-        .id(format!("stcode-smart-run-step-{}", step.label))
-        .gap_1()
+        .id(format!("stcode-smart-workline-detail-{}", row.id))
+        .w_full()
+        .min_w_0()
+        .gap_1p5()
         .px_1p5()
-        .py_0p5()
-        .rounded_sm()
         .child(
-            Icon::new(stcode_smart_run_phase_icon(step.phase))
+            Icon::new(row.icon)
                 .size(IconSize::XSmall)
-                .color(tone.color()),
+                .color(row.tone.color()),
         )
         .child(
-            Label::new(step.label)
+            Label::new(row.label)
                 .size(LabelSize::XSmall)
-                .color(Color::Default),
+                .color(Color::Muted),
         )
         .child(
-            Label::new(step.status)
+            Label::new(row.detail)
                 .size(LabelSize::XSmall)
-                .color(tone.color()),
+                .color(Color::Default)
+                .truncate(),
         )
+        .child(
+            Label::new(row.status)
+                .size(LabelSize::XSmall)
+                .color(row.tone.color()),
+        )
+}
+
+fn render_smart_workline_stage(stage: SmartWorklineStage) -> impl IntoElement {
+    h_flex()
+        .id(format!(
+            "stcode-smart-workline-stage-{}",
+            stage.kind.label()
+        ))
+        .w_full()
+        .min_w_0()
+        .gap_2()
+        .px_1p5()
+        .py_1()
+        .rounded_sm()
+        .when(stage.active, |this| this.border_1())
+        .child(
+            Icon::new(stage.icon)
+                .size(IconSize::XSmall)
+                .color(stage.tone.color()),
+        )
+        .child(
+            v_flex()
+                .min_w_0()
+                .flex_1()
+                .gap_0p5()
+                .child(
+                    h_flex()
+                        .w_full()
+                        .justify_between()
+                        .gap_2()
+                        .child(
+                            Label::new(stage.label)
+                                .size(LabelSize::XSmall)
+                                .color(Color::Default),
+                        )
+                        .child(
+                            Label::new(stage.status)
+                                .size(LabelSize::XSmall)
+                                .color(stage.tone.color()),
+                        ),
+                )
+                .child(
+                    Label::new(stage.detail)
+                        .size(LabelSize::XSmall)
+                        .color(Color::Muted)
+                        .truncate(),
+                ),
+        )
+}
+
+fn smart_workline_stage(
+    kind: SmartWorklineStageKind,
+    status: &'static str,
+    detail: impl AsRef<str>,
+    icon: IconName,
+    tone: ActivityTone,
+    active_stage: Option<SmartWorklineStageKind>,
+) -> SmartWorklineStage {
+    SmartWorklineStage {
+        kind,
+        label: kind.label(),
+        status,
+        detail: smart_panel_compact_label(detail, MAX_WORKLINE_DETAIL_CHARS),
+        icon,
+        tone,
+        active: active_stage == Some(kind),
+    }
+}
+
+fn smart_workline_active_stage(
+    has_thread_entries: bool,
+    activity: &ActivitySnapshot,
+    smart_run: Option<&StcodeSmartRunSnapshot>,
+    smart_start: Option<&SmartStartSnapshot>,
+    smart_panel: Option<&SmartPanelSnapshot>,
+    smart_todo: Option<&SmartTodoSnapshot>,
+    smart_parallel: Option<&SmartParallelSnapshot>,
+    smart_merge: Option<&SmartMergeSnapshot>,
+) -> Option<SmartWorklineStageKind> {
+    if smart_start.is_some() {
+        return Some(SmartWorklineStageKind::Start);
+    }
+
+    if let Some(run) = smart_run.filter(|snapshot| snapshot.should_render_card()) {
+        return Some(smart_workline_stage_from_run(run));
+    }
+
+    if smart_parallel.is_some_and(|snapshot| snapshot.should_render_card()) {
+        return Some(SmartWorklineStageKind::Parallel);
+    }
+
+    if let Some(todo) = smart_todo.filter(|snapshot| snapshot.should_render_card()) {
+        return if todo.tone == ActivityTone::Running {
+            Some(SmartWorklineStageKind::Execute)
+        } else {
+            Some(SmartWorklineStageKind::Plan)
+        };
+    }
+
+    if activity.tone.is_live() {
+        return Some(SmartWorklineStageKind::Execute);
+    }
+
+    if smart_panel.is_some_and(|snapshot| snapshot.should_render_card()) {
+        return Some(SmartWorklineStageKind::Review);
+    }
+
+    if smart_merge.is_some_and(|snapshot| {
+        snapshot.can_create_pull_request || (has_thread_entries && snapshot.should_render_card())
+    }) {
+        return Some(SmartWorklineStageKind::Merge);
+    }
+
+    None
+}
+
+fn smart_workline_stage_from_run(snapshot: &StcodeSmartRunSnapshot) -> SmartWorklineStageKind {
+    if snapshot.title.contains("Start") {
+        SmartWorklineStageKind::Start
+    } else if snapshot.title.contains("Parallel") {
+        SmartWorklineStageKind::Parallel
+    } else if snapshot.title.contains("Merge") {
+        SmartWorklineStageKind::Merge
+    } else {
+        SmartWorklineStageKind::Execute
+    }
+}
+
+fn smart_workline_start_stage(
+    smart_start: Option<&SmartStartSnapshot>,
+    active_stage: Option<SmartWorklineStageKind>,
+) -> SmartWorklineStage {
+    if let Some(snapshot) = smart_start {
+        return smart_workline_stage(
+            SmartWorklineStageKind::Start,
+            "Handoff",
+            &snapshot.detail,
+            IconName::Warning,
+            ActivityTone::Waiting,
+            active_stage,
+        );
+    }
+
+    smart_workline_stage(
+        SmartWorklineStageKind::Start,
+        "Ready",
+        "Workspace handoff is clean.",
+        IconName::Check,
+        ActivityTone::Done,
+        active_stage,
+    )
+}
+
+fn smart_workline_plan_stage(
+    smart_todo: Option<&SmartTodoSnapshot>,
+    has_thread_entries: bool,
+    active_stage: Option<SmartWorklineStageKind>,
+) -> SmartWorklineStage {
+    if let Some(snapshot) = smart_todo {
+        return smart_workline_stage(
+            SmartWorklineStageKind::Plan,
+            snapshot.status,
+            &snapshot.detail,
+            snapshot.icon,
+            snapshot.tone,
+            active_stage,
+        );
+    }
+
+    let (status, detail, tone) = if has_thread_entries {
+        (
+            "Ready",
+            "No live todo plan is blocking the workline.",
+            ActivityTone::Done,
+        )
+    } else {
+        (
+            "Waiting",
+            "Start a task to create the first plan.",
+            ActivityTone::Idle,
+        )
+    };
+
+    smart_workline_stage(
+        SmartWorklineStageKind::Plan,
+        status,
+        detail,
+        IconName::ListTodo,
+        tone,
+        active_stage,
+    )
+}
+
+fn smart_workline_parallel_stage(
+    smart_parallel: Option<&SmartParallelSnapshot>,
+    active_stage: Option<SmartWorklineStageKind>,
+) -> SmartWorklineStage {
+    let Some(snapshot) = smart_parallel else {
+        return smart_workline_stage(
+            SmartWorklineStageKind::Parallel,
+            "Waiting",
+            "No repository lane information is available yet.",
+            IconName::GitWorktree,
+            ActivityTone::Idle,
+            active_stage,
+        );
+    };
+
+    let tone = if snapshot.tone == ActivityTone::Done {
+        ActivityTone::Done
+    } else {
+        snapshot.tone
+    };
+    smart_workline_stage(
+        SmartWorklineStageKind::Parallel,
+        snapshot.status,
+        &snapshot.detail,
+        snapshot.icon,
+        tone,
+        active_stage,
+    )
+}
+
+fn smart_workline_execute_stage(
+    activity: &ActivitySnapshot,
+    has_thread_entries: bool,
+    active_stage: Option<SmartWorklineStageKind>,
+) -> SmartWorklineStage {
+    let (status, detail, icon, tone) = if has_thread_entries {
+        (
+            activity.status,
+            activity.detail,
+            activity.icon,
+            activity.tone,
+        )
+    } else {
+        (
+            "Waiting",
+            "No agent execution has started yet.",
+            IconName::ZedAgent,
+            ActivityTone::Idle,
+        )
+    };
+
+    smart_workline_stage(
+        SmartWorklineStageKind::Execute,
+        status,
+        detail,
+        icon,
+        tone,
+        active_stage,
+    )
+}
+
+fn smart_workline_review_stage(
+    smart_panel: Option<&SmartPanelSnapshot>,
+    has_thread_entries: bool,
+    active_stage: Option<SmartWorklineStageKind>,
+) -> SmartWorklineStage {
+    let Some(snapshot) = smart_panel else {
+        return smart_workline_stage(
+            SmartWorklineStageKind::Review,
+            "Waiting",
+            "No workspace review state is available yet.",
+            IconName::ListTodo,
+            ActivityTone::Idle,
+            active_stage,
+        );
+    };
+
+    let (status, tone) = if snapshot.counts.conflicted_count > 0 {
+        ("Blocked", ActivityTone::Failed)
+    } else if snapshot.counts.changed_count > 0 {
+        ("Review", ActivityTone::Waiting)
+    } else if has_thread_entries {
+        ("Clean", ActivityTone::Done)
+    } else {
+        ("Waiting", ActivityTone::Idle)
+    };
+
+    smart_workline_stage(
+        SmartWorklineStageKind::Review,
+        status,
+        &snapshot.detail,
+        snapshot.icon,
+        tone,
+        active_stage,
+    )
+}
+
+fn smart_workline_merge_stage(
+    smart_merge: Option<&SmartMergeSnapshot>,
+    has_thread_entries: bool,
+    active_stage: Option<SmartWorklineStageKind>,
+) -> SmartWorklineStage {
+    let Some(snapshot) = smart_merge else {
+        return smart_workline_stage(
+            SmartWorklineStageKind::Merge,
+            "Waiting",
+            "No merge readiness is available yet.",
+            IconName::PullRequest,
+            ActivityTone::Idle,
+            active_stage,
+        );
+    };
+
+    let (status, tone) = if snapshot.can_create_pull_request {
+        ("Ready", ActivityTone::Waiting)
+    } else if has_thread_entries && snapshot.tone.needs_attention() {
+        (snapshot.status, snapshot.tone)
+    } else {
+        ("Waiting", ActivityTone::Idle)
+    };
+
+    smart_workline_stage(
+        SmartWorklineStageKind::Merge,
+        status,
+        &snapshot.detail,
+        snapshot.icon,
+        tone,
+        active_stage,
+    )
 }
 
 fn stcode_smart_run_phase_icon(phase: StcodeSmartRunPhase) -> IconName {
@@ -420,723 +1152,6 @@ fn stcode_smart_run_phase_tone(phase: StcodeSmartRunPhase) -> ActivityTone {
         StcodeSmartRunPhase::Complete => ActivityTone::Done,
         StcodeSmartRunPhase::Blocked => ActivityTone::Failed,
     }
-}
-
-fn render_smart_start_guard(snapshot: SmartStartSnapshot, cx: &mut App) -> impl IntoElement {
-    let smart_start_action = crate::StcodeSmartStart.boxed_clone();
-    let review_repository = snapshot.repository.clone();
-    let worktree_action = zed_git::Worktree.boxed_clone();
-    let stash_repository = snapshot.repository.clone();
-    let commit_action = git::ExpandCommitEditor.boxed_clone();
-
-    v_flex()
-        .id("stcode-smart-start-guard")
-        .mt_1()
-        .gap_2()
-        .rounded_sm()
-        .border_1()
-        .border_color(cx.theme().status().warning_border)
-        .bg(cx.theme().status().warning_background)
-        .p_2()
-        .child(
-            h_flex()
-                .w_full()
-                .gap_2()
-                .items_start()
-                .child(
-                    Icon::new(IconName::Warning)
-                        .size(IconSize::Small)
-                        .color(Color::Warning),
-                )
-                .child(
-                    v_flex()
-                        .min_w_0()
-                        .flex_1()
-                        .gap_0p5()
-                        .child(
-                            Label::new("AI Smart Start")
-                                .size(LabelSize::Default)
-                                .color(Color::Default),
-                        )
-                        .child(
-                            Label::new(snapshot.detail)
-                                .size(LabelSize::Small)
-                                .color(Color::Muted)
-                                .truncate(),
-                        ),
-                ),
-        )
-        .child(
-            h_flex()
-                .w_full()
-                .gap_1()
-                .flex_wrap()
-                .child(
-                    Button::new("stcode-smart-start-auto", "AI Start")
-                        .label_size(LabelSize::XSmall)
-                        .style(ButtonStyle::Outlined)
-                        .on_click(move |_, window, cx| {
-                            window.dispatch_action(smart_start_action.boxed_clone(), cx);
-                        }),
-                )
-                .child(
-                    Button::new("stcode-smart-start-review", "Review")
-                        .label_size(LabelSize::XSmall)
-                        .style(ButtonStyle::Outlined)
-                        .on_click(move |_, window, cx| {
-                            review_leftover_changes(review_repository.clone(), window, cx);
-                        }),
-                )
-                .child(
-                    Button::new("stcode-smart-start-worktree", "Split Worktree")
-                        .label_size(LabelSize::XSmall)
-                        .style(ButtonStyle::Outlined)
-                        .on_click(move |_, window, cx| {
-                            window.dispatch_action(worktree_action.boxed_clone(), cx);
-                        }),
-                )
-                .child(
-                    Button::new("stcode-smart-start-stash", "Stash")
-                        .label_size(LabelSize::XSmall)
-                        .style(ButtonStyle::Outlined)
-                        .on_click(move |_, _window, cx| {
-                            stash_leftover_changes(stash_repository.clone(), cx);
-                        }),
-                )
-                .child(
-                    Button::new("stcode-smart-start-commit", "Commit")
-                        .label_size(LabelSize::XSmall)
-                        .style(ButtonStyle::Outlined)
-                        .on_click(move |_, window, cx| {
-                            window.dispatch_action(commit_action.boxed_clone(), cx);
-                        }),
-                ),
-        )
-}
-
-fn render_smart_panel_card(snapshot: SmartPanelSnapshot, cx: &mut App) -> impl IntoElement {
-    let smart_panel_action = crate::StcodeSmartPanel.boxed_clone();
-    let review_repository = snapshot.repository.clone();
-    let commit_action = git::ExpandCommitEditor.boxed_clone();
-    let has_files = !snapshot.files.is_empty();
-    let counts = snapshot.counts;
-    let (border_color, background_color) = match snapshot.tone {
-        ActivityTone::Done => (
-            cx.theme().status().success_border,
-            cx.theme().status().success_background,
-        ),
-        ActivityTone::Failed => (
-            cx.theme().status().error_border,
-            cx.theme().status().error_background,
-        ),
-        _ => (
-            cx.theme().status().warning_border,
-            cx.theme().status().warning_background,
-        ),
-    };
-
-    v_flex()
-        .id("stcode-smart-panel-card")
-        .mt_1()
-        .gap_2()
-        .rounded_sm()
-        .border_1()
-        .border_color(border_color)
-        .bg(background_color)
-        .p_2()
-        .child(
-            h_flex()
-                .w_full()
-                .gap_2()
-                .items_start()
-                .child(
-                    Icon::new(snapshot.icon)
-                        .size(IconSize::Small)
-                        .color(snapshot.tone.color()),
-                )
-                .child(
-                    v_flex()
-                        .min_w_0()
-                        .flex_1()
-                        .gap_0p5()
-                        .child(
-                            h_flex()
-                                .w_full()
-                                .justify_between()
-                                .gap_2()
-                                .child(
-                                    Label::new("AI Smart Panel")
-                                        .size(LabelSize::Default)
-                                        .color(Color::Default),
-                                )
-                                .child(
-                                    Label::new(snapshot.status)
-                                        .size(LabelSize::XSmall)
-                                        .color(snapshot.tone.color()),
-                                ),
-                        )
-                        .child(
-                            Label::new(snapshot.detail)
-                                .size(LabelSize::Small)
-                                .color(Color::Muted)
-                                .truncate(),
-                        ),
-                ),
-        )
-        .child(
-            h_flex()
-                .w_full()
-                .gap_1()
-                .flex_wrap()
-                .child(render_smart_panel_metric(
-                    "changed",
-                    counts.changed_count,
-                    "files",
-                    snapshot.tone,
-                    cx,
-                ))
-                .child(render_smart_panel_metric(
-                    "staged",
-                    counts.staged_count,
-                    "staged",
-                    ActivityTone::Done,
-                    cx,
-                ))
-                .child(render_smart_panel_metric(
-                    "unstaged",
-                    counts.unstaged_count,
-                    "unstaged",
-                    ActivityTone::Waiting,
-                    cx,
-                ))
-                .when(counts.conflicted_count > 0, |this| {
-                    this.child(render_smart_panel_metric(
-                        "conflicts",
-                        counts.conflicted_count,
-                        "conflicts",
-                        ActivityTone::Failed,
-                        cx,
-                    ))
-                })
-                .when(counts.added_lines + counts.removed_lines > 0, |this| {
-                    this.child(
-                        ui::DiffStat::new(
-                            "stcode-smart-panel-diff-stat",
-                            counts.added_lines,
-                            counts.removed_lines,
-                        )
-                        .label_size(LabelSize::XSmall),
-                    )
-                }),
-        )
-        .child(
-            v_flex().w_full().gap_1().children(
-                snapshot
-                    .work_items
-                    .into_iter()
-                    .filter(|item| item.tone.is_live())
-                    .map(render_smart_panel_work_item),
-            ),
-        )
-        .child(
-            v_flex()
-                .w_full()
-                .gap_1()
-                .when(!has_files, |this| {
-                    this.child(
-                        Label::new("No local file changes")
-                            .size(LabelSize::Small)
-                            .color(Color::Muted),
-                    )
-                })
-                .children(snapshot.files.into_iter().map(render_smart_panel_file)),
-        )
-        .child(
-            h_flex()
-                .w_full()
-                .gap_1()
-                .flex_wrap()
-                .child(
-                    Button::new("stcode-smart-panel-auto", "Ask Agent")
-                        .label_size(LabelSize::XSmall)
-                        .style(ButtonStyle::Outlined)
-                        .on_click(move |_, window, cx| {
-                            window.dispatch_action(smart_panel_action.boxed_clone(), cx);
-                        }),
-                )
-                .child(
-                    Button::new("stcode-smart-panel-review", "Review Files")
-                        .label_size(LabelSize::XSmall)
-                        .style(ButtonStyle::Outlined)
-                        .disabled(!snapshot.can_review)
-                        .on_click(move |_, window, cx| {
-                            review_leftover_changes(review_repository.clone(), window, cx);
-                        }),
-                )
-                .child(
-                    Button::new("stcode-smart-panel-commit", "Commit")
-                        .label_size(LabelSize::XSmall)
-                        .style(ButtonStyle::Outlined)
-                        .disabled(!snapshot.can_commit)
-                        .on_click(move |_, window, cx| {
-                            window.dispatch_action(commit_action.boxed_clone(), cx);
-                        }),
-                ),
-        )
-}
-
-fn render_smart_panel_work_item(item: SmartPanelWorkItem) -> impl IntoElement {
-    h_flex()
-        .id(format!("stcode-smart-panel-work-item-{}", item.id))
-        .w_full()
-        .min_w_0()
-        .gap_2()
-        .child(
-            Icon::new(item.icon)
-                .size(IconSize::XSmall)
-                .color(item.tone.color()),
-        )
-        .child(
-            v_flex()
-                .min_w_0()
-                .flex_1()
-                .gap_0p5()
-                .child(
-                    Label::new(item.label)
-                        .size(LabelSize::XSmall)
-                        .color(Color::Muted),
-                )
-                .child(
-                    Label::new(item.detail)
-                        .size(LabelSize::Small)
-                        .color(Color::Default)
-                        .truncate(),
-                ),
-        )
-        .child(
-            Label::new(item.status)
-                .size(LabelSize::XSmall)
-                .color(item.tone.color()),
-        )
-}
-
-fn render_smart_panel_metric(
-    id: &'static str,
-    value: usize,
-    label: &'static str,
-    tone: ActivityTone,
-    cx: &mut App,
-) -> impl IntoElement {
-    h_flex()
-        .id(format!("stcode-smart-panel-metric-{id}"))
-        .gap_1()
-        .px_1p5()
-        .py_0p5()
-        .rounded_sm()
-        .border_1()
-        .border_color(cx.theme().colors().border)
-        .child(
-            Label::new(value.to_string())
-                .size(LabelSize::XSmall)
-                .color(tone.color()),
-        )
-        .child(
-            Label::new(label)
-                .size(LabelSize::XSmall)
-                .color(Color::Muted),
-        )
-}
-
-fn render_smart_panel_file(file: SmartPanelFile) -> impl IntoElement {
-    h_flex()
-        .id(("stcode-smart-panel-file", file.id))
-        .w_full()
-        .min_w_0()
-        .gap_2()
-        .child(
-            Icon::new(file.icon)
-                .size(IconSize::XSmall)
-                .color(file.tone.color()),
-        )
-        .child(
-            h_flex()
-                .min_w_0()
-                .flex_1()
-                .gap_2()
-                .child(
-                    Label::new(file.path)
-                        .size(LabelSize::Small)
-                        .color(Color::Default)
-                        .truncate(),
-                )
-                .child(
-                    Label::new(file.status)
-                        .size(LabelSize::XSmall)
-                        .color(file.tone.color()),
-                ),
-        )
-}
-
-fn render_smart_todo_card(snapshot: SmartTodoSnapshot, cx: &mut App) -> impl IntoElement {
-    let (border_color, background_color) = match snapshot.tone {
-        ActivityTone::Done => (
-            cx.theme().status().success_border,
-            cx.theme().status().success_background,
-        ),
-        ActivityTone::Failed => (
-            cx.theme().status().error_border,
-            cx.theme().status().error_background,
-        ),
-        _ => (
-            cx.theme().status().warning_border,
-            cx.theme().status().warning_background,
-        ),
-    };
-
-    v_flex()
-        .id("stcode-smart-todo-card")
-        .mt_1()
-        .gap_2()
-        .rounded_sm()
-        .border_1()
-        .border_color(border_color)
-        .bg(background_color)
-        .p_2()
-        .child(
-            h_flex()
-                .w_full()
-                .gap_2()
-                .items_start()
-                .child(
-                    Icon::new(snapshot.icon)
-                        .size(IconSize::Small)
-                        .color(snapshot.tone.color()),
-                )
-                .child(
-                    v_flex()
-                        .min_w_0()
-                        .flex_1()
-                        .gap_0p5()
-                        .child(
-                            h_flex()
-                                .w_full()
-                                .justify_between()
-                                .gap_2()
-                                .child(
-                                    Label::new("AI Smart Todo")
-                                        .size(LabelSize::Default)
-                                        .color(Color::Default),
-                                )
-                                .child(
-                                    Label::new(snapshot.status)
-                                        .size(LabelSize::XSmall)
-                                        .color(snapshot.tone.color()),
-                                ),
-                        )
-                        .child(
-                            Label::new(snapshot.detail)
-                                .size(LabelSize::Small)
-                                .color(Color::Muted)
-                                .truncate(),
-                        ),
-                ),
-        )
-        .child(
-            h_flex()
-                .w_full()
-                .gap_1()
-                .flex_wrap()
-                .child(render_smart_todo_metric(
-                    "progress",
-                    snapshot.progress_label,
-                    ActivityTone::Done,
-                    cx,
-                ))
-                .child(render_smart_todo_metric(
-                    "left",
-                    snapshot.left_label,
-                    snapshot.tone,
-                    cx,
-                )),
-        )
-        .child(
-            v_flex()
-                .w_full()
-                .gap_1()
-                .when(snapshot.items.is_empty(), |this| {
-                    this.child(
-                        Label::new("No active todo items")
-                            .size(LabelSize::Small)
-                            .color(Color::Muted),
-                    )
-                })
-                .children(snapshot.items.into_iter().map(render_smart_todo_item)),
-        )
-}
-
-fn render_smart_todo_metric(
-    id: &'static str,
-    label: String,
-    tone: ActivityTone,
-    cx: &mut App,
-) -> impl IntoElement {
-    h_flex()
-        .id(format!("stcode-smart-todo-metric-{id}"))
-        .gap_1()
-        .px_1p5()
-        .py_0p5()
-        .rounded_sm()
-        .border_1()
-        .border_color(cx.theme().colors().border)
-        .child(
-            Label::new(label)
-                .size(LabelSize::XSmall)
-                .color(tone.color()),
-        )
-}
-
-fn render_smart_todo_item(item: SmartTodoItem) -> impl IntoElement {
-    h_flex()
-        .id(("stcode-smart-todo-item", item.id))
-        .w_full()
-        .min_w_0()
-        .gap_2()
-        .child(
-            Icon::new(item.icon)
-                .size(IconSize::XSmall)
-                .color(item.tone.color()),
-        )
-        .child(
-            h_flex()
-                .min_w_0()
-                .flex_1()
-                .gap_2()
-                .child(
-                    Label::new(item.label)
-                        .size(LabelSize::Small)
-                        .color(Color::Default)
-                        .truncate(),
-                )
-                .child(
-                    Label::new(item.status)
-                        .size(LabelSize::XSmall)
-                        .color(item.tone.color()),
-                ),
-        )
-}
-
-fn render_smart_parallel_card(snapshot: SmartParallelSnapshot, cx: &mut App) -> impl IntoElement {
-    let smart_parallel_action = crate::StcodeSmartParallel.boxed_clone();
-    let create_lane_action = CreateWorktree {
-        worktree_name: None,
-        branch_target: NewWorktreeBranchTarget::CurrentBranch,
-    }
-    .boxed_clone();
-    let manage_lanes_action = zed_git::Worktree.boxed_clone();
-    let (border_color, background_color) = match snapshot.tone {
-        ActivityTone::Done => (
-            cx.theme().status().success_border,
-            cx.theme().status().success_background,
-        ),
-        ActivityTone::Failed => (
-            cx.theme().status().error_border,
-            cx.theme().status().error_background,
-        ),
-        _ => (
-            cx.theme().status().warning_border,
-            cx.theme().status().warning_background,
-        ),
-    };
-
-    v_flex()
-        .id("stcode-smart-parallel-card")
-        .mt_1()
-        .gap_2()
-        .rounded_sm()
-        .border_1()
-        .border_color(border_color)
-        .bg(background_color)
-        .p_2()
-        .child(
-            h_flex()
-                .w_full()
-                .gap_2()
-                .items_start()
-                .child(
-                    Icon::new(snapshot.icon)
-                        .size(IconSize::Small)
-                        .color(snapshot.tone.color()),
-                )
-                .child(
-                    v_flex()
-                        .min_w_0()
-                        .flex_1()
-                        .gap_0p5()
-                        .child(
-                            h_flex()
-                                .w_full()
-                                .justify_between()
-                                .gap_2()
-                                .child(
-                                    Label::new("AI Smart Parallel")
-                                        .size(LabelSize::Small)
-                                        .color(Color::Default),
-                                )
-                                .child(
-                                    Label::new(snapshot.status)
-                                        .size(LabelSize::XSmall)
-                                        .color(snapshot.tone.color()),
-                                ),
-                        )
-                        .child(
-                            Label::new(snapshot.detail)
-                                .size(LabelSize::XSmall)
-                                .color(Color::Muted)
-                                .truncate(),
-                        ),
-                ),
-        )
-        .child(
-            h_flex()
-                .w_full()
-                .gap_1()
-                .flex_wrap()
-                .child(
-                    Button::new("stcode-smart-parallel-auto", "AI Parallel")
-                        .label_size(LabelSize::XSmall)
-                        .style(ButtonStyle::Outlined)
-                        .on_click(move |_, window, cx| {
-                            window.dispatch_action(smart_parallel_action.boxed_clone(), cx);
-                        }),
-                )
-                .child(
-                    Button::new("stcode-smart-parallel-create-lane", "Create Lane")
-                        .label_size(LabelSize::XSmall)
-                        .style(ButtonStyle::Outlined)
-                        .on_click(move |_, window, cx| {
-                            window.dispatch_action(create_lane_action.boxed_clone(), cx);
-                        }),
-                )
-                .child(
-                    Button::new("stcode-smart-parallel-manage-lanes", "Manage Lanes")
-                        .label_size(LabelSize::XSmall)
-                        .style(ButtonStyle::Outlined)
-                        .on_click(move |_, window, cx| {
-                            window.dispatch_action(manage_lanes_action.boxed_clone(), cx);
-                        }),
-                ),
-        )
-}
-
-fn render_smart_merge_card(snapshot: SmartMergeSnapshot, cx: &mut App) -> impl IntoElement {
-    let smart_merge_action = crate::StcodeSmartMerge.boxed_clone();
-    let review_repository = snapshot.repository.clone();
-    let create_pull_request_action = zed_git::CreatePullRequest.boxed_clone();
-    let commit_action = git::ExpandCommitEditor.boxed_clone();
-    let (border_color, background_color) = match snapshot.tone {
-        ActivityTone::Done => (
-            cx.theme().status().success_border,
-            cx.theme().status().success_background,
-        ),
-        ActivityTone::Failed => (
-            cx.theme().status().error_border,
-            cx.theme().status().error_background,
-        ),
-        _ => (
-            cx.theme().status().warning_border,
-            cx.theme().status().warning_background,
-        ),
-    };
-
-    v_flex()
-        .id("stcode-smart-merge-card")
-        .mt_1()
-        .gap_2()
-        .rounded_sm()
-        .border_1()
-        .border_color(border_color)
-        .bg(background_color)
-        .p_2()
-        .child(
-            h_flex()
-                .w_full()
-                .gap_2()
-                .items_start()
-                .child(
-                    Icon::new(snapshot.icon)
-                        .size(IconSize::Small)
-                        .color(snapshot.tone.color()),
-                )
-                .child(
-                    v_flex()
-                        .min_w_0()
-                        .flex_1()
-                        .gap_0p5()
-                        .child(
-                            h_flex()
-                                .w_full()
-                                .justify_between()
-                                .gap_2()
-                                .child(
-                                    Label::new("AI Smart Merge")
-                                        .size(LabelSize::Small)
-                                        .color(Color::Default),
-                                )
-                                .child(
-                                    Label::new(snapshot.status)
-                                        .size(LabelSize::XSmall)
-                                        .color(snapshot.tone.color()),
-                                ),
-                        )
-                        .child(
-                            Label::new(snapshot.detail)
-                                .size(LabelSize::XSmall)
-                                .color(Color::Muted)
-                                .truncate(),
-                        ),
-                ),
-        )
-        .child(
-            h_flex()
-                .w_full()
-                .gap_1()
-                .flex_wrap()
-                .child(
-                    Button::new("stcode-smart-merge-auto", "AI Merge")
-                        .label_size(LabelSize::XSmall)
-                        .style(ButtonStyle::Outlined)
-                        .on_click(move |_, window, cx| {
-                            window.dispatch_action(smart_merge_action.boxed_clone(), cx);
-                        }),
-                )
-                .child(
-                    Button::new("stcode-smart-merge-review", "Review Merge")
-                        .label_size(LabelSize::XSmall)
-                        .style(ButtonStyle::Outlined)
-                        .disabled(!snapshot.can_review)
-                        .on_click(move |_, window, cx| {
-                            review_merge_readiness(review_repository.clone(), window, cx);
-                        }),
-                )
-                .child(
-                    Button::new("stcode-smart-merge-pr", "Open PR")
-                        .label_size(LabelSize::XSmall)
-                        .style(ButtonStyle::Outlined)
-                        .disabled(!snapshot.can_create_pull_request)
-                        .on_click(move |_, window, cx| {
-                            window.dispatch_action(create_pull_request_action.boxed_clone(), cx);
-                        }),
-                )
-                .child(
-                    Button::new("stcode-smart-merge-commit", "Commit")
-                        .label_size(LabelSize::XSmall)
-                        .style(ButtonStyle::Outlined)
-                        .disabled(!snapshot.can_commit)
-                        .on_click(move |_, window, cx| {
-                            window.dispatch_action(commit_action.boxed_clone(), cx);
-                        }),
-                ),
-        )
 }
 
 fn render_activity_entry(entry: ActivityEntry) -> impl IntoElement {
