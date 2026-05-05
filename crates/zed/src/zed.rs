@@ -21,7 +21,6 @@ use assets::Assets;
 use breadcrumbs::Breadcrumbs;
 use client::zed_urls;
 use collections::VecDeque;
-use debugger_ui::debugger_panel::DebugPanel;
 use editor::{Editor, MultiBuffer};
 use extension_host::ExtensionStore;
 use feature_flags::{FeatureFlagAppExt as _, PanicFeatureFlag};
@@ -714,7 +713,6 @@ fn initialize_panels(window: &mut Window, cx: &mut Context<Workspace>) -> Task<a
         let outline_panel = OutlinePanel::load(workspace_handle.clone(), cx.clone());
         let terminal_panel = TerminalPanel::load(workspace_handle.clone(), cx.clone());
         let git_panel = GitPanel::load(workspace_handle.clone(), cx.clone());
-        let debug_panel = DebugPanel::load(workspace_handle.clone(), cx);
 
         async fn add_panel_when_ready(
             panel_task: impl Future<Output = anyhow::Result<Entity<impl workspace::Panel>>> + 'static,
@@ -737,7 +735,6 @@ fn initialize_panels(window: &mut Window, cx: &mut Context<Workspace>) -> Task<a
                 add_panel_when_ready(outline_panel, workspace_handle.clone(), cx.clone()),
                 add_panel_when_ready(terminal_panel, workspace_handle.clone(), cx.clone()),
                 add_panel_when_ready(git_panel, workspace_handle.clone(), cx.clone()),
-                add_panel_when_ready(debug_panel, workspace_handle.clone(), cx.clone()),
                 initialize_agent_panel(workspace_handle, cx.clone()).map(|r| r.log_err()),
             );
         } else {
@@ -746,7 +743,6 @@ fn initialize_panels(window: &mut Window, cx: &mut Context<Workspace>) -> Task<a
                 add_panel_when_ready(outline_panel, workspace_handle.clone(), cx.clone()),
                 add_panel_when_ready(terminal_panel, workspace_handle.clone(), cx.clone()),
                 add_panel_when_ready(git_panel, workspace_handle.clone(), cx.clone()),
-                add_panel_when_ready(debug_panel, workspace_handle.clone(), cx.clone()),
                 initialize_agent_panel(workspace_handle, cx.clone()).map(|r| r.log_err()),
             );
         }
@@ -1310,8 +1306,6 @@ fn initialize_pane(
             toolbar.add_item(project_search_bar, window, cx);
             let lsp_log_item = cx.new(|_| LspLogToolbarItemView::new());
             toolbar.add_item(lsp_log_item, window, cx);
-            let dap_log_item = cx.new(|_| debugger_tools::DapLogToolbarItemView::new());
-            toolbar.add_item(dap_log_item, window, cx);
             let acp_tools_item = cx.new(|_| acp_tools::AcpToolsToolbarItemView::new());
             toolbar.add_item(acp_tools_item, window, cx);
             let telemetry_log_item =
@@ -5460,7 +5454,6 @@ mod tests {
                 &app_state.client.clone().into(),
             );
             project::debugger::dap_store::DapStore::init(&app_state.client.clone().into(), cx);
-            debugger_ui::init(cx);
             initialize_workspace(app_state.clone(), cx);
             search::init(cx);
             cx.set_global(workspace::PaneSearchBarCallbacks {
