@@ -45,7 +45,6 @@ members = [
     "crates/debug_adapter_extension",
     "crates/deepseek",
     "crates/denoise",
-    "crates/dev_container",
     "crates/diagnostics",
     "crates/edit_prediction",
     "crates/edit_prediction_context",
@@ -277,7 +276,6 @@ db = { path = "crates/db" }
 debug_adapter_extension = { path = "crates/debug_adapter_extension" }
 deepseek = { path = "crates/deepseek" }
 derive_refineable = { path = "crates/refineable/derive_refineable" }
-dev_container = { path = "crates/dev_container" }
 diagnostics = { path = "crates/diagnostics" }
 dialoguer = { version = "0.12", default-features = false }
 editor = { path = "crates/editor" }

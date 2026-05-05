@@ -718,7 +718,6 @@ pub(crate) fn run(launch_mode: LaunchMode) {
         );
 
         recent_projects::init(cx);
-        dev_container::init(cx);
 
         load_embedded_fonts(cx);
 
@@ -882,7 +881,6 @@ pub(crate) fn run(launch_mode: LaunchMode) {
                 diff_paths,
                 wsl,
                 diff_all: diff_all_mode,
-                dev_container: args.dev_container,
             })
         }
 
@@ -1254,7 +1252,6 @@ pub(crate) fn handle_open_request(request: OpenRequest, app_state: Arc<AppState>
     }
 
     let mut task = None;
-    let dev_container = request.dev_container;
     if !request.open_paths.is_empty() || !request.diff_paths.is_empty() {
         let app_state = app_state.clone();
         task = Some(cx.spawn(async move |cx| {
@@ -1265,10 +1262,7 @@ pub(crate) fn handle_open_request(request: OpenRequest, app_state: Arc<AppState>
                 &request.diff_paths,
                 request.diff_all,
                 app_state,
-                workspace::OpenOptions {
-                    open_in_dev_container: dev_container,
-                    ..Default::default()
-                },
+                workspace::OpenOptions::default(),
                 cx,
             )
             .await?;
@@ -1623,13 +1617,6 @@ struct Args {
     #[cfg(target_os = "windows")]
     #[arg(long, value_name = "USER@DISTRO")]
     wsl: Option<String>,
-
-    /// Open the project in a dev container.
-    ///
-    /// Automatically triggers "Reopen in Dev Container" if a `.devcontainer/`
-    /// configuration is found in the project directory.
-    #[arg(long)]
-    dev_container: bool,
 
     /// Instructs zed to run as a dev server on this machine. (not implemented)
     #[arg(long)]
