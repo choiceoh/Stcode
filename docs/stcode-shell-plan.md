@@ -40,6 +40,7 @@ The `stcode` binary should:
 - render an AI Smart Parallel card that detects whether the current session is already in an isolated worktree lane, is still on the main checkout, or overlaps a branch used by another linked worktree, with direct paths to create or manage lanes
 - render an AI Smart Merge readiness card that explains whether the current branch is clean enough for merge prep, blocked by local changes or conflicts, or still on a base branch, with direct paths to review the merge diff, commit, or open a PR
 - use a dedicated Stcode app icon across bundled app metadata, runtime About surfaces, Linux launcher resources, and Windows icon resources
+- check Stcode GitHub Releases for bundled app updates so macOS users can install once and receive later Stcode releases through the in-app updater instead of manually downloading every new build
 - wire AI Smart Start, Panel, Parallel, and Merge buttons to auto-submitted agent prompts so those cards can start autonomous handoff, status review, lane cleanup, and merge-prep runs directly
 - include the live branch, lane isolation, branch overlap, change counts, conflict counts, diff stats, and changed-file links in AI Smart prompts so autonomous runs start with actionable workspace context
 - persist and render an AI Smart Run card that tracks the active smart workflow through snapshot capture, prompt submission, agent execution, blocker state, and the final checkpoint
