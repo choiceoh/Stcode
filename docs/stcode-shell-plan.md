@@ -41,6 +41,7 @@ The `stcode` binary should:
 - render an AI Smart Merge readiness card that explains whether the current branch is clean enough for merge prep, blocked by local changes or conflicts, or still on a base branch, with direct paths to review the merge diff, commit, or open a PR
 - use a dedicated Stcode app icon across bundled app metadata, runtime About surfaces, Linux launcher resources, and Windows icon resources
 - wire AI Smart Start, Panel, Parallel, and Merge buttons to auto-submitted agent prompts so those cards can start autonomous handoff, status review, lane cleanup, and merge-prep runs directly
+- include the live branch, lane isolation, branch overlap, change counts, conflict counts, diff stats, and changed-file links in AI Smart prompts so autonomous runs start with actionable workspace context
 
 The terminal panel is hidden by default in Stcode mode because users should not need to operate a terminal directly. This does not remove terminal or execution support. Agent tools and workspace execution surfaces remain available; Stcode surfaces progress through the agent panel, tool cards, and the workspace activity timeline.
 

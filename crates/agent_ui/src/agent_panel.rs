@@ -646,48 +646,299 @@ fn build_conflicted_files_resolution_prompt(
     content
 }
 
-fn stcode_smart_prompt(instruction: &'static str) -> Vec<acp::ContentBlock> {
-    vec![acp::ContentBlock::Text(acp::TextContent::new(instruction))]
+const MAX_STCODE_SMART_PROMPT_FILES: usize = 8;
+
+struct StcodeSmartPromptContext {
+    branch_name: Option<String>,
+    changed_count: usize,
+    staged_count: usize,
+    unstaged_count: usize,
+    conflicted_count: usize,
+    untracked_count: usize,
+    added_lines: usize,
+    removed_lines: usize,
+    linked_worktree_count: usize,
+    is_linked_worktree: bool,
+    shared_branch_lane_count: usize,
+    files: Vec<StcodeSmartPromptFile>,
 }
 
-fn build_stcode_smart_start_prompt() -> Vec<acp::ContentBlock> {
-    stcode_smart_prompt(indoc::indoc!(
+struct StcodeSmartPromptFile {
+    path: String,
+    status: &'static str,
+    diff_label: Option<String>,
+    abs_path: Option<PathBuf>,
+}
+
+impl StcodeSmartPromptContext {
+    fn from_project(project: &Entity<Project>, cx: &App) -> Option<Self> {
+        let repository = project.read(cx).active_repository(cx)?;
+        let repository_ref = repository.read(cx);
+        let branch_name = repository_ref
+            .branch
+            .as_ref()
+            .map(|branch| branch.name().to_string());
+        let branch_ref = repository_ref
+            .branch
+            .as_ref()
+            .map(|branch| branch.ref_name.to_string());
+        let entries = repository_ref
+            .cached_status()
+            .filter(|entry| entry.status.has_changes())
+            .collect::<Vec<_>>();
+        let shared_branch_lane_count = branch_ref
+            .as_deref()
+            .map(|branch_ref| {
+                repository_ref
+                    .linked_worktrees()
+                    .iter()
+                    .filter(|worktree| {
+                        worktree
+                            .ref_name
+                            .as_ref()
+                            .is_some_and(|ref_name| ref_name.as_ref() == branch_ref)
+                    })
+                    .count()
+            })
+            .unwrap_or(0);
+
+        Some(Self {
+            branch_name,
+            changed_count: entries.len(),
+            staged_count: entries
+                .iter()
+                .filter(|entry| entry.status.staging().has_staged())
+                .count(),
+            unstaged_count: entries
+                .iter()
+                .filter(|entry| entry.status.staging().has_unstaged())
+                .count(),
+            conflicted_count: entries
+                .iter()
+                .filter(|entry| entry.status.is_conflicted())
+                .count(),
+            untracked_count: entries
+                .iter()
+                .filter(|entry| entry.status.is_untracked())
+                .count(),
+            added_lines: entries
+                .iter()
+                .filter_map(|entry| entry.diff_stat)
+                .map(|stat| stat.added as usize)
+                .sum(),
+            removed_lines: entries
+                .iter()
+                .filter_map(|entry| entry.diff_stat)
+                .map(|stat| stat.deleted as usize)
+                .sum(),
+            linked_worktree_count: repository_ref.linked_worktrees().len(),
+            is_linked_worktree: repository_ref.is_linked_worktree(),
+            shared_branch_lane_count,
+            files: entries
+                .iter()
+                .take(MAX_STCODE_SMART_PROMPT_FILES)
+                .map(|entry| {
+                    let path = entry
+                        .repo_path
+                        .display(repository_ref.path_style)
+                        .to_string();
+                    let abs_path = repository_ref
+                        .path_style
+                        .join(&repository_ref.work_directory_abs_path, path.as_str())
+                        .map(PathBuf::from);
+
+                    StcodeSmartPromptFile {
+                        path,
+                        status: stcode_smart_file_status(entry.status),
+                        diff_label: entry
+                            .diff_stat
+                            .map(|stat| format!("+{} -{}", stat.added, stat.deleted)),
+                        abs_path,
+                    }
+                })
+                .collect(),
+        })
+    }
+
+    fn snapshot_text(&self) -> String {
+        let branch = self.branch_name.as_deref().unwrap_or("detached HEAD");
+        let lane = if self.is_linked_worktree {
+            "isolated linked worktree"
+        } else {
+            "main checkout"
+        };
+        let file_label = if self.changed_count == 1 {
+            "file"
+        } else {
+            "files"
+        };
+        let mut text = format!(
+            indoc::indoc!(
+                "Live workspace snapshot:
+                 - Branch: {branch}
+                 - Lane: {lane}; {linked_worktree_count} linked lane(s); {shared_branch_lane_count} branch overlap(s)
+                 - Changes: {changed_count} changed {file_label}, {staged_count} staged, {unstaged_count} unstaged, {conflicted_count} conflicts, {untracked_count} new, +{added_lines} -{removed_lines}"
+            ),
+            branch = branch,
+            lane = lane,
+            linked_worktree_count = self.linked_worktree_count,
+            shared_branch_lane_count = self.shared_branch_lane_count,
+            changed_count = self.changed_count,
+            file_label = file_label,
+            staged_count = self.staged_count,
+            unstaged_count = self.unstaged_count,
+            conflicted_count = self.conflicted_count,
+            untracked_count = self.untracked_count,
+            added_lines = self.added_lines,
+            removed_lines = self.removed_lines,
+        );
+
+        if self.files.is_empty() {
+            text.push_str("\n- Files: no local file changes");
+        } else {
+            text.push_str("\n- Files to inspect first:");
+            for file in &self.files {
+                let diff = file
+                    .diff_label
+                    .as_ref()
+                    .map(|diff| format!(" ({diff})"))
+                    .unwrap_or_default();
+                text.push_str(&format!("\n  - [{}] {}{}", file.status, file.path, diff));
+            }
+            if self.changed_count > self.files.len() {
+                text.push_str(&format!(
+                    "\n  - ...and {} more changed file(s)",
+                    self.changed_count - self.files.len()
+                ));
+            }
+        }
+
+        text
+    }
+
+    fn resource_links(&self) -> Vec<acp::ContentBlock> {
+        self.files
+            .iter()
+            .filter_map(|file| {
+                let abs_path = file.abs_path.clone()?;
+                let mention = MentionUri::File { abs_path };
+                Some(acp::ContentBlock::ResourceLink(acp::ResourceLink::new(
+                    mention.name(),
+                    mention.to_uri(),
+                )))
+            })
+            .collect()
+    }
+}
+
+fn stcode_smart_file_status(status: git::status::FileStatus) -> &'static str {
+    if status.is_conflicted() {
+        return "Conflict";
+    }
+
+    if status.is_untracked() {
+        return "New";
+    }
+
+    let staging = status.staging();
+    if staging.has_staged() && staging.has_unstaged() {
+        "Partial"
+    } else if staging.has_staged() {
+        "Staged"
+    } else {
+        "Changed"
+    }
+}
+
+fn stcode_smart_prompt(
+    instruction: &'static str,
+    context: Option<&StcodeSmartPromptContext>,
+) -> Vec<acp::ContentBlock> {
+    let mut prompt = instruction.to_string();
+
+    if let Some(context) = context {
+        prompt.push_str("\n\n");
+        prompt.push_str(&context.snapshot_text());
+    } else {
+        prompt.push_str(
+            "\n\nLive workspace snapshot:\n- Repository: no active Git repository detected",
+        );
+    }
+
+    let mut blocks = vec![acp::ContentBlock::Text(acp::TextContent::new(prompt))];
+    if let Some(context) = context {
+        let links = context.resource_links();
+        if !links.is_empty() {
+            blocks.push(acp::ContentBlock::Text(acp::TextContent::new(
+                "\n\nChanged file links:\n",
+            )));
+            for link in links {
+                blocks.push(link);
+                blocks.push(acp::ContentBlock::Text(acp::TextContent::new("\n")));
+            }
+        }
+    }
+    blocks
+}
+
+fn build_stcode_smart_start_prompt(
+    context: Option<&StcodeSmartPromptContext>,
+) -> Vec<acp::ContentBlock> {
+    stcode_smart_prompt(
+        indoc::indoc!(
         "AI Smart Start: prepare this workspace for an autonomous coding session.
 
          Inspect the current branch, worktree, and local changes. If leftover work exists, decide the safest path yourself: preserve useful changes in a commit, stash unrelated leftovers, resolve obvious conflicts, or split the next task into an isolated worktree lane. Do not ask the user to choose between routine Git/worktree options.
 
          Continue until the session has a clean, understandable handoff state and the next coding lane cannot overwrite another agent's work. Summarize what you preserved, what lane/branch is active, and the next autonomous step."
-    ))
+        ),
+        context,
+    )
 }
 
-fn build_stcode_smart_panel_prompt() -> Vec<acp::ContentBlock> {
-    stcode_smart_prompt(indoc::indoc!(
+fn build_stcode_smart_panel_prompt(
+    context: Option<&StcodeSmartPromptContext>,
+) -> Vec<acp::ContentBlock> {
+    stcode_smart_prompt(
+        indoc::indoc!(
         "AI Smart Panel: review the live workspace state and turn it into the next useful action.
 
          Inspect the current goal, branch, worktree isolation, changed files, latest checks, blockers, and merge readiness. Then take the next concrete step yourself instead of only describing it. Prefer focused fixes, focused checks, and clear commits when changes are ready.
 
          Do not ask for approval for routine code, Git, worktree, formatting, or test commands. Stop only for missing credentials, destructive data loss risk, or a decision that changes product direction."
-    ))
+        ),
+        context,
+    )
 }
 
-fn build_stcode_smart_parallel_prompt() -> Vec<acp::ContentBlock> {
-    stcode_smart_prompt(indoc::indoc!(
+fn build_stcode_smart_parallel_prompt(
+    context: Option<&StcodeSmartPromptContext>,
+) -> Vec<acp::ContentBlock> {
+    stcode_smart_prompt(
+        indoc::indoc!(
         "AI Smart Parallel: make this workspace safe for parallel autonomous agents.
 
          Inspect linked worktrees, the current branch, local changes, and any branch overlap. If this session is on the main checkout or shares a branch with another lane, create or move work into an isolated task lane where possible. Preserve local changes before switching lanes.
 
          Continue until agents can work without sharing the same checkout or branch accidentally. Summarize the active lane, any other lanes you found, and the next task that can run safely."
-    ))
+        ),
+        context,
+    )
 }
 
-fn build_stcode_smart_merge_prompt() -> Vec<acp::ContentBlock> {
-    stcode_smart_prompt(indoc::indoc!(
+fn build_stcode_smart_merge_prompt(
+    context: Option<&StcodeSmartPromptContext>,
+) -> Vec<acp::ContentBlock> {
+    stcode_smart_prompt(
+        indoc::indoc!(
         "AI Smart Merge: autonomously prepare this branch for merge.
 
          Inspect the current branch, local changes, conflicts, default branch, recent commits, and available checks. If local changes remain, review and commit them with a clear message. If conflicts or stale base changes exist, resolve or rebase them. Run the fastest meaningful checks first, then widen only when needed for confidence.
 
          If no PR exists, create one. If CI or local checks fail, inspect the failure and fix it. Continue until the branch is clean, non-conflicting, and merge-ready with checks passing or with a precise blocker that cannot be solved locally. Do not ask the user to operate Git, pick routine merge options, or approve normal commands."
-    ))
+        ),
+        context,
+    )
 }
 
 fn format_timestamp_human(dt: &DateTime<Utc>) -> String {
@@ -3890,9 +4141,10 @@ impl AgentPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let context = StcodeSmartPromptContext::from_project(&self.project, cx);
         self.start_stcode_smart_thread(
             "AI Smart Start",
-            build_stcode_smart_start_prompt(),
+            build_stcode_smart_start_prompt(context.as_ref()),
             "stcode_smart_start",
             window,
             cx,
@@ -3905,9 +4157,10 @@ impl AgentPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let context = StcodeSmartPromptContext::from_project(&self.project, cx);
         self.start_stcode_smart_thread(
             "AI Smart Panel",
-            build_stcode_smart_panel_prompt(),
+            build_stcode_smart_panel_prompt(context.as_ref()),
             "stcode_smart_panel",
             window,
             cx,
@@ -3920,9 +4173,10 @@ impl AgentPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let context = StcodeSmartPromptContext::from_project(&self.project, cx);
         self.start_stcode_smart_thread(
             "AI Smart Parallel",
-            build_stcode_smart_parallel_prompt(),
+            build_stcode_smart_parallel_prompt(context.as_ref()),
             "stcode_smart_parallel",
             window,
             cx,
@@ -3935,9 +4189,10 @@ impl AgentPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let context = StcodeSmartPromptContext::from_project(&self.project, cx);
         self.start_stcode_smart_thread(
             "AI Smart Merge",
-            build_stcode_smart_merge_prompt(),
+            build_stcode_smart_merge_prompt(context.as_ref()),
             "stcode_smart_merge",
             window,
             cx,
@@ -4711,22 +4966,52 @@ mod tests {
 
     #[test]
     fn test_stcode_smart_prompts_drive_autonomous_work() {
-        let start_blocks = build_stcode_smart_start_prompt();
+        let context = StcodeSmartPromptContext {
+            branch_name: Some("codex/v13".to_string()),
+            changed_count: 2,
+            staged_count: 1,
+            unstaged_count: 1,
+            conflicted_count: 1,
+            untracked_count: 1,
+            added_lines: 12,
+            removed_lines: 3,
+            linked_worktree_count: 2,
+            is_linked_worktree: true,
+            shared_branch_lane_count: 1,
+            files: vec![StcodeSmartPromptFile {
+                path: "src/main.rs".to_string(),
+                status: "Conflict",
+                diff_label: Some("+12 -3".to_string()),
+                abs_path: Some(PathBuf::from("/project/src/main.rs")),
+            }],
+        };
+
+        let start_blocks = build_stcode_smart_start_prompt(Some(&context));
         let start = expect_text_block(&start_blocks[0]);
         assert!(start.contains("AI Smart Start"));
         assert!(start.contains("isolated worktree lane"));
+        assert!(start.contains("Live workspace snapshot"));
+        assert!(start.contains("codex/v13"));
+        assert!(start.contains("[Conflict] src/main.rs"));
+        assert!(
+            matches!(
+                start_blocks.get(2),
+                Some(acp::ContentBlock::ResourceLink(_))
+            ),
+            "prompt should attach changed files as resource links"
+        );
 
-        let panel_blocks = build_stcode_smart_panel_prompt();
+        let panel_blocks = build_stcode_smart_panel_prompt(Some(&context));
         let panel = expect_text_block(&panel_blocks[0]);
         assert!(panel.contains("take the next concrete step yourself"));
         assert!(panel.contains("Do not ask for approval"));
 
-        let parallel_blocks = build_stcode_smart_parallel_prompt();
+        let parallel_blocks = build_stcode_smart_parallel_prompt(Some(&context));
         let parallel = expect_text_block(&parallel_blocks[0]);
         assert!(parallel.contains("parallel autonomous agents"));
         assert!(parallel.contains("branch overlap"));
 
-        let merge_blocks = build_stcode_smart_merge_prompt();
+        let merge_blocks = build_stcode_smart_merge_prompt(Some(&context));
         let merge = expect_text_block(&merge_blocks[0]);
         assert!(merge.contains("AI Smart Merge"));
         assert!(merge.contains("CI or local checks fail"));
