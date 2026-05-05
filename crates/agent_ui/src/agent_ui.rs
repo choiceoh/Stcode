@@ -190,6 +190,14 @@ actions!(
         ScrollOutputToNextMessage,
         /// Import agent threads from other Zed release channels (e.g. Preview, Nightly).
         ImportThreadsFromOtherChannels,
+        /// Starts an autonomous Stcode handoff for leftover workspace changes.
+        StcodeSmartStart,
+        /// Starts an autonomous Stcode workspace status review.
+        StcodeSmartPanel,
+        /// Starts an autonomous Stcode parallel-lane cleanup.
+        StcodeSmartParallel,
+        /// Starts autonomous Stcode merge preparation.
+        StcodeSmartMerge,
     ]
 );
 

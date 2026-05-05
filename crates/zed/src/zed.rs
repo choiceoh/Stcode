@@ -1340,16 +1340,20 @@ fn initialize_pane(
 }
 
 fn open_about_window(cx: &mut App) {
-    fn about_window_icon(release_channel: ReleaseChannel) -> Arc<Image> {
-        let bytes = match release_channel {
-            ReleaseChannel::Dev => include_bytes!("../resources/app-icon-dev.png").as_slice(),
-            ReleaseChannel::Nightly => {
-                include_bytes!("../resources/app-icon-nightly.png").as_slice()
+    fn about_window_icon(release_channel: ReleaseChannel, is_stcode: bool) -> Arc<Image> {
+        let bytes = if is_stcode {
+            include_bytes!("../resources/app-icon-stcode.png").as_slice()
+        } else {
+            match release_channel {
+                ReleaseChannel::Dev => include_bytes!("../resources/app-icon-dev.png").as_slice(),
+                ReleaseChannel::Nightly => {
+                    include_bytes!("../resources/app-icon-nightly.png").as_slice()
+                }
+                ReleaseChannel::Preview => {
+                    include_bytes!("../resources/app-icon-preview.png").as_slice()
+                }
+                ReleaseChannel::Stable => include_bytes!("../resources/app-icon.png").as_slice(),
             }
-            ReleaseChannel::Preview => {
-                include_bytes!("../resources/app-icon-preview.png").as_slice()
-            }
-            ReleaseChannel::Stable => include_bytes!("../resources/app-icon.png").as_slice(),
         };
 
         Arc::new(Image::from_bytes(ImageFormat::Png, bytes.to_vec()))
@@ -1368,6 +1372,7 @@ fn open_about_window(cx: &mut App) {
     impl AboutWindow {
         fn new(cx: &mut Context<Self>) -> Self {
             let release_channel = ReleaseChannel::global(cx);
+            let is_stcode = workspace::AppLaunchMode::is_stcode(cx);
             let release_channel_name = app_display_name(cx);
             let full_version: SharedString = AppVersion::global(cx).to_string().into();
             let version = env!("CARGO_PKG_VERSION");
@@ -1387,7 +1392,7 @@ fn open_about_window(cx: &mut App) {
                 focus_handle: cx.focus_handle(),
                 ok_entry: NavigableEntry::focusable(cx),
                 copy_entry: NavigableEntry::focusable(cx),
-                app_icon: about_window_icon(release_channel),
+                app_icon: about_window_icon(release_channel, is_stcode),
                 message,
                 commit,
                 full_version,

@@ -5,7 +5,7 @@ use std::{
         Arc,
         atomic::{AtomicBool, Ordering},
     },
-    time::Duration,
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use acp_thread::{AcpThread, AcpThreadEvent, MentionUri, ThreadStatus};
@@ -17,10 +17,11 @@ use db::kvp::{Dismissable, KeyValueStore};
 use itertools::Itertools;
 use project::AgentId;
 use serde::{Deserialize, Serialize};
-use settings::{LanguageModelProviderSetting, LanguageModelSelection};
+use settings::{LanguageModelProviderSetting, LanguageModelSelection, NewThreadLocation};
 
 use zed_actions::{
-    DecreaseBufferFontSize, IncreaseBufferFontSize, ResetBufferFontSize,
+    CreateWorktree, DecreaseBufferFontSize, IncreaseBufferFontSize, NewWorktreeBranchTarget,
+    ResetBufferFontSize,
     agent::{
         AddSelectionToThread, ConflictContent, OpenSettings, ReauthenticateAgent, ResetAgentZoom,
         ResetOnboarding, ResolveConflictedFilesWithAgent, ResolveConflictsWithAgent,
@@ -38,10 +39,13 @@ use crate::{
     AddContextServer, AgentDiffPane, ConversationView, CopyThreadToClipboard, Follow,
     InlineAssistant, LoadThreadFromClipboard, NewThread, OpenActiveThreadAsMarkdown, OpenAgentDiff,
     ResetTrialEndUpsell, ResetTrialUpsell, ShowAllSidebarThreadMetadata, ShowThreadMetadata,
-    ToggleNewThreadMenu, ToggleOptionsMenu,
+    StcodeSmartMerge, StcodeSmartPanel, StcodeSmartParallel, StcodeSmartStart, ToggleNewThreadMenu,
+    ToggleOptionsMenu,
     agent_configuration::{AgentConfiguration, AssistantConfigurationEvent},
     conversation_view::{AcpThreadViewEvent, ThreadView},
-    stcode_activity_timeline::StcodeActivityTimeline,
+    stcode_activity_timeline::{
+        StcodeActivityTimeline, StcodeSmartRunPhase, StcodeSmartRunSnapshot, StcodeSmartRunStep,
+    },
     ui::EndTrialUpsell,
 };
 use crate::{
@@ -162,6 +166,8 @@ struct SerializedAgentPanel {
     #[serde(default)]
     last_active_thread: Option<SerializedActiveThread>,
     draft_thread_prompt: Option<Vec<acp::ContentBlock>>,
+    #[serde(default)]
+    stcode_smart_run: Option<StcodeSmartRunState>,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -172,14 +178,238 @@ struct SerializedActiveThread {
     work_dirs: Option<SerializedPathList>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+struct StcodeSmartRunState {
+    kind: StcodeSmartRunKind,
+    session_id: Option<String>,
+    context_summary: String,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum StcodeSmartRunKind {
+    Start,
+    Panel,
+    Parallel,
+    Merge,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct StcodeSmartRunThreadStatus {
+    has_entries: bool,
+    is_waiting_for_confirmation: bool,
+    is_generating: bool,
+    has_in_progress_tool_calls: bool,
+    had_error: bool,
+}
+
+impl StcodeSmartRunKind {
+    fn title(self) -> &'static str {
+        match self {
+            Self::Start => "AI Smart Start",
+            Self::Panel => "AI Smart Panel",
+            Self::Parallel => "AI Smart Parallel",
+            Self::Merge => "AI Smart Merge",
+        }
+    }
+
+    fn source(self) -> &'static str {
+        match self {
+            Self::Start => "stcode_smart_start",
+            Self::Panel => "stcode_smart_panel",
+            Self::Parallel => "stcode_smart_parallel",
+            Self::Merge => "stcode_smart_merge",
+        }
+    }
+
+    fn checkpoint_label(self) -> &'static str {
+        match self {
+            Self::Start => "Handoff",
+            Self::Panel => "Next action",
+            Self::Parallel => "Lane safe",
+            Self::Merge => "Merge-ready",
+        }
+    }
+}
+
+impl StcodeSmartRunState {
+    fn snapshot(
+        &self,
+        thread_status: Option<StcodeSmartRunThreadStatus>,
+    ) -> StcodeSmartRunSnapshot {
+        let phase = stcode_smart_run_phase(thread_status);
+        let status = match phase {
+            StcodeSmartRunPhase::Pending => "Submitted",
+            StcodeSmartRunPhase::Active => "Working",
+            StcodeSmartRunPhase::Complete => "Ready",
+            StcodeSmartRunPhase::Blocked => "Blocked",
+        };
+        let detail = match phase {
+            StcodeSmartRunPhase::Pending => {
+                format!("Prompt submitted. {}", self.context_summary)
+            }
+            StcodeSmartRunPhase::Active => {
+                format!(
+                    "Agent is running this smart workflow. {}",
+                    self.context_summary
+                )
+            }
+            StcodeSmartRunPhase::Complete => {
+                format!("Agent reached an idle checkpoint. {}", self.context_summary)
+            }
+            StcodeSmartRunPhase::Blocked => {
+                format!(
+                    "Agent needs attention before it can continue. {}",
+                    self.context_summary
+                )
+            }
+        };
+
+        StcodeSmartRunSnapshot {
+            title: self.kind.title().to_string(),
+            status,
+            detail,
+            phase,
+            steps: stcode_smart_run_steps(self.kind, phase),
+        }
+    }
+}
+
+fn stcode_smart_run_phase(
+    thread_status: Option<StcodeSmartRunThreadStatus>,
+) -> StcodeSmartRunPhase {
+    let Some(thread_status) = thread_status else {
+        return StcodeSmartRunPhase::Pending;
+    };
+
+    if thread_status.is_waiting_for_confirmation || thread_status.had_error {
+        return StcodeSmartRunPhase::Blocked;
+    }
+
+    if thread_status.is_generating || thread_status.has_in_progress_tool_calls {
+        return StcodeSmartRunPhase::Active;
+    }
+
+    if thread_status.has_entries {
+        StcodeSmartRunPhase::Complete
+    } else {
+        StcodeSmartRunPhase::Pending
+    }
+}
+
+fn stcode_smart_run_steps(
+    kind: StcodeSmartRunKind,
+    phase: StcodeSmartRunPhase,
+) -> Vec<StcodeSmartRunStep> {
+    let agent_phase = match phase {
+        StcodeSmartRunPhase::Pending => StcodeSmartRunPhase::Active,
+        StcodeSmartRunPhase::Active => StcodeSmartRunPhase::Active,
+        StcodeSmartRunPhase::Complete => StcodeSmartRunPhase::Complete,
+        StcodeSmartRunPhase::Blocked => StcodeSmartRunPhase::Blocked,
+    };
+    let checkpoint_phase = match phase {
+        StcodeSmartRunPhase::Complete => StcodeSmartRunPhase::Complete,
+        StcodeSmartRunPhase::Blocked => StcodeSmartRunPhase::Blocked,
+        _ => StcodeSmartRunPhase::Pending,
+    };
+
+    vec![
+        StcodeSmartRunStep {
+            label: "Snapshot",
+            status: "Done",
+            phase: StcodeSmartRunPhase::Complete,
+        },
+        StcodeSmartRunStep {
+            label: "Prompt",
+            status: "Sent",
+            phase: StcodeSmartRunPhase::Complete,
+        },
+        StcodeSmartRunStep {
+            label: "Agent",
+            status: match agent_phase {
+                StcodeSmartRunPhase::Active => "Running",
+                StcodeSmartRunPhase::Complete => "Done",
+                StcodeSmartRunPhase::Blocked => "Blocked",
+                StcodeSmartRunPhase::Pending => "Waiting",
+            },
+            phase: agent_phase,
+        },
+        StcodeSmartRunStep {
+            label: kind.checkpoint_label(),
+            status: match checkpoint_phase {
+                StcodeSmartRunPhase::Complete => "Ready",
+                StcodeSmartRunPhase::Blocked => "Blocked",
+                _ => "Waiting",
+            },
+            phase: checkpoint_phase,
+        },
+    ]
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum NewThreadRoute {
+    CurrentWorkspace,
+    NewWorktree,
+    WorktreeAlreadyStarting,
+}
+
+fn stcode_new_thread_route(workspace: &Workspace, cx: &App) -> NewThreadRoute {
+    if !AppLaunchMode::is_stcode(cx)
+        || AgentSettings::get_global(cx).new_thread_location != NewThreadLocation::NewWorktree
+    {
+        return NewThreadRoute::CurrentWorkspace;
+    }
+
+    if workspace.active_worktree_creation().label.is_some() {
+        return NewThreadRoute::WorktreeAlreadyStarting;
+    }
+
+    let project = workspace.project().read(cx);
+    if project.is_via_collab() || project.repositories(cx).is_empty() {
+        return NewThreadRoute::CurrentWorkspace;
+    }
+
+    NewThreadRoute::NewWorktree
+}
+
 pub fn init(cx: &mut App) {
     cx.observe_new(
         |workspace: &mut Workspace, _window, _cx: &mut Context<Workspace>| {
             workspace
                 .register_action(|workspace, action: &NewThread, window, cx| {
-                    if let Some(panel) = workspace.panel::<AgentPanel>(cx) {
-                        panel.update(cx, |panel, cx| panel.new_thread(action, window, cx));
-                        workspace.focus_panel::<AgentPanel>(window, cx);
+                    match stcode_new_thread_route(workspace, cx) {
+                        NewThreadRoute::NewWorktree => {
+                            let worktree_name =
+                                workspace.panel::<AgentPanel>(cx).and_then(|panel| {
+                                    panel.read(cx).stcode_worktree_name_from_active_prompt(cx)
+                                });
+                            if let Some(panel) = workspace.panel::<AgentPanel>(cx) {
+                                panel.update(cx, |panel, cx| {
+                                    panel.prepare_stcode_worktree_thread_transfer(cx);
+                                });
+                            }
+                            git_ui::worktree_service::handle_create_worktree(
+                                workspace,
+                                &CreateWorktree {
+                                    worktree_name,
+                                    branch_target: NewWorktreeBranchTarget::CurrentBranch,
+                                },
+                                window,
+                                Some(DockPosition::Left),
+                                cx,
+                            );
+                        }
+                        NewThreadRoute::WorktreeAlreadyStarting => {
+                            if workspace.panel::<AgentPanel>(cx).is_some() {
+                                workspace.focus_panel::<AgentPanel>(window, cx);
+                            }
+                        }
+                        NewThreadRoute::CurrentWorkspace => {
+                            if let Some(panel) = workspace.panel::<AgentPanel>(cx) {
+                                panel.update(cx, |panel, cx| panel.new_thread(action, window, cx));
+                                workspace.focus_panel::<AgentPanel>(window, cx);
+                            }
+                        }
                     }
                 })
                 .register_action(
@@ -588,6 +818,321 @@ fn build_conflicted_files_resolution_prompt(
     content
 }
 
+const MAX_STCODE_SMART_PROMPT_FILES: usize = 8;
+
+struct StcodeSmartPromptContext {
+    branch_name: Option<String>,
+    changed_count: usize,
+    staged_count: usize,
+    unstaged_count: usize,
+    conflicted_count: usize,
+    untracked_count: usize,
+    added_lines: usize,
+    removed_lines: usize,
+    linked_worktree_count: usize,
+    is_linked_worktree: bool,
+    shared_branch_lane_count: usize,
+    files: Vec<StcodeSmartPromptFile>,
+}
+
+struct StcodeSmartPromptFile {
+    path: String,
+    status: &'static str,
+    diff_label: Option<String>,
+    abs_path: Option<PathBuf>,
+}
+
+impl StcodeSmartPromptContext {
+    fn from_project(project: &Entity<Project>, cx: &App) -> Option<Self> {
+        let repository = project.read(cx).active_repository(cx)?;
+        let repository_ref = repository.read(cx);
+        let branch_name = repository_ref
+            .branch
+            .as_ref()
+            .map(|branch| branch.name().to_string());
+        let branch_ref = repository_ref
+            .branch
+            .as_ref()
+            .map(|branch| branch.ref_name.to_string());
+        let entries = repository_ref
+            .cached_status()
+            .filter(|entry| entry.status.has_changes())
+            .collect::<Vec<_>>();
+        let shared_branch_lane_count = branch_ref
+            .as_deref()
+            .map(|branch_ref| {
+                repository_ref
+                    .linked_worktrees()
+                    .iter()
+                    .filter(|worktree| {
+                        worktree
+                            .ref_name
+                            .as_ref()
+                            .is_some_and(|ref_name| ref_name.as_ref() == branch_ref)
+                    })
+                    .count()
+            })
+            .unwrap_or(0);
+
+        Some(Self {
+            branch_name,
+            changed_count: entries.len(),
+            staged_count: entries
+                .iter()
+                .filter(|entry| entry.status.staging().has_staged())
+                .count(),
+            unstaged_count: entries
+                .iter()
+                .filter(|entry| entry.status.staging().has_unstaged())
+                .count(),
+            conflicted_count: entries
+                .iter()
+                .filter(|entry| entry.status.is_conflicted())
+                .count(),
+            untracked_count: entries
+                .iter()
+                .filter(|entry| entry.status.is_untracked())
+                .count(),
+            added_lines: entries
+                .iter()
+                .filter_map(|entry| entry.diff_stat)
+                .map(|stat| stat.added as usize)
+                .sum(),
+            removed_lines: entries
+                .iter()
+                .filter_map(|entry| entry.diff_stat)
+                .map(|stat| stat.deleted as usize)
+                .sum(),
+            linked_worktree_count: repository_ref.linked_worktrees().len(),
+            is_linked_worktree: repository_ref.is_linked_worktree(),
+            shared_branch_lane_count,
+            files: entries
+                .iter()
+                .take(MAX_STCODE_SMART_PROMPT_FILES)
+                .map(|entry| {
+                    let path = entry
+                        .repo_path
+                        .display(repository_ref.path_style)
+                        .to_string();
+                    let abs_path = repository_ref
+                        .path_style
+                        .join(&repository_ref.work_directory_abs_path, path.as_str())
+                        .map(PathBuf::from);
+
+                    StcodeSmartPromptFile {
+                        path,
+                        status: stcode_smart_file_status(entry.status),
+                        diff_label: entry
+                            .diff_stat
+                            .map(|stat| format!("+{} -{}", stat.added, stat.deleted)),
+                        abs_path,
+                    }
+                })
+                .collect(),
+        })
+    }
+
+    fn snapshot_text(&self) -> String {
+        let branch = self.branch_name.as_deref().unwrap_or("detached HEAD");
+        let lane = if self.is_linked_worktree {
+            "isolated linked worktree"
+        } else {
+            "main checkout"
+        };
+        let file_label = if self.changed_count == 1 {
+            "file"
+        } else {
+            "files"
+        };
+        let mut text = format!(
+            indoc::indoc!(
+                "Live workspace snapshot:
+                 - Branch: {branch}
+                 - Lane: {lane}; {linked_worktree_count} linked lane(s); {shared_branch_lane_count} branch overlap(s)
+                 - Changes: {changed_count} changed {file_label}, {staged_count} staged, {unstaged_count} unstaged, {conflicted_count} conflicts, {untracked_count} new, +{added_lines} -{removed_lines}"
+            ),
+            branch = branch,
+            lane = lane,
+            linked_worktree_count = self.linked_worktree_count,
+            shared_branch_lane_count = self.shared_branch_lane_count,
+            changed_count = self.changed_count,
+            file_label = file_label,
+            staged_count = self.staged_count,
+            unstaged_count = self.unstaged_count,
+            conflicted_count = self.conflicted_count,
+            untracked_count = self.untracked_count,
+            added_lines = self.added_lines,
+            removed_lines = self.removed_lines,
+        );
+
+        if self.files.is_empty() {
+            text.push_str("\n- Files: no local file changes");
+        } else {
+            text.push_str("\n- Files to inspect first:");
+            for file in &self.files {
+                let diff = file
+                    .diff_label
+                    .as_ref()
+                    .map(|diff| format!(" ({diff})"))
+                    .unwrap_or_default();
+                text.push_str(&format!("\n  - [{}] {}{}", file.status, file.path, diff));
+            }
+            if self.changed_count > self.files.len() {
+                text.push_str(&format!(
+                    "\n  - ...and {} more changed file(s)",
+                    self.changed_count - self.files.len()
+                ));
+            }
+        }
+
+        text
+    }
+
+    fn run_context_summary(&self) -> String {
+        let branch = self.branch_name.as_deref().unwrap_or("detached HEAD");
+        let lane = if self.is_linked_worktree {
+            "isolated lane"
+        } else {
+            "main checkout"
+        };
+        format!(
+            "{branch}: {lane}, {} changed, {} conflict(s), {} branch overlap(s).",
+            self.changed_count, self.conflicted_count, self.shared_branch_lane_count
+        )
+    }
+
+    fn resource_links(&self) -> Vec<acp::ContentBlock> {
+        self.files
+            .iter()
+            .filter_map(|file| {
+                let abs_path = file.abs_path.clone()?;
+                let mention = MentionUri::File { abs_path };
+                Some(acp::ContentBlock::ResourceLink(acp::ResourceLink::new(
+                    mention.name(),
+                    mention.to_uri(),
+                )))
+            })
+            .collect()
+    }
+}
+
+fn stcode_smart_file_status(status: git::status::FileStatus) -> &'static str {
+    if status.is_conflicted() {
+        return "Conflict";
+    }
+
+    if status.is_untracked() {
+        return "New";
+    }
+
+    let staging = status.staging();
+    if staging.has_staged() && staging.has_unstaged() {
+        "Partial"
+    } else if staging.has_staged() {
+        "Staged"
+    } else {
+        "Changed"
+    }
+}
+
+fn stcode_smart_run_context_summary(context: Option<&StcodeSmartPromptContext>) -> String {
+    context.map_or_else(
+        || "No active Git repository detected.".to_string(),
+        StcodeSmartPromptContext::run_context_summary,
+    )
+}
+
+fn stcode_smart_prompt(
+    instruction: &'static str,
+    context: Option<&StcodeSmartPromptContext>,
+) -> Vec<acp::ContentBlock> {
+    let mut prompt = instruction.to_string();
+
+    if let Some(context) = context {
+        prompt.push_str("\n\n");
+        prompt.push_str(&context.snapshot_text());
+    } else {
+        prompt.push_str(
+            "\n\nLive workspace snapshot:\n- Repository: no active Git repository detected",
+        );
+    }
+
+    let mut blocks = vec![acp::ContentBlock::Text(acp::TextContent::new(prompt))];
+    if let Some(context) = context {
+        let links = context.resource_links();
+        if !links.is_empty() {
+            blocks.push(acp::ContentBlock::Text(acp::TextContent::new(
+                "\n\nChanged file links:\n",
+            )));
+            for link in links {
+                blocks.push(link);
+                blocks.push(acp::ContentBlock::Text(acp::TextContent::new("\n")));
+            }
+        }
+    }
+    blocks
+}
+
+fn build_stcode_smart_start_prompt(
+    context: Option<&StcodeSmartPromptContext>,
+) -> Vec<acp::ContentBlock> {
+    stcode_smart_prompt(
+        indoc::indoc!(
+        "AI Smart Start: prepare this workspace for an autonomous coding session.
+
+         Inspect the current branch, worktree, and local changes. If leftover work exists, decide the safest path yourself: preserve useful changes in a commit, stash unrelated leftovers, resolve obvious conflicts, or split the next task into an isolated worktree lane. Do not ask the user to choose between routine Git/worktree options.
+
+         Continue until the session has a clean, understandable handoff state and the next coding lane cannot overwrite another agent's work. Summarize what you preserved, what lane/branch is active, and the next autonomous step."
+        ),
+        context,
+    )
+}
+
+fn build_stcode_smart_panel_prompt(
+    context: Option<&StcodeSmartPromptContext>,
+) -> Vec<acp::ContentBlock> {
+    stcode_smart_prompt(
+        indoc::indoc!(
+        "AI Smart Panel: review the live workspace state and turn it into the next useful action.
+
+         Inspect the current goal, branch, worktree isolation, changed files, latest checks, blockers, and merge readiness. Then take the next concrete step yourself instead of only describing it. Prefer focused fixes, focused checks, and clear commits when changes are ready.
+
+         Do not ask for approval for routine code, Git, worktree, formatting, or test commands. Stop only for missing credentials, destructive data loss risk, or a decision that changes product direction."
+        ),
+        context,
+    )
+}
+
+fn build_stcode_smart_parallel_prompt(
+    context: Option<&StcodeSmartPromptContext>,
+) -> Vec<acp::ContentBlock> {
+    stcode_smart_prompt(
+        indoc::indoc!(
+        "AI Smart Parallel: make this workspace safe for parallel autonomous agents.
+
+         Inspect linked worktrees, the current branch, local changes, and any branch overlap. If this session is on the main checkout or shares a branch with another lane, create or move work into an isolated task lane where possible. Preserve local changes before switching lanes.
+
+         Continue until agents can work without sharing the same checkout or branch accidentally. Summarize the active lane, any other lanes you found, and the next task that can run safely."
+        ),
+        context,
+    )
+}
+
+fn build_stcode_smart_merge_prompt(
+    context: Option<&StcodeSmartPromptContext>,
+) -> Vec<acp::ContentBlock> {
+    stcode_smart_prompt(
+        indoc::indoc!(
+        "AI Smart Merge: autonomously prepare this branch for merge.
+
+         Inspect the current branch, local changes, conflicts, default branch, recent commits, and available checks. If local changes remain, review and commit them with a clear message. If conflicts or stale base changes exist, resolve or rebase them. Run the fastest meaningful checks first, then widen only when needed for confidence.
+
+         If no PR exists, create one. If CI or local checks fail, inspect the failure and fix it. Continue until the branch is clean, non-conflicting, and merge-ready with checks passing or with a precise blocker that cannot be solved locally. Do not ask the user to operate Git, pick routine merge options, or approve normal commands."
+        ),
+        context,
+    )
+}
+
 fn format_timestamp_human(dt: &DateTime<Utc>) -> String {
     let now = Utc::now();
     let duration = now.signed_duration_since(*dt);
@@ -662,6 +1207,114 @@ enum WhichFontSize {
     None,
 }
 
+struct SourcePanelInitialization {
+    agent: Agent,
+    initial_content: Option<AgentInitialContent>,
+    focus: bool,
+}
+
+const STCODE_WORKTREE_NAME_PREFIX: &str = "stcode";
+const STCODE_WORKTREE_NAME_SLUG_MAX_CHARACTERS: usize = 34;
+
+fn initial_content_with_auto_submit(content: AgentInitialContent) -> AgentInitialContent {
+    match content {
+        AgentInitialContent::ContentBlock { blocks, .. } => AgentInitialContent::ContentBlock {
+            blocks,
+            auto_submit: true,
+        },
+        content => content,
+    }
+}
+
+fn stcode_worktree_name_from_initial_content(
+    content: &AgentInitialContent,
+    disambiguator: u64,
+) -> Option<String> {
+    stcode_initial_content_text(content)
+        .as_deref()
+        .and_then(|text| stcode_worktree_name_from_text(text, disambiguator))
+}
+
+fn stcode_initial_content_text(content: &AgentInitialContent) -> Option<String> {
+    match content {
+        AgentInitialContent::ContentBlock { blocks, .. } => {
+            let mut text = String::new();
+            for block in blocks {
+                if let acp::ContentBlock::Text(text_content) = block {
+                    if !text.is_empty() {
+                        text.push(' ');
+                    }
+                    text.push_str(&text_content.text);
+                }
+            }
+            if text.trim().is_empty() {
+                None
+            } else {
+                Some(text)
+            }
+        }
+        AgentInitialContent::FromExternalSource(prompt) => Some(prompt.as_str().to_string()),
+        AgentInitialContent::ThreadSummary { title, .. } => title.as_ref().map(ToString::to_string),
+    }
+}
+
+fn stcode_worktree_name_from_text(text: &str, disambiguator: u64) -> Option<String> {
+    let mut slug = String::new();
+    let mut previous_was_separator = false;
+
+    for character in text.chars() {
+        if character.is_alphanumeric() {
+            for lowercase_character in character.to_lowercase() {
+                slug.push(lowercase_character);
+            }
+            previous_was_separator = false;
+        } else if !slug.is_empty() && !previous_was_separator {
+            slug.push('-');
+            previous_was_separator = true;
+        }
+
+        if slug.chars().count() >= STCODE_WORKTREE_NAME_SLUG_MAX_CHARACTERS {
+            break;
+        }
+    }
+
+    while slug.ends_with('-') {
+        slug.pop();
+    }
+
+    if slug.is_empty() {
+        return None;
+    }
+
+    Some(format!(
+        "{}-{}-{}",
+        STCODE_WORKTREE_NAME_PREFIX,
+        slug,
+        stcode_worktree_name_signature(text, disambiguator)
+    ))
+}
+
+fn stcode_worktree_name_signature(text: &str, disambiguator: u64) -> String {
+    let mut hash = 0xcbf29ce484222325_u64;
+    for byte in text
+        .as_bytes()
+        .iter()
+        .copied()
+        .chain(disambiguator.to_le_bytes())
+    {
+        hash ^= u64::from(byte);
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    format!("{:06x}", hash & 0x00ff_ffff)
+}
+
+fn stcode_worktree_name_disambiguator() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos() as u64)
+        .unwrap_or(0)
+}
+
 impl BaseView {
     pub fn which_font_size_used(&self) -> WhichFontSize {
         WhichFontSize::AgentFont
@@ -697,6 +1350,8 @@ pub struct AgentPanel {
     retained_threads: HashMap<ThreadId, Entity<ConversationView>>,
     new_thread_menu_handle: PopoverMenuHandle<ContextMenu>,
     agent_panel_menu_handle: PopoverMenuHandle<ContextMenu>,
+    pending_stcode_worktree_thread_transfer: bool,
+    stcode_smart_run: Option<StcodeSmartRunState>,
     _extension_subscription: Option<Subscription>,
     _project_subscription: Subscription,
     zoomed: bool,
@@ -772,6 +1427,7 @@ impl AgentPanel {
                     .to_vec(),
             )
         });
+        let stcode_smart_run = self.stcode_smart_run.clone();
         self.pending_serialization = Some(cx.background_spawn(async move {
             save_serialized_panel(
                 workspace_id,
@@ -779,6 +1435,7 @@ impl AgentPanel {
                     selected_agent: Some(selected_agent),
                     last_active_thread,
                     draft_thread_prompt,
+                    stcode_smart_run,
                 },
                 kvp,
             )
@@ -869,6 +1526,7 @@ impl AgentPanel {
                         global_last_used_agent.filter(|agent| !is_via_collab || agent.is_native());
 
                     if let Some(serialized_panel) = &serialized_panel {
+                        panel.stcode_smart_run = serialized_panel.stcode_smart_run.clone();
                         if let Some(selected_agent) = serialized_panel.selected_agent.clone() {
                             panel.selected_agent = selected_agent;
                         } else if let Some(agent) = global_fallback {
@@ -1054,6 +1712,8 @@ impl AgentPanel {
             retained_threads: HashMap::default(),
             new_thread_menu_handle: PopoverMenuHandle::default(),
             agent_panel_menu_handle: PopoverMenuHandle::default(),
+            pending_stcode_worktree_thread_transfer: false,
+            stcode_smart_run: None,
 
             _extension_subscription: extension_subscription,
             _project_subscription,
@@ -2643,6 +3303,23 @@ impl AgentPanel {
         }
     }
 
+    fn prepare_stcode_worktree_thread_transfer(&mut self, cx: &mut Context<Self>) {
+        self.pending_stcode_worktree_thread_transfer = true;
+        cx.notify();
+    }
+
+    fn consume_stcode_worktree_thread_transfer(&mut self) -> bool {
+        std::mem::take(&mut self.pending_stcode_worktree_thread_transfer)
+    }
+
+    fn stcode_worktree_name_from_active_prompt(&self, cx: &App) -> Option<String> {
+        let initial_content = self.active_initial_content(cx)?;
+        stcode_worktree_name_from_initial_content(
+            &initial_content,
+            stcode_worktree_name_disambiguator(),
+        )
+    }
+
     fn destination_has_meaningful_state(&self, cx: &App) -> bool {
         if self.overlay_view.is_some() || !self.retained_threads.is_empty() {
             return true;
@@ -2711,18 +3388,37 @@ impl AgentPanel {
 
     fn source_panel_initialization(
         source_workspace: &WeakEntity<Workspace>,
-        cx: &App,
-    ) -> Option<(Agent, AgentInitialContent)> {
+        cx: &mut Context<Self>,
+    ) -> Option<SourcePanelInitialization> {
         let source_workspace = source_workspace.upgrade()?;
         let source_panel = source_workspace.read(cx).panel::<AgentPanel>(cx)?;
-        let source_panel = source_panel.read(cx);
-        let initial_content = source_panel.active_initial_content(cx)?;
-        let agent = if source_panel.project.read(cx).is_via_collab() {
-            Agent::NativeAgent
-        } else {
-            source_panel.selected_agent.clone()
-        };
-        Some((agent, initial_content))
+        if source_panel.entity_id() == cx.entity().entity_id() {
+            return None;
+        }
+
+        source_panel.update(cx, |source_panel, cx| {
+            let initial_content = source_panel.active_initial_content(cx);
+            let stcode_new_thread = source_panel.consume_stcode_worktree_thread_transfer();
+            if initial_content.is_none() && !stcode_new_thread {
+                return None;
+            }
+            let initial_content = if stcode_new_thread {
+                initial_content.map(initial_content_with_auto_submit)
+            } else {
+                initial_content
+            };
+
+            let agent = if source_panel.project.read(cx).is_via_collab() {
+                Agent::NativeAgent
+            } else {
+                source_panel.selected_agent.clone()
+            };
+            Some(SourcePanelInitialization {
+                agent,
+                initial_content,
+                focus: stcode_new_thread,
+            })
+        })
     }
 
     pub fn initialize_from_source_workspace_if_needed(
@@ -2735,25 +3431,23 @@ impl AgentPanel {
             return false;
         }
 
-        let Some((agent, initial_content)) =
-            Self::source_panel_initialization(&source_workspace, cx)
-        else {
+        let Some(initialization) = Self::source_panel_initialization(&source_workspace, cx) else {
             return false;
         };
 
         let thread = self.create_agent_thread(
-            agent,
+            initialization.agent,
             None,
             None,
             None,
-            Some(initial_content),
+            initialization.initial_content,
             "agent_panel",
             window,
             cx,
         );
         self.draft_thread = Some(thread.conversation_view.clone());
         self.observe_draft_editor(&thread.conversation_view, cx);
-        self.set_base_view(thread.into(), false, window, cx);
+        self.set_base_view(thread.into(), initialization.focus, window, cx);
         true
     }
 
@@ -3633,9 +4327,145 @@ impl AgentPanel {
         }
 
         Some(
-            StcodeActivityTimeline::new(self.active_agent_thread(cx), self.project.clone())
-                .into_any_element(),
+            StcodeActivityTimeline::new(
+                self.active_agent_thread(cx),
+                self.project.clone(),
+                self.stcode_smart_run_snapshot(cx),
+            )
+            .into_any_element(),
         )
+    }
+
+    fn stcode_smart_run_snapshot(&self, cx: &App) -> Option<StcodeSmartRunSnapshot> {
+        let run = self.stcode_smart_run.as_ref()?;
+        Some(run.snapshot(self.stcode_smart_run_thread_status(run, cx)))
+    }
+
+    fn stcode_smart_run_thread_status(
+        &self,
+        run: &StcodeSmartRunState,
+        cx: &App,
+    ) -> Option<StcodeSmartRunThreadStatus> {
+        let session_id = run.session_id.as_deref()?;
+        let thread = self.active_agent_thread(cx)?;
+        let thread = thread.read(cx);
+        if thread.session_id().0.to_string() != session_id {
+            return None;
+        }
+
+        Some(StcodeSmartRunThreadStatus {
+            has_entries: !thread.entries().is_empty(),
+            is_waiting_for_confirmation: thread.is_waiting_for_confirmation(),
+            is_generating: thread.status() == ThreadStatus::Generating,
+            has_in_progress_tool_calls: thread.has_in_progress_tool_calls(),
+            had_error: thread.had_error(),
+        })
+    }
+
+    fn start_stcode_smart_start(
+        &mut self,
+        _: &StcodeSmartStart,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let context = StcodeSmartPromptContext::from_project(&self.project, cx);
+        self.start_stcode_smart_thread(
+            StcodeSmartRunKind::Start,
+            build_stcode_smart_start_prompt(context.as_ref()),
+            stcode_smart_run_context_summary(context.as_ref()),
+            window,
+            cx,
+        );
+    }
+
+    fn start_stcode_smart_panel(
+        &mut self,
+        _: &StcodeSmartPanel,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let context = StcodeSmartPromptContext::from_project(&self.project, cx);
+        self.start_stcode_smart_thread(
+            StcodeSmartRunKind::Panel,
+            build_stcode_smart_panel_prompt(context.as_ref()),
+            stcode_smart_run_context_summary(context.as_ref()),
+            window,
+            cx,
+        );
+    }
+
+    fn start_stcode_smart_parallel(
+        &mut self,
+        _: &StcodeSmartParallel,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let context = StcodeSmartPromptContext::from_project(&self.project, cx);
+        self.start_stcode_smart_thread(
+            StcodeSmartRunKind::Parallel,
+            build_stcode_smart_parallel_prompt(context.as_ref()),
+            stcode_smart_run_context_summary(context.as_ref()),
+            window,
+            cx,
+        );
+    }
+
+    fn start_stcode_smart_merge(
+        &mut self,
+        _: &StcodeSmartMerge,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let context = StcodeSmartPromptContext::from_project(&self.project, cx);
+        self.start_stcode_smart_thread(
+            StcodeSmartRunKind::Merge,
+            build_stcode_smart_merge_prompt(context.as_ref()),
+            stcode_smart_run_context_summary(context.as_ref()),
+            window,
+            cx,
+        );
+    }
+
+    fn start_stcode_smart_thread(
+        &mut self,
+        kind: StcodeSmartRunKind,
+        blocks: Vec<acp::ContentBlock>,
+        context_summary: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !AppLaunchMode::is_stcode(cx) || blocks.is_empty() {
+            return;
+        }
+
+        let thread = self.create_agent_thread(
+            self.selected_agent(cx),
+            None,
+            None,
+            Some(kind.title().into()),
+            Some(AgentInitialContent::ContentBlock {
+                blocks,
+                auto_submit: true,
+            }),
+            kind.source(),
+            window,
+            cx,
+        );
+        let session_id = thread
+            .conversation_view
+            .read(cx)
+            .root_session_id
+            .as_ref()
+            .map(|session_id| session_id.0.to_string());
+
+        self.stcode_smart_run = Some(StcodeSmartRunState {
+            kind,
+            session_id,
+            context_summary,
+        });
+        self.set_base_view(thread.into(), true, window, cx);
+        self.serialize(cx);
+        cx.notify();
     }
 
     fn key_context(&self) -> KeyContext {
@@ -3679,6 +4509,10 @@ impl Render for AgentPanel {
             .on_action(cx.listener(Self::decrease_font_size))
             .on_action(cx.listener(Self::reset_font_size))
             .on_action(cx.listener(Self::toggle_zoom))
+            .on_action(cx.listener(Self::start_stcode_smart_start))
+            .on_action(cx.listener(Self::start_stcode_smart_panel))
+            .on_action(cx.listener(Self::start_stcode_smart_parallel))
+            .on_action(cx.listener(Self::start_stcode_smart_merge))
             .on_action(cx.listener(|this, _: &ReauthenticateAgent, window, cx| {
                 if let Some(conversation_view) = this.active_conversation_view() {
                     conversation_view.update(cx, |conversation_view, cx| {
@@ -3900,6 +4734,12 @@ mod tests {
     use std::sync::Arc;
     use std::time::Instant;
     use workspace::MultiWorkspace;
+
+    fn set_new_thread_location(location: NewThreadLocation, cx: &mut App) {
+        let mut settings = AgentSettings::get_global(cx).clone();
+        settings.new_thread_location = location;
+        AgentSettings::override_global(settings, cx);
+    }
 
     #[derive(Clone, Default)]
     struct SessionTrackingConnection {
@@ -4363,6 +5203,119 @@ mod tests {
             },
             other => panic!("expected Resource block, got {:?}", other),
         }
+    }
+
+    #[test]
+    fn test_stcode_smart_prompts_drive_autonomous_work() {
+        let context = StcodeSmartPromptContext {
+            branch_name: Some("codex/v13".to_string()),
+            changed_count: 2,
+            staged_count: 1,
+            unstaged_count: 1,
+            conflicted_count: 1,
+            untracked_count: 1,
+            added_lines: 12,
+            removed_lines: 3,
+            linked_worktree_count: 2,
+            is_linked_worktree: true,
+            shared_branch_lane_count: 1,
+            files: vec![StcodeSmartPromptFile {
+                path: "src/main.rs".to_string(),
+                status: "Conflict",
+                diff_label: Some("+12 -3".to_string()),
+                abs_path: Some(PathBuf::from("/project/src/main.rs")),
+            }],
+        };
+
+        let start_blocks = build_stcode_smart_start_prompt(Some(&context));
+        let start = expect_text_block(&start_blocks[0]);
+        assert!(start.contains("AI Smart Start"));
+        assert!(start.contains("isolated worktree lane"));
+        assert!(start.contains("Live workspace snapshot"));
+        assert!(start.contains("codex/v13"));
+        assert!(start.contains("[Conflict] src/main.rs"));
+        assert!(
+            matches!(
+                start_blocks.get(2),
+                Some(acp::ContentBlock::ResourceLink(_))
+            ),
+            "prompt should attach changed files as resource links"
+        );
+
+        let panel_blocks = build_stcode_smart_panel_prompt(Some(&context));
+        let panel = expect_text_block(&panel_blocks[0]);
+        assert!(panel.contains("take the next concrete step yourself"));
+        assert!(panel.contains("Do not ask for approval"));
+
+        let parallel_blocks = build_stcode_smart_parallel_prompt(Some(&context));
+        let parallel = expect_text_block(&parallel_blocks[0]);
+        assert!(parallel.contains("parallel autonomous agents"));
+        assert!(parallel.contains("branch overlap"));
+
+        let merge_blocks = build_stcode_smart_merge_prompt(Some(&context));
+        let merge = expect_text_block(&merge_blocks[0]);
+        assert!(merge.contains("AI Smart Merge"));
+        assert!(merge.contains("CI or local checks fail"));
+        assert!(merge.contains("merge-ready"));
+    }
+
+    #[test]
+    fn test_stcode_smart_run_phase_tracks_agent_lifecycle() {
+        assert_eq!(stcode_smart_run_phase(None), StcodeSmartRunPhase::Pending);
+        assert_eq!(
+            stcode_smart_run_phase(Some(StcodeSmartRunThreadStatus {
+                has_entries: true,
+                is_waiting_for_confirmation: false,
+                is_generating: true,
+                has_in_progress_tool_calls: false,
+                had_error: false,
+            })),
+            StcodeSmartRunPhase::Active
+        );
+        assert_eq!(
+            stcode_smart_run_phase(Some(StcodeSmartRunThreadStatus {
+                has_entries: true,
+                is_waiting_for_confirmation: true,
+                is_generating: false,
+                has_in_progress_tool_calls: false,
+                had_error: false,
+            })),
+            StcodeSmartRunPhase::Blocked
+        );
+        assert_eq!(
+            stcode_smart_run_phase(Some(StcodeSmartRunThreadStatus {
+                has_entries: true,
+                is_waiting_for_confirmation: false,
+                is_generating: false,
+                has_in_progress_tool_calls: false,
+                had_error: false,
+            })),
+            StcodeSmartRunPhase::Complete
+        );
+
+        let run = StcodeSmartRunState {
+            kind: StcodeSmartRunKind::Merge,
+            session_id: Some("session-1".to_string()),
+            context_summary:
+                "feature: isolated lane, 0 changed, 0 conflict(s), 0 branch overlap(s).".to_string(),
+        };
+        let snapshot = run.snapshot(Some(StcodeSmartRunThreadStatus {
+            has_entries: true,
+            is_waiting_for_confirmation: false,
+            is_generating: false,
+            has_in_progress_tool_calls: false,
+            had_error: false,
+        }));
+
+        assert_eq!(snapshot.title, "AI Smart Merge");
+        assert_eq!(snapshot.phase, StcodeSmartRunPhase::Complete);
+        assert!(
+            snapshot
+                .steps
+                .iter()
+                .any(|step| step.label == "Merge-ready"
+                    && step.phase == StcodeSmartRunPhase::Complete)
+        );
     }
 
     #[test]
@@ -6473,6 +7426,110 @@ mod tests {
             );
         });
     }
+
+    #[gpui::test]
+    async fn test_stcode_new_thread_routes_to_new_worktree(cx: &mut TestAppContext) {
+        init_test(cx);
+        cx.update(|cx| {
+            AppLaunchMode::set_global(AppLaunchMode::Stcode, cx);
+            set_new_thread_location(NewThreadLocation::NewWorktree, cx);
+            agent::ThreadStore::init_global(cx);
+            language_model::LanguageModelRegistry::test(cx);
+        });
+
+        let fs = FakeFs::new(cx.executor());
+        fs.insert_tree(
+            "/project",
+            json!({
+                ".git": {},
+                "src": { "main.rs": "" }
+            }),
+        )
+        .await;
+        let project = Project::test(fs.clone(), [Path::new("/project")], cx).await;
+        cx.executor().run_until_parked();
+
+        let multi_workspace =
+            cx.add_window(|window, cx| MultiWorkspace::test_new(project.clone(), window, cx));
+        let workspace = multi_workspace
+            .read_with(cx, |multi_workspace, _cx| {
+                multi_workspace.workspace().clone()
+            })
+            .unwrap();
+
+        let route = workspace.read_with(cx, |workspace, cx| stcode_new_thread_route(workspace, cx));
+        assert_eq!(route, NewThreadRoute::NewWorktree);
+    }
+
+    #[gpui::test]
+    async fn test_stcode_new_thread_waits_for_active_worktree_creation(cx: &mut TestAppContext) {
+        init_test(cx);
+        cx.update(|cx| {
+            AppLaunchMode::set_global(AppLaunchMode::Stcode, cx);
+            set_new_thread_location(NewThreadLocation::NewWorktree, cx);
+            agent::ThreadStore::init_global(cx);
+            language_model::LanguageModelRegistry::test(cx);
+        });
+
+        let fs = FakeFs::new(cx.executor());
+        fs.insert_tree("/project", json!({ ".git": {} })).await;
+        let project = Project::test(fs.clone(), [Path::new("/project")], cx).await;
+        cx.executor().run_until_parked();
+
+        let multi_workspace =
+            cx.add_window(|window, cx| MultiWorkspace::test_new(project.clone(), window, cx));
+        let workspace = multi_workspace
+            .read_with(cx, |multi_workspace, _cx| {
+                multi_workspace.workspace().clone()
+            })
+            .unwrap();
+        let mut cx = VisualTestContext::from_window(multi_workspace.into(), cx);
+
+        workspace.update_in(&mut cx, |workspace, _window, cx| {
+            workspace.set_active_worktree_creation(Some("lane".into()), false, cx);
+            assert_eq!(
+                stcode_new_thread_route(workspace, cx),
+                NewThreadRoute::WorktreeAlreadyStarting
+            );
+        });
+    }
+
+    #[gpui::test]
+    async fn test_new_thread_route_falls_back_without_stcode_or_git(cx: &mut TestAppContext) {
+        init_test(cx);
+        cx.update(|cx| {
+            AppLaunchMode::set_global(AppLaunchMode::Zed, cx);
+            set_new_thread_location(NewThreadLocation::NewWorktree, cx);
+            agent::ThreadStore::init_global(cx);
+            language_model::LanguageModelRegistry::test(cx);
+        });
+
+        let fs = FakeFs::new(cx.executor());
+        fs.insert_tree("/project", json!({ "src": { "main.rs": "" } }))
+            .await;
+        let project = Project::test(fs.clone(), [Path::new("/project")], cx).await;
+        cx.executor().run_until_parked();
+
+        let multi_workspace =
+            cx.add_window(|window, cx| MultiWorkspace::test_new(project.clone(), window, cx));
+        let workspace = multi_workspace
+            .read_with(cx, |multi_workspace, _cx| {
+                multi_workspace.workspace().clone()
+            })
+            .unwrap();
+
+        let zed_route =
+            workspace.read_with(cx, |workspace, cx| stcode_new_thread_route(workspace, cx));
+        assert_eq!(zed_route, NewThreadRoute::CurrentWorkspace);
+
+        cx.update(|cx| {
+            AppLaunchMode::set_global(AppLaunchMode::Stcode, cx);
+        });
+
+        let no_git_route =
+            workspace.read_with(cx, |workspace, cx| stcode_new_thread_route(workspace, cx));
+        assert_eq!(no_git_route, NewThreadRoute::CurrentWorkspace);
+    }
     #[gpui::test]
     async fn test_vim_search_does_not_steal_focus_from_agent_panel(cx: &mut TestAppContext) {
         init_test(cx);
@@ -7035,6 +8092,161 @@ mod tests {
                 "panel_b should have a draft_thread set after initialization"
             );
         });
+    }
+
+    #[gpui::test]
+    async fn test_initialize_from_source_opens_empty_thread_for_stcode_worktree_request(
+        cx: &mut TestAppContext,
+    ) {
+        init_test(cx);
+        cx.update(|cx| {
+            agent::ThreadStore::init_global(cx);
+            language_model::LanguageModelRegistry::test(cx);
+        });
+
+        let fs = FakeFs::new(cx.executor());
+        let project_a = Project::test(fs.clone(), [], cx).await;
+        let project_b = Project::test(fs.clone(), [], cx).await;
+
+        let multi_workspace =
+            cx.add_window(|window, cx| MultiWorkspace::test_new(project_a.clone(), window, cx));
+
+        let workspace_a = multi_workspace
+            .read_with(cx, |multi_workspace, _cx| {
+                multi_workspace.workspace().clone()
+            })
+            .unwrap();
+
+        let workspace_b = multi_workspace
+            .update(cx, |multi_workspace, window, cx| {
+                multi_workspace.test_add_workspace(project_b.clone(), window, cx)
+            })
+            .unwrap();
+
+        let cx = &mut VisualTestContext::from_window(multi_workspace.into(), cx);
+
+        let panel_a = workspace_a.update_in(cx, |workspace, window, cx| {
+            let panel = cx.new(|cx| AgentPanel::new(workspace, None, window, cx));
+            workspace.add_panel(panel.clone(), window, cx);
+            panel
+        });
+        cx.run_until_parked();
+
+        panel_a.update(cx, |panel, cx| {
+            panel.prepare_stcode_worktree_thread_transfer(cx);
+        });
+
+        let panel_b = workspace_b.update_in(cx, |workspace, window, cx| {
+            let panel = cx.new(|cx| AgentPanel::new(workspace, None, window, cx));
+            workspace.add_panel(panel.clone(), window, cx);
+            panel
+        });
+        cx.run_until_parked();
+
+        let transferred = panel_b.update_in(cx, |panel, window, cx| {
+            panel.initialize_from_source_workspace_if_needed(workspace_a.downgrade(), window, cx)
+        });
+        assert!(
+            transferred,
+            "pending Stcode worktree request should open a fresh destination draft"
+        );
+
+        panel_b.read_with(cx, |panel, _cx| {
+            assert!(
+                panel.active_conversation_view().is_some(),
+                "panel_b should have a conversation view after initialization"
+            );
+            assert!(
+                panel.draft_thread.is_some(),
+                "panel_b should have a draft thread after initialization"
+            );
+        });
+
+        let transferred_again = panel_b.update_in(cx, |panel, window, cx| {
+            panel.initialize_from_source_workspace_if_needed(workspace_a.downgrade(), window, cx)
+        });
+        assert!(
+            !transferred_again,
+            "pending Stcode worktree request should be consumed after one transfer"
+        );
+    }
+
+    #[test]
+    fn test_stcode_worktree_transfer_marks_content_for_auto_submit() {
+        let content = AgentInitialContent::ContentBlock {
+            blocks: vec![acp::ContentBlock::Text(acp::TextContent::new(
+                "Build the feature",
+            ))],
+            auto_submit: false,
+        };
+
+        let content = initial_content_with_auto_submit(content);
+        let AgentInitialContent::ContentBlock {
+            blocks,
+            auto_submit,
+        } = content
+        else {
+            panic!("expected content block");
+        };
+
+        assert!(auto_submit);
+        assert_eq!(blocks.len(), 1);
+    }
+
+    #[test]
+    fn test_stcode_worktree_name_uses_prompt_text() {
+        let Some(name) = stcode_worktree_name_from_text("Build smart merge, then run CI!", 7)
+        else {
+            panic!("prompt text should produce a worktree name");
+        };
+        let Some(other_name) = stcode_worktree_name_from_text("Build smart merge, then run CI!", 8)
+        else {
+            panic!("prompt text should produce a worktree name");
+        };
+
+        assert!(name.starts_with("stcode-build-smart-merge-then-run-ci-"));
+        assert_ne!(name, other_name);
+    }
+
+    #[test]
+    fn test_stcode_worktree_name_ignores_empty_prompt() {
+        assert_eq!(stcode_worktree_name_from_text(" ... --- !!! ", 0), None);
+    }
+
+    #[test]
+    fn test_stcode_worktree_name_truncates_and_cleans_edges() {
+        let Some(name) = stcode_worktree_name_from_text(
+            "alpha beta gamma delta epsilon zeta eta theta iota.",
+            0,
+        ) else {
+            panic!("prompt text should produce a worktree name");
+        };
+        let Some(rest) = name.strip_prefix("stcode-") else {
+            panic!("name should have stcode prefix");
+        };
+        let Some((slug, signature)) = rest.rsplit_once('-') else {
+            panic!("name should have signature suffix");
+        };
+
+        assert!(slug.len() <= STCODE_WORKTREE_NAME_SLUG_MAX_CHARACTERS);
+        assert!(!slug.ends_with('-'));
+        assert_eq!(signature.len(), 6);
+    }
+
+    #[test]
+    fn test_stcode_worktree_name_reads_initial_content_text_blocks() {
+        let content = AgentInitialContent::ContentBlock {
+            blocks: vec![
+                acp::ContentBlock::Text(acp::TextContent::new("Fix flaky")),
+                acp::ContentBlock::Text(acp::TextContent::new("tests")),
+            ],
+            auto_submit: false,
+        };
+        let Some(name) = stcode_worktree_name_from_initial_content(&content, 0) else {
+            panic!("initial content should produce a worktree name");
+        };
+
+        assert!(name.starts_with("stcode-fix-flaky-tests-"));
     }
 
     #[gpui::test]

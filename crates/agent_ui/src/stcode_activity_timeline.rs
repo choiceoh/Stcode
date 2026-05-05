@@ -15,6 +15,7 @@ use zed_actions::{
 
 const MAX_TIMELINE_ENTRIES: usize = 4;
 const MAX_ENTRY_LABEL_CHARS: usize = 72;
+const MAX_SMART_PANEL_GOAL_CHARS: usize = 96;
 const MAX_SMART_PANEL_FILES: usize = 3;
 const MAX_SMART_TODO_ENTRIES: usize = 4;
 const MAX_TODO_LABEL_CHARS: usize = 84;
@@ -23,30 +24,62 @@ const MAX_TODO_LABEL_CHARS: usize = 84;
 pub(crate) struct StcodeActivityTimeline {
     thread: Option<Entity<AcpThread>>,
     project: Entity<Project>,
+    smart_run: Option<StcodeSmartRunSnapshot>,
 }
 
 impl StcodeActivityTimeline {
-    pub(crate) fn new(thread: Option<Entity<AcpThread>>, project: Entity<Project>) -> Self {
-        Self { thread, project }
+    pub(crate) fn new(
+        thread: Option<Entity<AcpThread>>,
+        project: Entity<Project>,
+        smart_run: Option<StcodeSmartRunSnapshot>,
+    ) -> Self {
+        Self {
+            thread,
+            project,
+            smart_run,
+        }
     }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum StcodeSmartRunPhase {
+    Pending,
+    Active,
+    Complete,
+    Blocked,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct StcodeSmartRunSnapshot {
+    pub(crate) title: String,
+    pub(crate) status: &'static str,
+    pub(crate) detail: String,
+    pub(crate) phase: StcodeSmartRunPhase,
+    pub(crate) steps: Vec<StcodeSmartRunStep>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct StcodeSmartRunStep {
+    pub(crate) label: &'static str,
+    pub(crate) status: &'static str,
+    pub(crate) phase: StcodeSmartRunPhase,
 }
 
 impl RenderOnce for StcodeActivityTimeline {
     fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
-        let (snapshot, smart_todo) = match self.thread {
-            Some(thread) => {
-                let thread = thread.read(cx);
-                (
-                    ActivitySnapshot::from_thread(thread, cx),
-                    SmartTodoSnapshot::from_thread(thread, cx),
-                )
-            }
+        let thread = self.thread.as_ref().map(|thread| thread.read(cx));
+        let (snapshot, smart_todo) = match thread {
+            Some(thread) => (
+                ActivitySnapshot::from_thread(thread, cx),
+                SmartTodoSnapshot::from_thread(thread, cx),
+            ),
             None => (ActivitySnapshot::empty(), None),
         };
         let smart_start = SmartStartSnapshot::from_project(&self.project, cx);
-        let smart_panel = SmartPanelSnapshot::from_project(&self.project, cx);
+        let smart_panel = SmartPanelSnapshot::from_project(&self.project, thread, cx);
         let smart_parallel = SmartParallelSnapshot::from_project(&self.project, cx);
         let smart_merge = SmartMergeSnapshot::from_project(&self.project, cx);
+        let smart_run = self.smart_run;
 
         v_flex()
             .id("stcode-activity-timeline")
@@ -94,6 +127,7 @@ impl RenderOnce for StcodeActivityTimeline {
                             ),
                     ),
             )
+            .children(smart_run.map(|snapshot| render_stcode_smart_run_card(snapshot, cx)))
             .children(smart_panel.map(|snapshot| render_smart_panel_card(snapshot, cx)))
             .children(smart_todo.map(|snapshot| render_smart_todo_card(snapshot, cx)))
             .children(smart_start.map(|snapshot| render_smart_start_guard(snapshot, cx)))
@@ -103,7 +137,128 @@ impl RenderOnce for StcodeActivityTimeline {
     }
 }
 
+fn render_stcode_smart_run_card(
+    snapshot: StcodeSmartRunSnapshot,
+    cx: &mut App,
+) -> impl IntoElement {
+    let (border_color, background_color) = match snapshot.phase {
+        StcodeSmartRunPhase::Complete => (
+            cx.theme().status().success_border,
+            cx.theme().status().success_background,
+        ),
+        StcodeSmartRunPhase::Blocked => (
+            cx.theme().status().error_border,
+            cx.theme().status().error_background,
+        ),
+        _ => (
+            cx.theme().status().warning_border,
+            cx.theme().status().warning_background,
+        ),
+    };
+
+    v_flex()
+        .id("stcode-smart-run-card")
+        .mt_1()
+        .gap_2()
+        .rounded_sm()
+        .border_1()
+        .border_color(border_color)
+        .bg(background_color)
+        .p_2()
+        .child(
+            h_flex()
+                .w_full()
+                .gap_2()
+                .items_start()
+                .child(
+                    Icon::new(stcode_smart_run_phase_icon(snapshot.phase))
+                        .size(IconSize::Small)
+                        .color(stcode_smart_run_phase_tone(snapshot.phase).color()),
+                )
+                .child(
+                    v_flex()
+                        .min_w_0()
+                        .flex_1()
+                        .gap_0p5()
+                        .child(
+                            h_flex()
+                                .w_full()
+                                .justify_between()
+                                .gap_2()
+                                .child(
+                                    Label::new(snapshot.title)
+                                        .size(LabelSize::Small)
+                                        .color(Color::Default),
+                                )
+                                .child(
+                                    Label::new(snapshot.status)
+                                        .size(LabelSize::XSmall)
+                                        .color(stcode_smart_run_phase_tone(snapshot.phase).color()),
+                                ),
+                        )
+                        .child(
+                            Label::new(snapshot.detail)
+                                .size(LabelSize::XSmall)
+                                .color(Color::Muted)
+                                .truncate(),
+                        ),
+                ),
+        )
+        .child(
+            h_flex()
+                .w_full()
+                .gap_1()
+                .flex_wrap()
+                .children(snapshot.steps.into_iter().map(render_stcode_smart_run_step)),
+        )
+}
+
+fn render_stcode_smart_run_step(step: StcodeSmartRunStep) -> impl IntoElement {
+    let tone = stcode_smart_run_phase_tone(step.phase);
+
+    h_flex()
+        .id(format!("stcode-smart-run-step-{}", step.label))
+        .gap_1()
+        .px_1p5()
+        .py_0p5()
+        .rounded_sm()
+        .child(
+            Icon::new(stcode_smart_run_phase_icon(step.phase))
+                .size(IconSize::XSmall)
+                .color(tone.color()),
+        )
+        .child(
+            Label::new(step.label)
+                .size(LabelSize::XSmall)
+                .color(Color::Default),
+        )
+        .child(
+            Label::new(step.status)
+                .size(LabelSize::XSmall)
+                .color(tone.color()),
+        )
+}
+
+fn stcode_smart_run_phase_icon(phase: StcodeSmartRunPhase) -> IconName {
+    match phase {
+        StcodeSmartRunPhase::Pending => IconName::Circle,
+        StcodeSmartRunPhase::Active => IconName::LoadCircle,
+        StcodeSmartRunPhase::Complete => IconName::Check,
+        StcodeSmartRunPhase::Blocked => IconName::Warning,
+    }
+}
+
+fn stcode_smart_run_phase_tone(phase: StcodeSmartRunPhase) -> ActivityTone {
+    match phase {
+        StcodeSmartRunPhase::Pending => ActivityTone::Idle,
+        StcodeSmartRunPhase::Active => ActivityTone::Running,
+        StcodeSmartRunPhase::Complete => ActivityTone::Done,
+        StcodeSmartRunPhase::Blocked => ActivityTone::Failed,
+    }
+}
+
 fn render_smart_start_guard(snapshot: SmartStartSnapshot, cx: &mut App) -> impl IntoElement {
+    let smart_start_action = crate::StcodeSmartStart.boxed_clone();
     let review_repository = snapshot.repository.clone();
     let worktree_action = zed_git::Worktree.boxed_clone();
     let stash_repository = snapshot.repository.clone();
@@ -152,6 +307,14 @@ fn render_smart_start_guard(snapshot: SmartStartSnapshot, cx: &mut App) -> impl 
                 .gap_1()
                 .flex_wrap()
                 .child(
+                    Button::new("stcode-smart-start-auto", "AI Start")
+                        .label_size(LabelSize::XSmall)
+                        .style(ButtonStyle::Outlined)
+                        .on_click(move |_, window, cx| {
+                            window.dispatch_action(smart_start_action.boxed_clone(), cx);
+                        }),
+                )
+                .child(
                     Button::new("stcode-smart-start-review", "Review")
                         .label_size(LabelSize::XSmall)
                         .style(ButtonStyle::Outlined)
@@ -187,6 +350,7 @@ fn render_smart_start_guard(snapshot: SmartStartSnapshot, cx: &mut App) -> impl 
 }
 
 fn render_smart_panel_card(snapshot: SmartPanelSnapshot, cx: &mut App) -> impl IntoElement {
+    let smart_panel_action = crate::StcodeSmartPanel.boxed_clone();
     let review_repository = snapshot.repository.clone();
     let commit_action = git::ExpandCommitEditor.boxed_clone();
     let has_files = !snapshot.files.is_empty();
@@ -301,6 +465,14 @@ fn render_smart_panel_card(snapshot: SmartPanelSnapshot, cx: &mut App) -> impl I
                 }),
         )
         .child(
+            v_flex().w_full().gap_1().children(
+                snapshot
+                    .work_items
+                    .into_iter()
+                    .map(render_smart_panel_work_item),
+            ),
+        )
+        .child(
             v_flex()
                 .w_full()
                 .gap_1()
@@ -319,6 +491,14 @@ fn render_smart_panel_card(snapshot: SmartPanelSnapshot, cx: &mut App) -> impl I
                 .gap_1()
                 .flex_wrap()
                 .child(
+                    Button::new("stcode-smart-panel-auto", "Ask Agent")
+                        .label_size(LabelSize::XSmall)
+                        .style(ButtonStyle::Outlined)
+                        .on_click(move |_, window, cx| {
+                            window.dispatch_action(smart_panel_action.boxed_clone(), cx);
+                        }),
+                )
+                .child(
                     Button::new("stcode-smart-panel-review", "Review Files")
                         .label_size(LabelSize::XSmall)
                         .style(ButtonStyle::Outlined)
@@ -336,6 +516,41 @@ fn render_smart_panel_card(snapshot: SmartPanelSnapshot, cx: &mut App) -> impl I
                             window.dispatch_action(commit_action.boxed_clone(), cx);
                         }),
                 ),
+        )
+}
+
+fn render_smart_panel_work_item(item: SmartPanelWorkItem) -> impl IntoElement {
+    h_flex()
+        .id(format!("stcode-smart-panel-work-item-{}", item.id))
+        .w_full()
+        .min_w_0()
+        .gap_2()
+        .child(
+            Icon::new(item.icon)
+                .size(IconSize::XSmall)
+                .color(item.tone.color()),
+        )
+        .child(
+            v_flex()
+                .min_w_0()
+                .flex_1()
+                .gap_0p5()
+                .child(
+                    Label::new(item.label)
+                        .size(LabelSize::XSmall)
+                        .color(Color::Muted),
+                )
+                .child(
+                    Label::new(item.detail)
+                        .size(LabelSize::XSmall)
+                        .color(Color::Default)
+                        .truncate(),
+                ),
+        )
+        .child(
+            Label::new(item.status)
+                .size(LabelSize::XSmall)
+                .color(item.tone.color()),
         )
 }
 
@@ -545,6 +760,7 @@ fn render_smart_todo_item(item: SmartTodoItem) -> impl IntoElement {
 }
 
 fn render_smart_parallel_card(snapshot: SmartParallelSnapshot, cx: &mut App) -> impl IntoElement {
+    let smart_parallel_action = crate::StcodeSmartParallel.boxed_clone();
     let create_lane_action = CreateWorktree {
         worktree_name: None,
         branch_target: NewWorktreeBranchTarget::CurrentBranch,
@@ -620,6 +836,14 @@ fn render_smart_parallel_card(snapshot: SmartParallelSnapshot, cx: &mut App) -> 
                 .gap_1()
                 .flex_wrap()
                 .child(
+                    Button::new("stcode-smart-parallel-auto", "AI Parallel")
+                        .label_size(LabelSize::XSmall)
+                        .style(ButtonStyle::Outlined)
+                        .on_click(move |_, window, cx| {
+                            window.dispatch_action(smart_parallel_action.boxed_clone(), cx);
+                        }),
+                )
+                .child(
                     Button::new("stcode-smart-parallel-create-lane", "Create Lane")
                         .label_size(LabelSize::XSmall)
                         .style(ButtonStyle::Outlined)
@@ -639,6 +863,7 @@ fn render_smart_parallel_card(snapshot: SmartParallelSnapshot, cx: &mut App) -> 
 }
 
 fn render_smart_merge_card(snapshot: SmartMergeSnapshot, cx: &mut App) -> impl IntoElement {
+    let smart_merge_action = crate::StcodeSmartMerge.boxed_clone();
     let review_repository = snapshot.repository.clone();
     let create_pull_request_action = zed_git::CreatePullRequest.boxed_clone();
     let commit_action = git::ExpandCommitEditor.boxed_clone();
@@ -710,6 +935,14 @@ fn render_smart_merge_card(snapshot: SmartMergeSnapshot, cx: &mut App) -> impl I
                 .w_full()
                 .gap_1()
                 .flex_wrap()
+                .child(
+                    Button::new("stcode-smart-merge-auto", "AI Merge")
+                        .label_size(LabelSize::XSmall)
+                        .style(ButtonStyle::Outlined)
+                        .on_click(move |_, window, cx| {
+                            window.dispatch_action(smart_merge_action.boxed_clone(), cx);
+                        }),
+                )
                 .child(
                     Button::new("stcode-smart-merge-review", "Review Merge")
                         .label_size(LabelSize::XSmall)
@@ -837,29 +1070,55 @@ struct SmartPanelSnapshot {
     icon: IconName,
     tone: ActivityTone,
     counts: SmartPanelCounts,
+    work_items: Vec<SmartPanelWorkItem>,
     files: Vec<SmartPanelFile>,
     can_review: bool,
     can_commit: bool,
 }
 
 impl SmartPanelSnapshot {
-    fn from_project(project: &Entity<Project>, cx: &App) -> Option<Self> {
+    fn from_project(
+        project: &Entity<Project>,
+        thread: Option<&AcpThread>,
+        cx: &App,
+    ) -> Option<Self> {
         let repository = project.read(cx).active_repository(cx)?;
         let repository_ref = repository.read(cx);
         let branch_name = repository_ref
             .branch
             .as_ref()
             .map(|branch| branch.name().to_string());
+        let branch_ref = repository_ref
+            .branch
+            .as_ref()
+            .map(|branch| branch.ref_name.to_string());
         let entries = repository_ref
             .cached_status()
             .filter(|entry| entry.status.has_changes())
             .collect::<Vec<_>>();
+        let shared_branch_lane_count =
+            smart_shared_branch_lane_count(&repository_ref, branch_ref.as_deref());
         let counts = smart_panel_counts(
             &entries,
             repository_ref.linked_worktrees().len(),
             repository_ref.is_linked_worktree(),
+            shared_branch_lane_count,
         );
         let state = smart_panel_state(counts.changed_count, counts.conflicted_count);
+        let merge_state = smart_merge_state(
+            branch_name.as_deref(),
+            counts.changed_count,
+            counts.conflicted_count,
+        );
+        let thread_summary = smart_panel_thread_summary(thread, cx);
+        let work_items = smart_panel_work_items(
+            thread,
+            thread_summary,
+            branch_name.as_deref(),
+            counts,
+            merge_state,
+            cx,
+        );
         let files = entries
             .iter()
             .take(MAX_SMART_PANEL_FILES)
@@ -876,6 +1135,7 @@ impl SmartPanelSnapshot {
             icon: state.icon(),
             tone: state.tone(),
             counts,
+            work_items,
             files,
             can_review: counts.changed_count > 0,
             can_commit: counts.changed_count > 0,
@@ -894,6 +1154,17 @@ struct SmartPanelCounts {
     removed_lines: usize,
     linked_worktree_count: usize,
     is_linked_worktree: bool,
+    shared_branch_lane_count: usize,
+}
+
+#[derive(Clone)]
+struct SmartPanelWorkItem {
+    id: &'static str,
+    label: &'static str,
+    detail: String,
+    status: &'static str,
+    icon: IconName,
+    tone: ActivityTone,
 }
 
 #[derive(Clone)]
@@ -956,6 +1227,7 @@ fn smart_panel_counts(
     entries: &[StatusEntry],
     linked_worktree_count: usize,
     is_linked_worktree: bool,
+    shared_branch_lane_count: usize,
 ) -> SmartPanelCounts {
     SmartPanelCounts {
         changed_count: entries.len(),
@@ -987,7 +1259,25 @@ fn smart_panel_counts(
             .sum(),
         linked_worktree_count,
         is_linked_worktree,
+        shared_branch_lane_count,
     }
+}
+
+fn smart_shared_branch_lane_count(repository: &Repository, branch_ref: Option<&str>) -> usize {
+    branch_ref
+        .map(|branch_ref| {
+            repository
+                .linked_worktrees()
+                .iter()
+                .filter(|worktree| {
+                    worktree
+                        .ref_name
+                        .as_ref()
+                        .is_some_and(|ref_name| ref_name.as_ref() == branch_ref)
+                })
+                .count()
+        })
+        .unwrap_or(0)
 }
 
 fn smart_panel_state(changed_count: usize, conflicted_count: usize) -> SmartPanelState {
@@ -1070,6 +1360,194 @@ fn smart_panel_file_status(status: FileStatus) -> (&'static str, IconName, Activ
     } else {
         ("Changed", IconName::Diff, ActivityTone::Waiting)
     }
+}
+
+fn smart_panel_thread_summary(thread: Option<&AcpThread>, cx: &App) -> ThreadSummary {
+    let Some(thread) = thread else {
+        return ThreadSummary {
+            status: "Ready",
+            detail: "No workspace activity yet",
+            icon: IconName::Circle,
+            tone: ActivityTone::Idle,
+        };
+    };
+
+    let latest_tool_tone = latest_tool_snapshot(thread, cx).map(|tool| tool.tone);
+    summarize_thread_state(
+        !thread.entries().is_empty(),
+        thread.is_waiting_for_confirmation(),
+        thread.status() == ThreadStatus::Generating,
+        thread.has_in_progress_tool_calls(),
+        thread.had_error(),
+        latest_tool_tone,
+    )
+}
+
+fn smart_panel_work_items(
+    thread: Option<&AcpThread>,
+    thread_summary: ThreadSummary,
+    branch_name: Option<&str>,
+    counts: SmartPanelCounts,
+    merge_state: SmartMergeState,
+    cx: &App,
+) -> Vec<SmartPanelWorkItem> {
+    vec![
+        smart_panel_goal_item(thread, thread_summary, cx),
+        smart_panel_lane_item(branch_name, counts),
+        smart_panel_check_item(thread, cx),
+        smart_panel_merge_item(
+            branch_name,
+            counts.changed_count,
+            counts.conflicted_count,
+            merge_state,
+        ),
+    ]
+}
+
+fn smart_panel_goal_item(
+    thread: Option<&AcpThread>,
+    thread_summary: ThreadSummary,
+    cx: &App,
+) -> SmartPanelWorkItem {
+    let detail = thread
+        .and_then(|thread| smart_panel_goal_from_thread(thread, cx))
+        .unwrap_or_else(|| "No active goal yet".to_string());
+
+    SmartPanelWorkItem {
+        id: "goal",
+        label: "Current goal",
+        detail,
+        status: thread_summary.status,
+        icon: IconName::UserCheck,
+        tone: thread_summary.tone,
+    }
+}
+
+fn smart_panel_goal_from_thread(thread: &AcpThread, cx: &App) -> Option<String> {
+    thread.entries().iter().rev().find_map(|entry| {
+        let AgentThreadEntry::UserMessage(message) = entry else {
+            return None;
+        };
+
+        let label =
+            smart_panel_compact_label(message.content.to_markdown(cx), MAX_SMART_PANEL_GOAL_CHARS);
+        if label.is_empty() { None } else { Some(label) }
+    })
+}
+
+fn smart_panel_lane_item(
+    branch_name: Option<&str>,
+    counts: SmartPanelCounts,
+) -> SmartPanelWorkItem {
+    let branch = branch_name.unwrap_or("detached HEAD");
+
+    if counts.shared_branch_lane_count > 0 {
+        let lane_label = if counts.shared_branch_lane_count == 1 {
+            "lane"
+        } else {
+            "lanes"
+        };
+        return SmartPanelWorkItem {
+            id: "lane",
+            label: "Lane",
+            detail: format!(
+                "{branch} overlaps {} linked {lane_label}",
+                counts.shared_branch_lane_count
+            ),
+            status: "Overlap",
+            icon: IconName::GitMergeConflict,
+            tone: ActivityTone::Failed,
+        };
+    }
+
+    if counts.is_linked_worktree {
+        SmartPanelWorkItem {
+            id: "lane",
+            label: "Lane",
+            detail: format!("{branch} is isolated for this session"),
+            status: "Isolated",
+            icon: IconName::GitWorktree,
+            tone: ActivityTone::Done,
+        }
+    } else {
+        SmartPanelWorkItem {
+            id: "lane",
+            label: "Lane",
+            detail: format!("{branch} is still on the main checkout"),
+            status: "Split",
+            icon: IconName::GitBranchPlus,
+            tone: ActivityTone::Waiting,
+        }
+    }
+}
+
+fn smart_panel_check_item(thread: Option<&AcpThread>, cx: &App) -> SmartPanelWorkItem {
+    let Some(check) = latest_execute_tool_snapshot(thread, cx) else {
+        return SmartPanelWorkItem {
+            id: "check",
+            label: "Last check",
+            detail: "No command check has run in this thread yet".to_string(),
+            status: "Waiting",
+            icon: IconName::ToolTerminal,
+            tone: ActivityTone::Idle,
+        };
+    };
+
+    SmartPanelWorkItem {
+        id: "check",
+        label: "Last check",
+        detail: check.label,
+        status: check.status,
+        icon: check.icon,
+        tone: check.tone,
+    }
+}
+
+fn smart_panel_merge_item(
+    branch_name: Option<&str>,
+    changed_count: usize,
+    conflicted_count: usize,
+    merge_state: SmartMergeState,
+) -> SmartPanelWorkItem {
+    SmartPanelWorkItem {
+        id: "merge",
+        label: "Merge readiness",
+        detail: smart_merge_detail(merge_state, branch_name, changed_count, conflicted_count),
+        status: merge_state.status(),
+        icon: merge_state.icon(),
+        tone: merge_state.tone(),
+    }
+}
+
+fn latest_execute_tool_snapshot(
+    thread: Option<&AcpThread>,
+    cx: &App,
+) -> Option<LatestToolSnapshot> {
+    thread?.entries().iter().rev().find_map(|entry| {
+        let AgentThreadEntry::ToolCall(tool_call) = entry else {
+            return None;
+        };
+        if !matches!(tool_call.kind, acp::ToolKind::Execute) {
+            return None;
+        }
+
+        let (status, tone) = tool_status_label(&tool_call.status);
+        Some(LatestToolSnapshot {
+            label: tool_call_label(tool_call, cx),
+            status,
+            icon: IconName::ToolTerminal,
+            tone,
+        })
+    })
+}
+
+fn smart_panel_compact_label(text: impl AsRef<str>, max_chars: usize) -> String {
+    let compact = text
+        .as_ref()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    truncate_and_trailoff(compact.trim(), max_chars)
 }
 
 #[derive(Clone)]
@@ -2086,6 +2564,7 @@ mod tests {
             ],
             2,
             true,
+            1,
         );
 
         assert_eq!(counts.changed_count, 3);
@@ -2097,6 +2576,7 @@ mod tests {
         assert_eq!(counts.removed_lines, 2);
         assert_eq!(counts.linked_worktree_count, 2);
         assert!(counts.is_linked_worktree);
+        assert_eq!(counts.shared_branch_lane_count, 1);
     }
 
     #[test]
@@ -2121,6 +2601,7 @@ mod tests {
                 removed_lines: 4,
                 linked_worktree_count: 0,
                 is_linked_worktree: false,
+                shared_branch_lane_count: 0,
             },
         );
 
@@ -2146,11 +2627,52 @@ mod tests {
                 removed_lines: 0,
                 linked_worktree_count: 1,
                 is_linked_worktree: true,
+                shared_branch_lane_count: 0,
             },
         );
 
         assert!(detail.contains("feature: no local file changes"));
         assert!(detail.contains("this session is isolated"));
+    }
+
+    #[test]
+    fn smart_panel_lane_item_surfaces_branch_overlap() {
+        let item = smart_panel_lane_item(
+            Some("feature"),
+            SmartPanelCounts {
+                changed_count: 0,
+                staged_count: 0,
+                unstaged_count: 0,
+                conflicted_count: 0,
+                untracked_count: 0,
+                added_lines: 0,
+                removed_lines: 0,
+                linked_worktree_count: 2,
+                is_linked_worktree: true,
+                shared_branch_lane_count: 1,
+            },
+        );
+
+        assert_eq!(item.status, "Overlap");
+        assert!(item.detail.contains("feature overlaps 1 linked lane"));
+        assert_eq!(item.tone, ActivityTone::Failed);
+    }
+
+    #[test]
+    fn smart_panel_merge_item_reuses_merge_readiness() {
+        let item = smart_panel_merge_item(Some("feature"), 0, 0, SmartMergeState::Ready);
+
+        assert_eq!(item.status, "Ready");
+        assert!(item.detail.contains("feature is clean locally"));
+        assert_eq!(item.tone, ActivityTone::Done);
+    }
+
+    #[test]
+    fn smart_panel_compact_label_flattens_multiline_goals() {
+        assert_eq!(
+            smart_panel_compact_label("Build smart panel\n\nthen run checks", 80),
+            "Build smart panel then run checks"
+        );
     }
 
     #[test]
