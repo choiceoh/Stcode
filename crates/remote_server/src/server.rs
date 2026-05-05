@@ -295,7 +295,6 @@ fn start_server(
     listeners: ServerListeners,
     log_rx: Receiver<Vec<u8>>,
     cx: &mut App,
-    is_wsl_interop: bool,
 ) -> AnyProtoClient {
     // This is the server idle timeout. If no connection comes in this timeout, the server will shut down.
     const IDLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10 * 60);
@@ -427,7 +426,7 @@ fn start_server(
     })
     .detach();
 
-    RemoteClient::proto_client_from_channels(incoming_rx, outgoing_tx, cx, "server", is_wsl_interop)
+    RemoteClient::proto_client_from_channels(incoming_rx, outgoing_tx, cx, "server")
 }
 
 fn init_paths() -> anyhow::Result<()> {
@@ -524,15 +523,8 @@ pub fn execute_run(
 
         HeadlessProject::init(cx);
 
-        let is_wsl_interop = if cfg!(target_os = "linux") {
-            // See: https://learn.microsoft.com/en-us/windows/wsl/filesystems#disable-interoperability
-            matches!(std::fs::read_to_string("/proc/sys/fs/binfmt_misc/WSLInterop").or_else(|_| std::fs::read_to_string("/proc/sys/fs/binfmt_misc/WSLInterop-late")), Ok(s) if s.contains("enabled"))
-        } else {
-            false
-        };
-
         log::info!("gpui app started, initializing server");
-        let session = start_server(listeners, log_rx, cx, is_wsl_interop);
+        let session = start_server(listeners, log_rx, cx);
         trusted_worktrees::init(HashMap::default(), cx);
 
         GitHostingProviderRegistry::set_global(git_hosting_provider_registry, cx);
@@ -590,11 +582,8 @@ pub fn execute_run(
 
         handle_crash_files_requests(&project, &session);
 
-        cx.background_spawn(async move {
-            cleanup_old_binaries_wsl();
-            cleanup_old_binaries()
-        })
-        .detach();
+        cx.background_spawn(async move { cleanup_old_binaries() })
+            .detach();
 
         mem::forget(project);
     };
@@ -1194,15 +1183,6 @@ fn cleanup_old_binaries() -> Result<()> {
     }
 
     Ok(())
-}
-
-// Remove this once 223 goes stable, we only have this to clean up old binaries on WSL
-// we no longer download them into this folder, we use the same folder as other remote servers
-fn cleanup_old_binaries_wsl() {
-    let server_dir = paths::remote_wsl_server_dir_relative();
-    if let Ok(()) = std::fs::remove_dir_all(server_dir.as_std_path()) {
-        log::info!("removing old wsl remote server folder: {:?}", server_dir);
-    }
 }
 
 fn is_new_version(version: &str) -> bool {

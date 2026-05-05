@@ -13,10 +13,6 @@ pub enum RemoteConnectionIdentity {
         username: Option<String>,
         port: Option<u16>,
     },
-    Wsl {
-        distro_name: String,
-        user: Option<String>,
-    },
     Docker {
         container_id: String,
         name: String,
@@ -33,10 +29,6 @@ impl From<&RemoteConnectionOptions> for RemoteConnectionIdentity {
                 host: options.host.to_string(),
                 username: options.username.clone(),
                 port: options.port,
-            },
-            RemoteConnectionOptions::Wsl(options) => Self::Wsl {
-                distro_name: options.distro_name.clone(),
-                user: options.user.clone(),
             },
             RemoteConnectionOptions::Docker(options) => Self::Docker {
                 container_id: options.container_id.clone(),
@@ -71,7 +63,7 @@ mod tests {
     use std::collections::BTreeMap;
 
     use super::*;
-    use crate::{DockerConnectionOptions, SshConnectionOptions, WslConnectionOptions};
+    use crate::{DockerConnectionOptions, SshConnectionOptions};
 
     #[test]
     fn ssh_identity_ignores_non_persisted_runtime_fields() {
@@ -120,20 +112,6 @@ mod tests {
     }
 
     #[test]
-    fn wsl_identity_includes_user() {
-        let left = RemoteConnectionOptions::Wsl(WslConnectionOptions {
-            distro_name: "Ubuntu".to_string(),
-            user: Some("anth".to_string()),
-        });
-        let right = RemoteConnectionOptions::Wsl(WslConnectionOptions {
-            distro_name: "Ubuntu".to_string(),
-            user: Some("root".to_string()),
-        });
-
-        assert!(!same_remote_connection_identity(Some(&left), Some(&right),));
-    }
-
-    #[test]
     fn docker_identity_ignores_non_persisted_runtime_fields() {
         let left = RemoteConnectionOptions::Docker(DockerConnectionOptions {
             name: "zed-dev".to_string(),
@@ -157,9 +135,9 @@ mod tests {
 
     #[test]
     fn local_identity_matches_only_local_identity() {
-        let remote = RemoteConnectionOptions::Wsl(WslConnectionOptions {
-            distro_name: "Ubuntu".to_string(),
-            user: Some("anth".to_string()),
+        let remote = RemoteConnectionOptions::Ssh(SshConnectionOptions {
+            host: "example.com".into(),
+            ..Default::default()
         });
 
         assert!(same_remote_connection_identity(None, None));

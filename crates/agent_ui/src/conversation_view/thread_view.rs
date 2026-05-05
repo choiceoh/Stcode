@@ -333,7 +333,6 @@ pub struct ThreadView {
     pub thinking_effort_menu_handle: PopoverMenuHandle<ContextMenu>,
     pub project: WeakEntity<Project>,
     pub show_external_source_prompt_warning: bool,
-    pub show_codex_windows_warning: bool,
     pub multi_root_callout_dismissed: bool,
     pub generating_indicator_in_list: bool,
 }
@@ -438,10 +437,6 @@ impl ThreadView {
             }
             editor
         });
-
-        let show_codex_windows_warning = cfg!(windows)
-            && project.upgrade().is_some_and(|p| p.read(cx).is_local())
-            && agent_id.as_ref() == "Codex";
 
         let title_editor = {
             let can_edit = thread.update(cx, |thread, cx| thread.can_set_title(cx));
@@ -558,7 +553,6 @@ impl ThreadView {
             thinking_effort_menu_handle: PopoverMenuHandle::default(),
             project,
             show_external_source_prompt_warning,
-            show_codex_windows_warning,
             multi_root_callout_dismissed: false,
             generating_indicator_in_list: false,
         };
@@ -8767,38 +8761,6 @@ impl ThreadView {
             .into_any_element()
     }
 
-    fn render_codex_windows_warning(&self, cx: &mut Context<Self>) -> Callout {
-        Callout::new()
-            .icon(IconName::Warning)
-            .severity(Severity::Warning)
-            .title("Codex on Windows")
-            .description("For best performance, run Codex in Windows Subsystem for Linux (WSL2)")
-            .actions_slot(
-                Button::new("open-wsl-modal", "Open in WSL").on_click(cx.listener({
-                    move |_, _, _window, cx| {
-                        #[cfg(windows)]
-                        _window.dispatch_action(
-                            zed_actions::wsl_actions::OpenWsl::default().boxed_clone(),
-                            cx,
-                        );
-                        cx.notify();
-                    }
-                })),
-            )
-            .dismiss_action(
-                IconButton::new("dismiss", IconName::Close)
-                    .icon_size(IconSize::Small)
-                    .icon_color(Color::Muted)
-                    .tooltip(Tooltip::text("Dismiss Warning"))
-                    .on_click(cx.listener({
-                        move |this, _, _, cx| {
-                            this.show_codex_windows_warning = false;
-                            cx.notify();
-                        }
-                    })),
-            )
-    }
-
     fn render_external_source_prompt_warning(&self, cx: &mut Context<Self>) -> Callout {
         Callout::new()
             .icon(IconName::Warning)
@@ -9736,9 +9698,6 @@ impl Render for ThreadView {
             .children(self.render_activity_bar(window, cx))
             .when(self.show_external_source_prompt_warning, |this| {
                 this.child(self.render_external_source_prompt_warning(cx))
-            })
-            .when(self.show_codex_windows_warning, |this| {
-                this.child(self.render_codex_windows_warning(cx))
             })
             .children(self.render_thread_retry_status_callout())
             .children(self.render_thread_error(window, cx))

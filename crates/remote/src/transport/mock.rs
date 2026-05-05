@@ -1,7 +1,7 @@
 //! Mock transport for testing remote connections.
 //!
 //! This module provides a mock implementation of the `RemoteConnection` trait
-//! that allows testing remote editing functionality without actual SSH/WSL/Docker
+//! that allows testing remote editing functionality without actual SSH/Docker
 //! connections.
 //!
 //! # Usage
@@ -298,10 +298,6 @@ impl RemoteConnection for MockRemoteConnection {
 
     fn default_system_shell(&self) -> String {
         "sh".to_owned()
-    }
-
-    fn has_wsl_interop(&self) -> bool {
-        false
     }
 }
 

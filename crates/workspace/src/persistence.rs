@@ -29,7 +29,7 @@ use project::{
 use language::{LanguageName, Toolchain, ToolchainScope};
 use remote::{
     DockerConnectionOptions, RemoteConnectionIdentity, RemoteConnectionOptions,
-    SshConnectionOptions, WslConnectionOptions, remote_connection_identity,
+    SshConnectionOptions, remote_connection_identity,
 };
 use serde::{Deserialize, Serialize};
 use sqlez::{
@@ -64,14 +64,6 @@ fn parse_timestamp(text: &str) -> DateTime<Utc> {
     NaiveDateTime::parse_from_str(text, "%Y-%m-%d %H:%M:%S")
         .map(|naive| naive.and_utc())
         .unwrap_or_else(|_| Utc::now())
-}
-
-fn contains_wsl_path(paths: &PathList) -> bool {
-    cfg!(windows)
-        && paths
-            .paths()
-            .iter()
-            .any(|path| util::paths::WslPath::from_path(path).is_some())
 }
 
 #[derive(Copy, Clone, Debug, PartialEq)]
@@ -1609,7 +1601,7 @@ impl WorkspaceDb {
         let user: Option<String>;
         let mut host = None;
         let mut port = None;
-        let mut distro = None;
+        let distro = None;
         let mut name = None;
         let mut container_id = None;
         let mut use_podman = None;
@@ -1625,14 +1617,6 @@ impl WorkspaceDb {
                 host = Some(identity_host);
                 port = identity_port;
                 user = username;
-            }
-            RemoteConnectionIdentity::Wsl {
-                distro_name,
-                user: identity_user,
-            } => {
-                kind = RemoteConnectionKind::Wsl;
-                distro = Some(distro_name);
-                user = identity_user;
             }
             RemoteConnectionIdentity::Docker {
                 container_id: identity_container_id,
@@ -1890,17 +1874,13 @@ impl WorkspaceDb {
         host: Option<String>,
         port: Option<u16>,
         user: Option<String>,
-        distro: Option<String>,
+        _distro: Option<String>,
         container_id: Option<String>,
         name: Option<String>,
         use_podman: Option<bool>,
         remote_env: Option<String>,
     ) -> Option<RemoteConnectionOptions> {
         match RemoteConnectionKind::deserialize(&kind)? {
-            RemoteConnectionKind::Wsl => Some(RemoteConnectionOptions::Wsl(WslConnectionOptions {
-                distro_name: distro?,
-                user: user,
-            })),
             RemoteConnectionKind::Ssh => Some(RemoteConnectionOptions::Ssh(SshConnectionOptions {
                 host: host?.into(),
                 port,
@@ -1973,7 +1953,7 @@ impl WorkspaceDb {
                 continue;
             }
 
-            if paths.paths().is_empty() || contains_wsl_path(&paths) {
+            if paths.paths().is_empty() {
                 continue;
             }
 
@@ -1985,10 +1965,10 @@ impl WorkspaceDb {
     }
 
     // Deletes workspace rows that can no longer be restored from. Remote workspaces whose
-    // connection was removed, and (on Windows) workspaces pointing at WSL paths, are cleaned
-    // up immediately. Local workspaces with no valid paths on disk are kept for seven days
-    // after going stale. Workspaces belonging to the current session or the last session are
-    // always preserved so that an in-progress restore can rehydrate them.
+    // connection was removed are cleaned up immediately. Local workspaces with no valid paths
+    // on disk are kept for seven days after going stale. Workspaces belonging to the current
+    // session or the last session are always preserved so that an in-progress restore can
+    // rehydrate them.
     pub async fn garbage_collect_workspaces(
         &self,
         fs: &dyn Fs,
@@ -2009,16 +1989,6 @@ impl WorkspaceDb {
                 if !remote_connections.contains_key(&remote_connection_id) {
                     workspaces_to_delete.push(id);
                 }
-                continue;
-            }
-
-            // Delete the workspace if any of the paths are WSL paths. If a
-            // local workspace points to WSL, attempting to read its metadata
-            // will wait for the WSL VM and file server to boot up. This can
-            // block for many seconds. Supported scenarios use remote
-            // workspaces.
-            if contains_wsl_path(&paths) {
-                workspaces_to_delete.push(id);
                 continue;
             }
 

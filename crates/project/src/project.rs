@@ -34,7 +34,7 @@ pub mod search_history;
 pub mod yarn;
 
 use dap::inline_value::{InlineValueLocation, VariableLookupKind, VariableScope};
-use itertools::{Either, Itertools};
+use itertools::Itertools;
 
 use crate::{
     bookmark_store::BookmarkStore,
@@ -106,8 +106,6 @@ use node_runtime::NodeRuntime;
 use parking_lot::Mutex;
 pub use prettier_store::PrettierStore;
 use project_settings::{ProjectSettings, SettingsObserver, SettingsObserverEvent};
-#[cfg(target_os = "windows")]
-use remote::wsl_path_to_windows_path;
 use remote::{RemoteClient, RemoteConnectionOptions};
 use rpc::{
     AnyProtoClient, ErrorCode,
@@ -2289,23 +2287,7 @@ impl Project {
     }
 
     /// Reveals the given path in the system file manager.
-    ///
-    /// On Windows with a WSL remote connection, this converts the POSIX path
-    /// to a Windows UNC path before revealing.
     pub fn reveal_path(&self, path: &Path, cx: &mut Context<Self>) {
-        #[cfg(target_os = "windows")]
-        if let Some(RemoteConnectionOptions::Wsl(wsl_options)) = self.remote_connection_options(cx)
-        {
-            let path = path.to_path_buf();
-            cx.spawn(async move |_, cx| {
-                wsl_path_to_windows_path(&wsl_options, &path)
-                    .await
-                    .map(|windows_path| cx.update(|cx| cx.reveal_path(&windows_path)))
-            })
-            .detach_and_log_err(cx);
-            return;
-        }
-
         cx.reveal_path(path);
     }
 
@@ -3000,19 +2982,6 @@ impl Project {
             self.is_via_collab() || self.is_via_remote_server()
         );
         !self.is_local()
-    }
-
-    #[inline]
-    pub fn is_via_wsl_with_host_interop(&self, cx: &App) -> bool {
-        match &self.client_state {
-            ProjectClientState::Local | ProjectClientState::Shared { .. } => {
-                matches!(
-                    &self.remote_client, Some(remote_client)
-                    if remote_client.read(cx).has_wsl_interop()
-                )
-            }
-            _ => false,
-        }
     }
 
     pub fn disable_worktree_scanner(&mut self, cx: &mut Context<Self>) {
@@ -4623,31 +4592,6 @@ impl Project {
         self.worktree_store.update(cx, |worktree_store, cx| {
             worktree_store.move_worktree(source, destination, cx)
         })
-    }
-
-    /// Attempts to convert the input path to a WSL path if this is a wsl remote project and the input path is a host windows path.
-    pub fn try_windows_path_to_wsl(
-        &self,
-        abs_path: &Path,
-        cx: &App,
-    ) -> impl Future<Output = Result<PathBuf>> + use<> {
-        let fut = if cfg!(windows)
-            && let (
-                ProjectClientState::Local | ProjectClientState::Shared { .. },
-                Some(remote_client),
-            ) = (&self.client_state, &self.remote_client)
-            && let RemoteConnectionOptions::Wsl(wsl) = remote_client.read(cx).connection_options()
-        {
-            Either::Left(wsl.abs_windows_path_to_wsl_path(abs_path))
-        } else {
-            Either::Right(abs_path.to_owned())
-        };
-        async move {
-            match fut {
-                Either::Left(fut) => fut.await.map(Into::into),
-                Either::Right(path) => Ok(path),
-            }
-        }
     }
 
     pub fn find_or_create_worktree(

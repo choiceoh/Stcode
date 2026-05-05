@@ -105,9 +105,6 @@ pub struct LanguageSettings {
     /// Controls the source of document symbols used for outlines and breadcrumbs.
     pub document_symbols: DocumentSymbols,
     /// Controls where the `editor::Rewrap` action is allowed for this language.
-    ///
-    /// Note: This setting has no effect in Vim mode, as rewrap is already
-    /// allowed everywhere.
     pub allow_rewrap: RewrapBehavior,
     /// Controls whether edit predictions are shown immediately (true)
     /// or manually by triggering `editor::ShowEditPrediction` (false).

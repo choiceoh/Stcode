@@ -3001,8 +3001,6 @@ impl Session {
                 }));
             }
 
-            // TODO pass wslInfo as needed
-
             let companion_address = format!("127.0.0.1:{companion_port}");
             let mut companion_started = false;
             for _ in 0..10 {

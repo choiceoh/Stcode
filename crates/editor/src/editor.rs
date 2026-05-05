@@ -9,8 +9,6 @@
 //!   Contains all metadata related to text transformations (folds, fake inlay text insertions, soft wraps, tab markup, etc.).
 //!
 //! All other submodules and structs are mostly concerned with holding editor data about the way it displays current buffer region(s).
-//!
-//! If you're looking to improve Vim mode, you should check out Vim crate that wraps Editor and overrides its behavior.
 pub mod actions;
 pub mod blink_manager;
 mod bracket_colorization;
@@ -1252,7 +1250,6 @@ pub struct Editor {
     /// Used to prevent flickering as the user types while the menu is open
     stale_edit_prediction_in_menu: Option<EditPredictionState>,
     edit_prediction_settings: EditPredictionSettings,
-    edit_predictions_hidden_for_vim_mode: bool,
     show_edit_predictions_override: Option<bool>,
     show_completions_on_input_override: Option<bool>,
     menu_edit_predictions_policy: MenuEditPredictionsPolicy,
@@ -2529,7 +2526,6 @@ impl Editor {
             hovered_cursors: HashMap::default(),
             next_editor_action_id: EditorActionId::default(),
             editor_actions: Rc::default(),
-            edit_predictions_hidden_for_vim_mode: false,
             show_edit_predictions_override: None,
             show_completions_on_input_override: None,
             menu_edit_predictions_policy: MenuEditPredictionsPolicy::ByProvider,
@@ -2681,31 +2677,26 @@ impl Editor {
                     editor.refresh_sticky_headers(&editor.snapshot(window, cx), cx);
                 }
                 EditorEvent::Edited { .. } => {
-                    let vim_mode = vim_mode_setting::VimModeSetting::try_get(cx)
-                        .map(|vim_mode| vim_mode.0)
+                    let display_map = editor.display_snapshot(cx);
+                    let selections = editor.selections.all_adjusted_display(&display_map);
+                    let pop_state = editor
+                        .change_list
+                        .last()
+                        .map(|previous| {
+                            previous.len() == selections.len()
+                                && previous.iter().enumerate().all(|(ix, p)| {
+                                    p.to_display_point(&display_map).row()
+                                        == selections[ix].head().row()
+                                })
+                        })
                         .unwrap_or(false);
-                    if !vim_mode {
-                        let display_map = editor.display_snapshot(cx);
-                        let selections = editor.selections.all_adjusted_display(&display_map);
-                        let pop_state = editor
-                            .change_list
-                            .last()
-                            .map(|previous| {
-                                previous.len() == selections.len()
-                                    && previous.iter().enumerate().all(|(ix, p)| {
-                                        p.to_display_point(&display_map).row()
-                                            == selections[ix].head().row()
-                                    })
-                            })
-                            .unwrap_or(false);
-                        let new_positions = selections
-                            .into_iter()
-                            .map(|s| display_map.display_point_to_anchor(s.head(), Bias::Left))
-                            .collect();
-                        editor
-                            .change_list
-                            .push_to_change_list(pop_state, new_positions);
-                    }
+                    let new_positions = selections
+                        .into_iter()
+                        .map(|s| display_map.display_point_to_anchor(s.head(), Bias::Left))
+                        .collect();
+                    editor
+                        .change_list
+                        .push_to_change_list(pop_state, new_positions);
                 }
                 _ => (),
             },
@@ -3531,22 +3522,6 @@ impl Editor {
 
     pub fn set_expects_character_input(&mut self, expects_character_input: bool) {
         self.expects_character_input = expects_character_input;
-    }
-
-    pub fn set_edit_predictions_hidden_for_vim_mode(
-        &mut self,
-        hidden: bool,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        if hidden != self.edit_predictions_hidden_for_vim_mode {
-            self.edit_predictions_hidden_for_vim_mode = hidden;
-            if hidden {
-                self.update_visible_edit_prediction(window, cx);
-            } else {
-                self.refresh_edit_prediction(true, false, window, cx);
-            }
-        }
     }
 
     pub fn set_menu_edit_predictions_policy(&mut self, value: MenuEditPredictionsPolicy) {
@@ -8987,8 +8962,7 @@ impl Editor {
             .map(|provider| provider.provider.supports_jump_to_edit())
             .unwrap_or(true);
 
-        let is_move = supports_jump
-            && (move_invalidation_row_range.is_some() || self.edit_predictions_hidden_for_vim_mode);
+        let is_move = supports_jump && move_invalidation_row_range.is_some();
         let completion = if is_move {
             if let Some(provider) = &self.edit_prediction_provider {
                 provider.provider.did_show(SuggestionDisplayType::Jump, cx);
@@ -8999,8 +8973,7 @@ impl Editor {
             EditPrediction::MoveWithin { target, snapshot }
         } else {
             let show_completions_in_menu = self.has_visible_completions_menu();
-            let show_completions_in_buffer = !self.edit_prediction_visible_in_cursor_popover(true)
-                && !self.edit_predictions_hidden_for_vim_mode;
+            let show_completions_in_buffer = !self.edit_prediction_visible_in_cursor_popover(true);
 
             let display_mode = if all_edits_insertions_or_deletions(&edits, &multibuffer) {
                 if provider.show_tab_accept_marker() {
@@ -25538,10 +25511,6 @@ impl Editor {
             .and_then(|e| e.to_str())
             .map(|a| a.to_string()));
 
-        let vim_mode = vim_mode_setting::VimModeSetting::try_get(cx)
-            .map(|vim_mode| vim_mode.0)
-            .unwrap_or(false);
-
         let edit_predictions_provider = all_language_settings(file, cx).edit_predictions.provider;
         let copilot_enabled = edit_predictions_provider
             == language::language_settings::EditPredictionProvider::Copilot;
@@ -25559,7 +25528,6 @@ impl Editor {
                 event_type,
                 type = if auto_saved {"autosave"} else {"manual"},
                 file_extension,
-                vim_mode,
                 copilot_enabled,
                 copilot_enabled_for_language,
                 edit_predictions_provider,
@@ -25569,7 +25537,6 @@ impl Editor {
             telemetry::event!(
                 event_type,
                 file_extension,
-                vim_mode,
                 copilot_enabled,
                 copilot_enabled_for_language,
                 edit_predictions_provider,

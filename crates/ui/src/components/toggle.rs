@@ -1050,7 +1050,6 @@ impl Component for Switch {
                                         Keystroke::parse("cmd-s").unwrap(),
                                     )]
                                     .into(),
-                                    false,
                                 )))
                                 .into_any_element(),
                         )],

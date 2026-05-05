@@ -509,10 +509,6 @@ impl RemoteConnection for SshRemoteConnection {
     fn path_style(&self) -> PathStyle {
         self.ssh_path_style
     }
-
-    fn has_wsl_interop(&self) -> bool {
-        false
-    }
 }
 
 /// Check if the user already has an active SSH ControlMaster session for the

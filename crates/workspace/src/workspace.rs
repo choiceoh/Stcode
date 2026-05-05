@@ -3063,7 +3063,7 @@ impl Workspace {
         self.titlebar_item.clone()
     }
 
-    /// Call the given callback with a workspace whose project is local or remote via WSL (allowing host access).
+    /// Call the given callback with a local workspace.
     ///
     /// If the given workspace has a local project, then it will be passed
     /// to the callback. Otherwise, a new empty window will be created.
@@ -3078,47 +3078,6 @@ impl Workspace {
         F: 'static + FnOnce(&mut Workspace, &mut Window, &mut Context<Workspace>) -> T,
     {
         if self.project.read(cx).is_local() {
-            Task::ready(Ok(callback(self, window, cx)))
-        } else {
-            let env = self.project.read(cx).cli_environment(cx);
-            let task = Self::new_local(
-                Vec::new(),
-                self.app_state.clone(),
-                None,
-                env,
-                None,
-                OpenMode::Activate,
-                cx,
-            );
-            cx.spawn_in(window, async move |_vh, cx| {
-                let OpenResult {
-                    window: multi_workspace_window,
-                    ..
-                } = task.await?;
-                multi_workspace_window.update(cx, |multi_workspace, window, cx| {
-                    let workspace = multi_workspace.workspace().clone();
-                    workspace.update(cx, |workspace, cx| callback(workspace, window, cx))
-                })
-            })
-        }
-    }
-
-    /// Call the given callback with a workspace whose project is local or remote via WSL (allowing host access).
-    ///
-    /// If the given workspace has a local project, then it will be passed
-    /// to the callback. Otherwise, a new empty window will be created.
-    pub fn with_local_or_wsl_workspace<T, F>(
-        &mut self,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-        callback: F,
-    ) -> Task<Result<T>>
-    where
-        T: 'static,
-        F: 'static + FnOnce(&mut Workspace, &mut Window, &mut Context<Workspace>) -> T,
-    {
-        let project = self.project.read(cx);
-        if project.is_local() || project.is_via_wsl_with_host_interop(cx) {
             Task::ready(Ok(callback(self, window, cx)))
         } else {
             let env = self.project.read(cx).cli_environment(cx);
@@ -9346,10 +9305,6 @@ pub fn workspace_windows_for_location(
                 (RemoteConnectionOptions::Ssh(a), RemoteConnectionOptions::Ssh(b)) => {
                     (&a.host, &a.username, &a.port) == (&b.host, &b.username, &b.port)
                 }
-                (RemoteConnectionOptions::Wsl(a), RemoteConnectionOptions::Wsl(b)) => {
-                    // The WSL username is not consistently populated in the workspace location, so ignore it for now.
-                    a.distro_name == b.distro_name
-                }
                 (RemoteConnectionOptions::Docker(a), RemoteConnectionOptions::Docker(b)) => {
                     a.container_id == b.container_id
                 }
@@ -9649,10 +9604,6 @@ pub fn open_paths(
     cx: &mut App,
 ) -> Task<anyhow::Result<OpenResult>> {
     let abs_paths = abs_paths.to_vec();
-    #[cfg(target_os = "windows")]
-    let wsl_path = abs_paths
-        .iter()
-        .find_map(|p| util::paths::WslPath::from_path(p));
 
     cx.spawn(async move |cx| {
         let (mut existing, mut open_visible) = find_existing_workspace(
@@ -9674,10 +9625,8 @@ pub fn open_paths(
 
             if all_metadatas.into_iter().all(|file| !file.is_dir) {
                 cx.update(|cx| {
-                    let windows = workspace_windows_for_location(
-                        &SerializedWorkspaceLocation::Local,
-                        cx,
-                    );
+                    let windows =
+                        workspace_windows_for_location(&SerializedWorkspaceLocation::Local, cx);
                     let window = cx
                         .active_window()
                         .and_then(|window| window.downcast::<MultiWorkspace>())
@@ -9709,10 +9658,8 @@ pub fn open_paths(
 
             if use_existing_window {
                 let target_window = cx.update(|cx| {
-                    let windows = workspace_windows_for_location(
-                        &SerializedWorkspaceLocation::Local,
-                        cx,
-                    );
+                    let windows =
+                        workspace_windows_for_location(&SerializedWorkspaceLocation::Local, cx);
                     let window = cx
                         .active_window()
                         .and_then(|window| window.downcast::<MultiWorkspace>())
@@ -9767,7 +9714,11 @@ pub fn open_paths(
                 });
             });
 
-            Ok(OpenResult { window: existing, workspace: target_workspace, opened_items: open_task })
+            Ok(OpenResult {
+                window: existing,
+                workspace: target_workspace,
+                opened_items: open_task,
+            })
         } else {
             let result = cx
                 .update(move |cx| {
@@ -9784,7 +9735,8 @@ pub fn open_paths(
                 .await;
 
             if let Ok(ref result) = result {
-                result.window
+                result
+                    .window
                     .update(cx, |_, window, _cx| {
                         window.activate_window();
                     })
@@ -9794,37 +9746,6 @@ pub fn open_paths(
             result
         };
 
-        #[cfg(target_os = "windows")]
-        if let Some(util::paths::WslPath{distro, path}) = wsl_path
-            && let Ok(ref result) = result
-        {
-            result.window
-                .update(cx, move |multi_workspace, _window, cx| {
-                    struct OpenInWsl;
-                    let workspace = multi_workspace.workspace().clone();
-                    workspace.update(cx, |workspace, cx| {
-                        workspace.show_notification(NotificationId::unique::<OpenInWsl>(), cx, move |cx| {
-                            let display_path = util::markdown::MarkdownInlineCode(&path.to_string_lossy());
-                            let msg = format!("{display_path} is inside a WSL filesystem, some features may not work unless you open it with WSL remote");
-                            cx.new(move |cx| {
-                                MessageNotification::new(msg, cx)
-                                    .primary_message("Open in WSL")
-                                    .primary_icon(IconName::FolderOpen)
-                                    .primary_on_click(move |window, cx| {
-                                        window.dispatch_action(Box::new(remote::OpenWslPath {
-                                                distro: remote::WslConnectionOptions {
-                                                        distro_name: distro.clone(),
-                                                    user: None,
-                                                },
-                                                paths: vec![path.clone().into()],
-                                            }), cx)
-                                    })
-                            })
-                        });
-                    });
-                })
-                .unwrap();
-        };
         result
     })
 }
@@ -9862,23 +9783,20 @@ pub fn create_and_open_local_file(
     cx: &mut Context<Workspace>,
     default_content: impl 'static + Send + FnOnce() -> Rope,
 ) -> Task<Result<Box<dyn ItemHandle>>> {
+    let path = path.to_path_buf();
     cx.spawn_in(window, async move |workspace, cx| {
         let fs = workspace.read_with(cx, |workspace, _| workspace.app_state().fs.clone())?;
-        if !fs.is_file(path).await {
-            fs.create_file(path, Default::default()).await?;
-            fs.save(path, &default_content(), Default::default())
+        if !fs.is_file(&path).await {
+            fs.create_file(&path, Default::default()).await?;
+            fs.save(&path, &default_content(), Default::default())
                 .await?;
         }
 
         workspace
-            .update_in(cx, |workspace, window, cx| {
-                workspace.with_local_or_wsl_workspace(window, cx, |workspace, window, cx| {
-                    let path = workspace
-                        .project
-                        .read_with(cx, |project, cx| project.try_windows_path_to_wsl(path, cx));
+            .update_in(cx, move |workspace, window, cx| {
+                workspace.with_local_workspace(window, cx, move |_workspace, window, cx| {
+                    let path = path.clone();
                     cx.spawn_in(window, async move |workspace, cx| {
-                        let path = path.await?;
-
                         let path = fs.canonicalize(&path).await.unwrap_or(path);
 
                         let mut items = workspace

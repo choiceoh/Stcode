@@ -953,22 +953,6 @@ impl<T: Item> ItemHandle for Entity<T> {
                             return;
                         }
 
-                        let vim_mode = vim_mode_setting::VimModeSetting::is_enabled(cx);
-                        let helix_mode = vim_mode_setting::HelixModeSetting::is_enabled(cx);
-
-                        if vim_mode || helix_mode {
-                            // We use the command palette for executing commands in Vim and Helix modes (e.g., `:w`), so
-                            // in those cases we don't want to trigger auto-save if the focus has just been transferred
-                            // to the command palette.
-                            //
-                            // This isn't totally perfect, as you could still switch files indirectly via the command
-                            // palette (such as by opening up the tab switcher from it and then switching tabs that
-                            // way).
-                            if workspace.is_active_modal_command_palette(cx) {
-                                return;
-                            }
-                        }
-
                         Pane::autosave_item(&item, workspace.project.clone(), window, cx)
                             .detach_and_log_err(cx);
                     }
