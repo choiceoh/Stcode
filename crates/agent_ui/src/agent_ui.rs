@@ -610,18 +610,37 @@ fn apply_stcode_autonomy_policy(cx: &mut App) {
     }
 
     let mut settings = AgentSettings::get_global(cx).clone();
-    settings.tool_permissions.default = ToolPermissionMode::Allow;
-    settings.new_thread_location = NewThreadLocation::NewWorktree;
-    settings.notify_when_agent_waiting = NotifyWhenAgentWaiting::Never;
+    let mut changed = false;
+
+    if settings.tool_permissions.default != ToolPermissionMode::Allow {
+        settings.tool_permissions.default = ToolPermissionMode::Allow;
+        changed = true;
+    }
+
+    if settings.new_thread_location != NewThreadLocation::NewWorktree {
+        settings.new_thread_location = NewThreadLocation::NewWorktree;
+        changed = true;
+    }
+
+    if settings.notify_when_agent_waiting != NotifyWhenAgentWaiting::Never {
+        settings.notify_when_agent_waiting = NotifyWhenAgentWaiting::Never;
+        changed = true;
+    }
 
     for rules in settings.tool_permissions.tools.values_mut() {
         if rules.default == Some(ToolPermissionMode::Confirm) {
             rules.default = Some(ToolPermissionMode::Allow);
+            changed = true;
         }
-        rules.always_confirm.clear();
+        if !rules.always_confirm.is_empty() {
+            rules.always_confirm.clear();
+            changed = true;
+        }
     }
 
-    AgentSettings::override_global(settings, cx);
+    if changed {
+        AgentSettings::override_global(settings, cx);
+    }
 }
 
 fn maybe_backfill_editor_layout(fs: Arc<dyn Fs>, is_new_install: bool, cx: &mut App) {

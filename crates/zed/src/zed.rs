@@ -1871,7 +1871,7 @@ pub fn watch_settings_files(fs: Arc<dyn fs::Fs>, cx: &mut App) {
 }
 
 pub fn handle_keymap_file_changes(
-    mut user_keymap_file_rx: mpsc::UnboundedReceiver<String>,
+    user_keymap_file_rx: mpsc::UnboundedReceiver<String>,
     user_keymap_watcher: gpui::Task<()>,
     cx: &mut App,
 ) {
@@ -1932,24 +1932,52 @@ pub fn handle_keymap_file_changes(
 
     cx.spawn(async move |cx| {
         let _user_keymap_watcher = user_keymap_watcher;
+        let mut user_keymap_file_rx = Some(user_keymap_file_rx);
+        let mut user_keymap_file_content = String::new();
         let mut user_keymap_content = String::new();
         let mut migrating_in_memory = false;
         loop {
-            select_biased! {
-                _ = base_keymap_rx.next() => {},
-                _ = keyboard_layout_rx.next() => {},
-                content = user_keymap_file_rx.next() => {
-                    if let Some(content) = content {
-                        if let Ok(Some(migrated_content)) = migrate_keymap(&content) {
-                            user_keymap_content = migrated_content;
-                            migrating_in_memory = true;
+            let mut user_keymap_file_closed = false;
+            let mut should_reload_keymap = true;
+            if let Some(user_keymap_file_rx) = user_keymap_file_rx.as_mut() {
+                select_biased! {
+                    _ = base_keymap_rx.next() => {},
+                    _ = keyboard_layout_rx.next() => {},
+                    content = user_keymap_file_rx.next() => {
+                        if let Some(content) = content {
+                            if content == user_keymap_file_content {
+                                should_reload_keymap = false;
+                            } else {
+                                user_keymap_file_content = content.clone();
+                                if let Ok(Some(migrated_content)) = migrate_keymap(&content) {
+                                    user_keymap_content = migrated_content;
+                                    migrating_in_memory = true;
+                                } else {
+                                    user_keymap_content = content;
+                                    migrating_in_memory = false;
+                                }
+                            }
                         } else {
-                            user_keymap_content = content;
-                            migrating_in_memory = false;
+                            user_keymap_file_closed = true;
                         }
                     }
-                }
-            };
+                };
+            } else {
+                select_biased! {
+                    _ = base_keymap_rx.next() => {},
+                    _ = keyboard_layout_rx.next() => {},
+                };
+            }
+
+            if user_keymap_file_closed {
+                user_keymap_file_rx = None;
+                continue;
+            }
+
+            if !should_reload_keymap {
+                continue;
+            }
+
             cx.update(|cx| {
                 if let Some(notifier) = MigrationNotification::try_global(cx) {
                     notifier.update(cx, |_, cx| {
