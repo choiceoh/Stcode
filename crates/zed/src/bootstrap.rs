@@ -729,15 +729,12 @@ pub(crate) fn run(launch_mode: LaunchMode) {
         workspace::init(app_state.clone(), cx);
         ui_prompt::init(cx);
 
-        go_to_line::init(cx);
         file_finder::init(cx);
-        tab_switcher::init(cx);
         outline::init(cx);
         project_symbols::init(cx);
         project_panel::init(cx);
         outline_panel::init(cx);
         tasks_ui::init(cx);
-        snippets_ui::init(cx);
         search::init(cx);
         cx.set_global(workspace::PaneSearchBarCallbacks {
             setup_search_bar: |languages, toolbar, window, cx| {
@@ -763,11 +760,9 @@ pub(crate) fn run(launch_mode: LaunchMode) {
         svg_preview::init(cx);
         onboarding::init(cx);
         settings_ui::init(cx);
-        keymap_editor::init(cx);
         extensions_ui::init(cx);
         edit_prediction::init(cx);
         json_schema_store::init(cx);
-        which_key::init(cx);
         #[cfg(target_os = "windows")]
         etw_tracing::init(cx);
 

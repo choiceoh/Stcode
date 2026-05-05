@@ -59,8 +59,8 @@ The outside-closure group includes obvious future removal candidates, but also t
 
 High-signal outside-closure candidates to inspect next:
 
-- broad IDE panels: `project_panel`, `outline_panel`, `markdown_preview`, `keymap_editor`, `settings_ui`, `theme_selector`
+- broad IDE panels: `project_panel`, `outline_panel`, `markdown_preview`, `settings_ui`, `theme_selector`
 - upstream operational tools: `auto_update_helper`, `auto_update_ui`, `crashes`, `install_cli`
 - language/extension breadth: `languages`, `language_tools`, `language_selector`, `zed_extension_api`
-- app-shell surfaces: `zed`, `activity_indicator`, `command_palette`, `title_bar`, `sidebar`, `which_key`
+- app-shell surfaces: `zed`, `activity_indicator`, `command_palette`, `title_bar`, `sidebar`
 - diagnostics and instrumentation: `input_latency_ui`, `miniprofiler_ui`

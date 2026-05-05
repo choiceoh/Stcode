@@ -69,7 +69,6 @@ members = [
     "crates/git",
     "crates/git_hosting_providers",
     "crates/git_ui",
-    "crates/go_to_line",
     "crates/google_ai",
     "crates/grammars",
     "crates/gpui",
@@ -91,7 +90,6 @@ members = [
     "crates/input_latency_ui",
     "crates/install_cli",
     "crates/json_schema_store",
-    "crates/keymap_editor",
     "crates/language",
     "crates/language_core",
     "crates/language_extension",
@@ -159,7 +157,6 @@ members = [
     "crates/sidebar",
     "crates/snippet",
     "crates/snippet_provider",
-    "crates/snippets_ui",
     "crates/sqlez",
     "crates/sqlez_macros",
     "crates/streaming_diff",
@@ -167,7 +164,6 @@ members = [
     "crates/svg_preview",
     "crates/system_specs",
     "crates/syntax_theme",
-    "crates/tab_switcher",
     "crates/task",
     "crates/tasks_ui",
     "crates/telemetry",
@@ -192,7 +188,6 @@ members = [
     "crates/watch",
     "crates/web_search",
     "crates/web_search_providers",
-    "crates/which_key",
     "crates/workspace",
     "crates/worktree",
     "crates/x_ai",
@@ -288,7 +283,6 @@ fuzzy_nucleo = { path = "crates/fuzzy_nucleo" }
 git = { path = "crates/git" }
 git_hosting_providers = { path = "crates/git_hosting_providers" }
 git_ui = { path = "crates/git_ui" }
-go_to_line = { path = "crates/go_to_line" }
 google_ai = { path = "crates/google_ai" }
 grammars = { path = "crates/grammars" }
 gpui = { path = "crates/gpui", default-features = false }
@@ -313,7 +307,6 @@ edit_prediction_context = { path = "crates/edit_prediction_context" }
 input_latency_ui = { path = "crates/input_latency_ui" }
 install_cli = { path = "crates/install_cli" }
 json_schema_store = { path = "crates/json_schema_store" }
-keymap_editor = { path = "crates/keymap_editor" }
 language = { path = "crates/language" }
 language_core = { path = "crates/language_core" }
 language_extension = { path = "crates/language_extension" }
@@ -383,7 +376,6 @@ settings_ui = { path = "crates/settings_ui" }
 shell_command_parser = { path = "crates/shell_command_parser" }
 snippet = { path = "crates/snippet" }
 snippet_provider = { path = "crates/snippet_provider" }
-snippets_ui = { path = "crates/snippets_ui" }
 sqlez = { path = "crates/sqlez" }
 sqlez_macros = { path = "crates/sqlez_macros" }
 streaming_diff = { path = "crates/streaming_diff" }
@@ -391,7 +383,6 @@ sum_tree = { path = "crates/sum_tree" }
 codestral = { path = "crates/codestral" }
 system_specs = { path = "crates/system_specs" }
 syntax_theme = { path = "crates/syntax_theme" }
-tab_switcher = { path = "crates/tab_switcher" }
 task = { path = "crates/task" }
 tasks_ui = { path = "crates/tasks_ui" }
 telemetry = { path = "crates/telemetry" }
@@ -414,7 +405,6 @@ ui_prompt = { path = "crates/ui_prompt" }
 util = { path = "crates/util" }
 util_macros = { path = "crates/util_macros" }
 vercel = { path = "crates/vercel" }
-which_key = { path = "crates/which_key" }
 
 watch = { path = "crates/watch" }
 web_search = { path = "crates/web_search" }
@@ -879,7 +869,6 @@ reqwest_client = { codegen-units = 1 }
 session = { codegen-units = 1 }
 sidebar = { codegen-units = 1 }
 snippet = { codegen-units = 1 }
-snippets_ui = { codegen-units = 1 }
 telemetry_events = { codegen-units = 1 }
 theme_selector = { codegen-units = 1 }
 time_format = { codegen-units = 1 }

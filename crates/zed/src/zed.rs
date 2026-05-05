@@ -557,8 +557,6 @@ pub fn initialize_workspace(app_state: Arc<AppState>, cx: &mut App) {
             }
         });
 
-        let cursor_position =
-            cx.new(|_| go_to_line::cursor_position::CursorPosition::new(workspace));
         let line_ending_indicator =
             cx.new(|_| line_ending_selector::LineEndingIndicator::default());
         let merge_conflict_indicator =
@@ -575,7 +573,6 @@ pub fn initialize_workspace(app_state: Arc<AppState>, cx: &mut App) {
             status_bar.add_right_item(active_buffer_language, window, cx);
             status_bar.add_right_item(active_toolchain_language, window, cx);
             status_bar.add_right_item(line_ending_indicator, window, cx);
-            status_bar.add_right_item(cursor_position, window, cx);
             status_bar.add_right_item(image_info, window, cx);
         });
 
@@ -2083,8 +2080,6 @@ fn reload_keymaps(cx: &mut App, mut user_key_bindings: Vec<KeyBinding>) {
         "New Window",
         workspace::NewWindow,
     )]);
-    // todo: nicer api here?
-    keymap_editor::KeymapEventChannel::trigger_keymap_changed(cx);
 }
 
 pub fn load_default_keymap(cx: &mut App) {
@@ -5163,12 +5158,10 @@ mod tests {
                 "git_onboarding",
                 "git_panel",
                 "git_picker",
-                "go_to_line",
                 "highlights_tree_view",
                 "icon_theme_selector",
                 "image_viewer",
                 "inline_assistant",
-                "keymap_editor",
                 "keystroke_input",
                 "language_selector",
                 "welcome",
@@ -5194,11 +5187,9 @@ mod tests {
                 "search",
                 "settings_editor",
                 "settings_profile_selector",
-                "snippets",
                 "stash_picker",
                 "svg",
                 "syntax_tree_view",
-                "tab_switcher",
                 "task",
                 "terminal",
                 "terminal_panel",

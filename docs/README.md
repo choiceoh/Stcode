@@ -24,6 +24,25 @@ Keep the pieces that make the experience high quality:
 
 The editor is kept because AI agents need it even when the user does not. Stcode should hide unnecessary editor complexity from the user, but retain real editing machinery for agent work, review, diagnostics, search, and diff context.
 
+## Editor Boundary
+
+Preserve the editor as an agent workbench, not as a full manual IDE surface.
+
+Keep:
+
+- buffer, selection, and file-save machinery
+- patch, diff, diagnostic, search, and review context
+- enough editor rendering for agents and users to inspect changes
+- project and terminal integration needed for real implementation work
+
+Remove or avoid reintroducing:
+
+- keymap editors and shortcut-discovery UI
+- go-to-line and tab-switcher modals
+- snippet-management UI intended for manual typing
+- onboarding or settings pages for human editor customization
+- modal editing and other hand-driven editing modes
+
 ## What To Remove First
 
 Remove upstream material that does not help Stcode's user:

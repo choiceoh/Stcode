@@ -27,6 +27,12 @@ The application should make these things first-class:
 
 The editor remains part of Stcode, but its role changes. It is not the main surface for a non-coder to operate by hand; it is the agent workbench. Agents still need real buffers, cursor behavior, selections, diagnostics, search, diffs, terminals, and project context to make reliable changes.
 
+## Editor Boundary
+
+Stcode keeps the editor machinery that agents need to understand and change code: buffers, selections, diagnostics, search, diffs, file state, project context, and review surfaces.
+
+Stcode does not keep editor surfaces whose main purpose is human hand-driving. Keymap editing, which-key discovery, go-to-line popups, tab-switcher modals, snippet management UI, modal editing, and similar shortcut-first workflows are outside the product boundary unless they directly support autonomous agent work.
+
 ## Current Baseline
 
 The current codebase is intentionally broad because it was imported from Zed 1.0 before pruning. The important retained areas are:

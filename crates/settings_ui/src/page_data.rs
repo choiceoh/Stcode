@@ -1,4 +1,4 @@
-use gpui::{Action as _, App};
+use gpui::App;
 use itertools::Itertools as _;
 use settings::{
     AudioInputDeviceName, AudioOutputDeviceName, LanguageSettingsContent, SemanticTokens,
@@ -64,7 +64,6 @@ pub(crate) fn settings_data(cx: &App) -> Vec<SettingsPage> {
     let mut pages = vec![
         general_page(cx),
         appearance_page(),
-        keymap_page(),
         editor_page(),
         languages_and_tools_page(cx),
         search_and_files_page(),
@@ -1291,63 +1290,6 @@ fn appearance_page() -> SettingsPage {
     }
 }
 
-fn keymap_page() -> SettingsPage {
-    fn keybindings_section() -> [SettingsPageItem; 2] {
-        [
-            SettingsPageItem::SectionHeader("Keybindings"),
-            SettingsPageItem::ActionLink(ActionLink {
-                title: "Edit Keybindings".into(),
-                description: Some("Customize keybindings in the keymap editor.".into()),
-                button_text: "Open Keymap".into(),
-                on_click: Arc::new(|settings_window, window, cx| {
-                    let Some(original_window) = settings_window.original_window else {
-                        return;
-                    };
-                    original_window
-                        .update(cx, |_workspace, original_window, cx| {
-                            original_window
-                                .dispatch_action(zed_actions::OpenKeymap.boxed_clone(), cx);
-                            original_window.activate_window();
-                        })
-                        .ok();
-                    window.remove_window();
-                }),
-                files: USER,
-            }),
-        ]
-    }
-
-    fn base_keymap_section() -> [SettingsPageItem; 2] {
-        [
-            SettingsPageItem::SectionHeader("Base Keymap"),
-            SettingsPageItem::SettingItem(SettingItem {
-                title: "Base Keymap",
-                description: "The name of a base set of key bindings to use.",
-                field: Box::new(SettingField {
-                    json_path: Some("base_keymap"),
-                    pick: |settings_content| settings_content.base_keymap.as_ref(),
-                    write: |settings_content, value| {
-                        settings_content.base_keymap = value;
-                    },
-                }),
-                metadata: Some(Box::new(SettingsFieldMetadata {
-                    should_do_titlecase: Some(false),
-                    ..Default::default()
-                })),
-                files: USER,
-            }),
-        ]
-    }
-
-    let items: Box<[SettingsPageItem]> =
-        concat_sections!(keybindings_section(), base_keymap_section(),);
-
-    SettingsPage {
-        title: "Keymap",
-        items,
-    }
-}
-
 fn editor_page() -> SettingsPage {
     fn auto_save_section() -> [SettingsPageItem; 2] {
         [
@@ -1444,48 +1386,6 @@ fn editor_page() -> SettingsPage {
                         settings::AutosaveSettingDiscriminants::OnWindowChange => vec![],
                     })
                     .collect(),
-            }),
-        ]
-    }
-
-    fn which_key_section() -> [SettingsPageItem; 3] {
-        [
-            SettingsPageItem::SectionHeader("Which-key Menu"),
-            SettingsPageItem::SettingItem(SettingItem {
-                title: "Show Which-key Menu",
-                description: "Display the which-key menu with matching bindings while a multi-stroke binding is pending.",
-                field: Box::new(SettingField {
-                    json_path: Some("which_key.enabled"),
-                    pick: |settings_content| {
-                        settings_content
-                            .which_key
-                            .as_ref()
-                            .and_then(|settings| settings.enabled.as_ref())
-                    },
-                    write: |settings_content, value| {
-                        settings_content.which_key.get_or_insert_default().enabled = value;
-                    },
-                }),
-                metadata: None,
-                files: USER,
-            }),
-            SettingsPageItem::SettingItem(SettingItem {
-                title: "Menu Delay",
-                description: "Delay in milliseconds before the which-key menu appears.",
-                field: Box::new(SettingField {
-                    json_path: Some("which_key.delay_ms"),
-                    pick: |settings_content| {
-                        settings_content
-                            .which_key
-                            .as_ref()
-                            .and_then(|settings| settings.delay_ms.as_ref())
-                    },
-                    write: |settings_content, value| {
-                        settings_content.which_key.get_or_insert_default().delay_ms = value;
-                    },
-                }),
-                metadata: None,
-                files: USER,
             }),
         ]
     }
@@ -2530,7 +2430,6 @@ fn editor_page() -> SettingsPage {
 
     let items = concat_sections!(
         auto_save_section(),
-        which_key_section(),
         multibuffer_section(),
         scrolling_section(),
         signature_help_section(),

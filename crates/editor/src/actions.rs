@@ -387,15 +387,6 @@ actions!(
 );
 
 actions!(
-    go_to_line,
-    [
-        /// Toggles the go to line dialog.
-        #[action(name = "Toggle")]
-        ToggleGoToLine
-    ]
-);
-
-actions!(
     editor,
     [
         /// Accepts the full edit prediction.
