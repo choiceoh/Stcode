@@ -1011,8 +1011,6 @@ impl Render for CommitViewToolbar {
             (provider, url)
         });
 
-        let sha_for_graph = commit_sha.to_string();
-
         h_flex()
             .gap_1()
             .when(additions > 0 || deletions > 0, |this| {
@@ -1045,20 +1043,7 @@ impl Render for CommitViewToolbar {
                     }),
             )
             .when(!is_stash, |this| {
-                this.child(
-                    IconButton::new("show-in-git-graph", IconName::GitGraph)
-                        .icon_size(IconSize::Small)
-                        .tooltip(Tooltip::text("Show in Git Graph"))
-                        .on_click(move |_, window, cx| {
-                            window.dispatch_action(
-                                Box::new(crate::git_panel::OpenAtCommit {
-                                    sha: sha_for_graph.clone(),
-                                }),
-                                cx,
-                            );
-                        }),
-                )
-                .children(remote_info.map(|(provider_name, url)| {
+                this.children(remote_info.map(|(provider_name, url)| {
                     let icon = match provider_name.as_str() {
                         "GitHub" => IconName::Github,
                         _ => IconName::Link,

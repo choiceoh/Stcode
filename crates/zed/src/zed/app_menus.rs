@@ -103,17 +103,12 @@ fn zed_help_items() -> Vec<MenuItem> {
         MenuItem::action("View Dependency Licenses", zed_actions::OpenLicenses),
         MenuItem::action("Show Welcome", onboarding::ShowWelcome),
         MenuItem::separator(),
-        MenuItem::action("File Bug Report...", zed_actions::feedback::FileBugReport),
-        MenuItem::action("Request Feature...", zed_actions::feedback::RequestFeature),
-        MenuItem::action("Email Us...", zed_actions::feedback::EmailZed),
-        MenuItem::separator(),
         MenuItem::action(
             "Documentation",
             super::OpenBrowser {
                 url: "https://zed.dev/docs".into(),
             },
         ),
-        MenuItem::action("Zed Repository", feedback::OpenZedRepo),
         MenuItem::action(
             "Zed Twitter",
             super::OpenBrowser {
@@ -130,11 +125,10 @@ fn zed_help_items() -> Vec<MenuItem> {
 }
 
 fn stcode_help_items() -> Vec<MenuItem> {
-    vec![
-        MenuItem::action("View Dependency Licenses", zed_actions::OpenLicenses),
-        MenuItem::separator(),
-        MenuItem::action("Stcode Repository", feedback::OpenZedRepo),
-    ]
+    vec![MenuItem::action(
+        "View Dependency Licenses",
+        zed_actions::OpenLicenses,
+    )]
 }
 
 fn zed_app_menus(cx: &mut App, app_name: &'static str, help_items: Vec<MenuItem>) -> Vec<Menu> {

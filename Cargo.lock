@@ -2780,35 +2780,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "component_preview"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "client",
- "collections",
- "component",
- "db",
- "fs",
- "gpui",
- "gpui_platform",
- "language",
- "log",
- "node_runtime",
- "notifications",
- "project",
- "release_channel",
- "reqwest_client",
- "session",
- "settings",
- "theme",
- "theme_settings",
- "ui",
- "ui_input",
- "uuid",
- "workspace",
-]
-
-[[package]]
 name = "compression-codecs"
 version = "0.4.31"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5091,19 +5062,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "feedback"
-version = "0.1.0"
-dependencies = [
- "extension_host",
- "gpui",
- "system_specs",
- "urlencoding",
- "util",
- "workspace",
- "zed_actions",
-]
-
-[[package]]
 name = "file_finder"
 version = "0.1.0"
 dependencies = [
@@ -6045,35 +6003,6 @@ dependencies = [
  "libgit2-sys",
  "log",
  "url",
-]
-
-[[package]]
-name = "git_graph"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "collections",
- "db",
- "editor",
- "fs",
- "git",
- "git_ui",
- "gpui",
- "language",
- "menu",
- "project",
- "rand 0.9.3",
- "remote_connection",
- "search",
- "serde_json",
- "settings",
- "smallvec",
- "smol",
- "theme",
- "theme_settings",
- "time",
- "ui",
- "workspace",
 ]
 
 [[package]]
@@ -7517,27 +7446,6 @@ dependencies = [
  "chrono",
  "gpui",
  "hdrhistogram",
-]
-
-[[package]]
-name = "inspector_ui"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "command_palette_hooks",
- "editor",
- "fuzzy",
- "gpui",
- "language",
- "project",
- "serde_json",
- "serde_json_lenient",
- "theme_settings",
- "ui",
- "util",
- "util_macros",
- "workspace",
- "zed_actions",
 ]
 
 [[package]]
@@ -9080,20 +8988,6 @@ name = "minimal-lexical"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "68354c5c6bd36d73ff3feceb05efa59b6acb7626617f4962be322a825e61f79a"
-
-[[package]]
-name = "miniprofiler_ui"
-version = "0.1.0"
-dependencies = [
- "gpui",
- "rpc",
- "serde_json",
- "smol",
- "theme_settings",
- "util",
- "workspace",
- "zed_actions",
-]
 
 [[package]]
 name = "miniz_oxide"
@@ -18972,7 +18866,6 @@ dependencies = [
  "collections",
  "command_palette",
  "component",
- "component_preview",
  "copilot",
  "copilot_chat",
  "copilot_ui",
@@ -18991,12 +18884,10 @@ dependencies = [
  "extension_host",
  "extensions_ui",
  "feature_flags",
- "feedback",
  "file_finder",
  "fs",
  "futures 0.3.32",
  "git",
- "git_graph",
  "git_hosting_providers",
  "git_ui",
  "go_to_line",
@@ -19007,7 +18898,6 @@ dependencies = [
  "image",
  "image_viewer",
  "input_latency_ui",
- "inspector_ui",
  "install_cli",
  "itertools 0.14.0",
  "json_schema_store",
@@ -19027,7 +18917,6 @@ dependencies = [
  "menu",
  "migrator",
  "mimalloc",
- "miniprofiler_ui",
  "nc",
  "node_runtime",
  "notifications",

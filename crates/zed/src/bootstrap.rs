@@ -759,8 +759,6 @@ pub(crate) fn run(launch_mode: LaunchMode) {
         language_tools::init(cx);
         notifications::init(app_state.client.clone(), app_state.user_store.clone(), cx);
         git_ui::init(cx);
-        git_graph::init(cx);
-        feedback::init(cx);
         markdown_preview::init(cx);
         csv_preview::init(cx);
         svg_preview::init(cx);
@@ -769,9 +767,7 @@ pub(crate) fn run(launch_mode: LaunchMode) {
         keymap_editor::init(cx);
         extensions_ui::init(cx);
         edit_prediction::init(cx);
-        inspector_ui::init(app_state.clone(), cx);
         json_schema_store::init(cx);
-        miniprofiler_ui::init(*STARTUP_TIME.get().unwrap(), cx);
         which_key::init(cx);
         #[cfg(target_os = "windows")]
         etw_tracing::init(cx);
@@ -927,8 +923,6 @@ pub(crate) fn run(launch_mode: LaunchMode) {
         .detach_and_log_err(cx);
 
         let app_state = app_state.clone();
-
-        component_preview::init(app_state.clone(), cx);
 
         cx.spawn(async move |cx| {
             while let Some(urls) = open_rx.next().await {
