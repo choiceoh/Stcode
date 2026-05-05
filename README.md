@@ -6,7 +6,7 @@ The product direction is simple:
 
 - describe what you want in normal language
 - split work across multiple AI agents
-- add local models from Ollama, LM Studio, or any OpenAI-compatible local server
+- add local models from Ollama, LM Studio, vLLM, SGLang, or any OpenAI-compatible local server
 - keep the code, Git state, and safety checks visible without making the user learn them
 - use Zed 1.0's editor, input, agent UI, terminal, project, and GPUI foundations as the base
 

@@ -20,7 +20,7 @@ Keep the pieces that make the experience high quality:
 
 - `ui_input` and `editor` for normal text-editing expectations
 - `agent_ui`, `agent`, and model-provider crates for AI work
-- Ollama, LM Studio, and OpenAI-compatible provider paths for local models
+- Ollama, LM Studio, vLLM, SGLang, and OpenAI-compatible provider paths for local models
 - `workspace`, `project`, `worktree`, `git`, and `terminal` for actual implementation capability
 - GPUI, theme, component, assets, and platform crates needed to render the app well
 

@@ -42,6 +42,8 @@ pub enum LlmCompatibleProvider {
     OpenAi,
     Ollama,
     LmStudio,
+    Vllm,
+    Sglang,
     LocalOpenAiCompatible,
 }
 
@@ -51,6 +53,8 @@ impl LlmCompatibleProvider {
             LlmCompatibleProvider::OpenAi => "OpenAI",
             LlmCompatibleProvider::Ollama => "Ollama Local",
             LlmCompatibleProvider::LmStudio => "LM Studio Local",
+            LlmCompatibleProvider::Vllm => "vLLM Local",
+            LlmCompatibleProvider::Sglang => "SGLang Local",
             LlmCompatibleProvider::LocalOpenAiCompatible => "Local Model",
         }
     }
@@ -60,7 +64,9 @@ impl LlmCompatibleProvider {
             LlmCompatibleProvider::OpenAi => "https://api.openai.com/v1",
             LlmCompatibleProvider::Ollama => "http://localhost:11434/v1",
             LlmCompatibleProvider::LmStudio => "http://localhost:1234/v1",
-            LlmCompatibleProvider::LocalOpenAiCompatible => "http://localhost:8000/v1",
+            LlmCompatibleProvider::Vllm => "http://localhost:8000/v1",
+            LlmCompatibleProvider::Sglang => "http://localhost:30000/v1",
+            LlmCompatibleProvider::LocalOpenAiCompatible => "http://localhost:8080/v1",
         }
     }
 
@@ -69,6 +75,10 @@ impl LlmCompatibleProvider {
             LlmCompatibleProvider::OpenAi => "e.g. gpt-5, gpt-5-mini",
             LlmCompatibleProvider::Ollama => "e.g. qwen2.5-coder:7b, llama3.2",
             LlmCompatibleProvider::LmStudio => "e.g. local-model, qwen2.5-coder-7b-instruct",
+            LlmCompatibleProvider::Vllm => "e.g. Qwen/Qwen2.5-Coder-7B-Instruct, served-model-name",
+            LlmCompatibleProvider::Sglang => {
+                "e.g. Qwen/Qwen2.5-Coder-7B-Instruct, served-model-name"
+            }
             LlmCompatibleProvider::LocalOpenAiCompatible => {
                 "e.g. qwen2.5-coder, deepseek-coder, local-model"
             }
@@ -80,6 +90,8 @@ impl LlmCompatibleProvider {
             LlmCompatibleProvider::OpenAi => "API Key",
             LlmCompatibleProvider::Ollama
             | LlmCompatibleProvider::LmStudio
+            | LlmCompatibleProvider::Vllm
+            | LlmCompatibleProvider::Sglang
             | LlmCompatibleProvider::LocalOpenAiCompatible => "API Key (optional)",
         }
     }
@@ -89,6 +101,8 @@ impl LlmCompatibleProvider {
             LlmCompatibleProvider::OpenAi => "000000000000000000000000000000000000000000000000",
             LlmCompatibleProvider::Ollama
             | LlmCompatibleProvider::LmStudio
+            | LlmCompatibleProvider::Vllm
+            | LlmCompatibleProvider::Sglang
             | LlmCompatibleProvider::LocalOpenAiCompatible => "local",
         }
     }
@@ -98,7 +112,42 @@ impl LlmCompatibleProvider {
             LlmCompatibleProvider::OpenAi => None,
             LlmCompatibleProvider::Ollama
             | LlmCompatibleProvider::LmStudio
+            | LlmCompatibleProvider::Vllm
+            | LlmCompatibleProvider::Sglang
             | LlmCompatibleProvider::LocalOpenAiCompatible => Some("local"),
+        }
+    }
+
+    fn max_completion_tokens(&self) -> &'static str {
+        match self {
+            LlmCompatibleProvider::OpenAi => "200000",
+            LlmCompatibleProvider::Ollama
+            | LlmCompatibleProvider::LmStudio
+            | LlmCompatibleProvider::Vllm
+            | LlmCompatibleProvider::Sglang
+            | LlmCompatibleProvider::LocalOpenAiCompatible => "8192",
+        }
+    }
+
+    fn max_output_tokens(&self) -> &'static str {
+        match self {
+            LlmCompatibleProvider::OpenAi => "32000",
+            LlmCompatibleProvider::Ollama
+            | LlmCompatibleProvider::LmStudio
+            | LlmCompatibleProvider::Vllm
+            | LlmCompatibleProvider::Sglang
+            | LlmCompatibleProvider::LocalOpenAiCompatible => "8192",
+        }
+    }
+
+    fn max_tokens(&self) -> &'static str {
+        match self {
+            LlmCompatibleProvider::OpenAi => "200000",
+            LlmCompatibleProvider::Ollama
+            | LlmCompatibleProvider::LmStudio
+            | LlmCompatibleProvider::Vllm
+            | LlmCompatibleProvider::Sglang
+            | LlmCompatibleProvider::LocalOpenAiCompatible => "32768",
         }
     }
 
@@ -112,6 +161,12 @@ impl LlmCompatibleProvider {
             }
             LlmCompatibleProvider::LmStudio => {
                 "Add an LM Studio model running locally through its OpenAI-compatible API."
+            }
+            LlmCompatibleProvider::Vllm => {
+                "Add a vLLM-served model through its OpenAI-compatible API."
+            }
+            LlmCompatibleProvider::Sglang => {
+                "Add an SGLang-served model through its OpenAI-compatible API."
             }
             LlmCompatibleProvider::LocalOpenAiCompatible => {
                 "Add a local model server that exposes an OpenAI-compatible API."
@@ -205,24 +260,24 @@ impl ModelInput {
         );
         let max_completion_tokens = single_line_input(
             "Max Completion Tokens",
-            "200000",
-            Some("200000"),
+            provider.max_completion_tokens(),
+            Some(provider.max_completion_tokens()),
             base_tab_index + 2,
             window,
             cx,
         );
         let max_output_tokens = single_line_input(
             "Max Output Tokens",
-            "Max Output Tokens",
-            Some("32000"),
+            provider.max_output_tokens(),
+            Some(provider.max_output_tokens()),
             base_tab_index + 3,
             window,
             cx,
         );
         let max_tokens = single_line_input(
             "Max Tokens",
-            "Max Tokens",
-            Some("200000"),
+            provider.max_tokens(),
+            Some(provider.max_tokens()),
             base_tab_index + 4,
             window,
             cx,
