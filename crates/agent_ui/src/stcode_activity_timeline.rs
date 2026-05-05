@@ -13,22 +13,23 @@ use zed_actions::{
     CreateWorktree, NewWorktreeBranchTarget, agent::ReviewBranchDiff, git as zed_git,
 };
 
-const MAX_TIMELINE_ENTRIES: usize = 4;
-const MAX_ENTRY_LABEL_CHARS: usize = 72;
-const MAX_SMART_PANEL_GOAL_CHARS: usize = 96;
-const MAX_SMART_PANEL_FILES: usize = 3;
-const MAX_SMART_TODO_ENTRIES: usize = 4;
-const MAX_TODO_LABEL_CHARS: usize = 84;
+const MAX_TIMELINE_ENTRIES: usize = 2;
+const MAX_ENTRY_LABEL_CHARS: usize = 48;
+const MAX_SMART_PANEL_GOAL_CHARS: usize = 64;
+const MAX_SMART_PANEL_FILES: usize = 2;
+const MAX_SMART_TODO_ENTRIES: usize = 2;
+const MAX_TODO_LABEL_CHARS: usize = 56;
 
 #[derive(IntoElement)]
 pub(crate) struct StcodeActivityTimeline {
     thread: Option<Entity<AcpThread>>,
     project: Entity<Project>,
     smart_run: Option<StcodeSmartRunSnapshot>,
+    layout: StcodeActivityLayout,
 }
 
 impl StcodeActivityTimeline {
-    pub(crate) fn new(
+    pub(crate) fn summary(
         thread: Option<Entity<AcpThread>>,
         project: Entity<Project>,
         smart_run: Option<StcodeSmartRunSnapshot>,
@@ -37,6 +38,64 @@ impl StcodeActivityTimeline {
             thread,
             project,
             smart_run,
+            layout: StcodeActivityLayout::Summary,
+        }
+    }
+
+    pub(crate) fn side_panel(
+        thread: Option<Entity<AcpThread>>,
+        project: Entity<Project>,
+        smart_run: Option<StcodeSmartRunSnapshot>,
+    ) -> Self {
+        Self {
+            thread,
+            project,
+            smart_run,
+            layout: StcodeActivityLayout::SidePanel,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum StcodeActivityLayout {
+    Summary,
+    SidePanel,
+}
+
+#[derive(Clone)]
+struct ActivityTimelineSnapshots {
+    activity: ActivitySnapshot,
+    smart_run: Option<StcodeSmartRunSnapshot>,
+    smart_start: Option<SmartStartSnapshot>,
+    smart_panel: Option<SmartPanelSnapshot>,
+    smart_todo: Option<SmartTodoSnapshot>,
+    smart_parallel: Option<SmartParallelSnapshot>,
+    smart_merge: Option<SmartMergeSnapshot>,
+}
+
+impl ActivityTimelineSnapshots {
+    fn from_parts(
+        thread: Option<&AcpThread>,
+        project: &Entity<Project>,
+        smart_run: Option<StcodeSmartRunSnapshot>,
+        cx: &App,
+    ) -> Self {
+        let activity = thread
+            .map(|thread| ActivitySnapshot::from_thread(thread, cx))
+            .unwrap_or_else(ActivitySnapshot::empty);
+        let smart_todo = thread.and_then(|thread| SmartTodoSnapshot::from_thread(thread, cx));
+        let has_thread_entries = thread.is_some_and(|thread| !thread.entries().is_empty());
+
+        Self {
+            activity,
+            smart_run,
+            smart_start: (!has_thread_entries)
+                .then(|| SmartStartSnapshot::from_project(project, cx))
+                .flatten(),
+            smart_panel: SmartPanelSnapshot::from_project(project, thread, cx),
+            smart_todo,
+            smart_parallel: SmartParallelSnapshot::from_project(project, cx),
+            smart_merge: SmartMergeSnapshot::from_project(project, cx),
         }
     }
 }
@@ -65,76 +124,180 @@ pub(crate) struct StcodeSmartRunStep {
     pub(crate) phase: StcodeSmartRunPhase,
 }
 
+impl StcodeSmartRunSnapshot {
+    fn should_render_card(&self) -> bool {
+        self.phase != StcodeSmartRunPhase::Complete
+    }
+}
+
 impl RenderOnce for StcodeActivityTimeline {
     fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
         let thread = self.thread.as_ref().map(|thread| thread.read(cx));
-        let (snapshot, smart_todo) = match thread {
-            Some(thread) => (
-                ActivitySnapshot::from_thread(thread, cx),
-                SmartTodoSnapshot::from_thread(thread, cx),
-            ),
-            None => (ActivitySnapshot::empty(), None),
-        };
-        let smart_start = SmartStartSnapshot::from_project(&self.project, cx);
-        let smart_panel = SmartPanelSnapshot::from_project(&self.project, thread, cx);
-        let smart_parallel = SmartParallelSnapshot::from_project(&self.project, cx);
-        let smart_merge = SmartMergeSnapshot::from_project(&self.project, cx);
-        let smart_run = self.smart_run;
+        let snapshots =
+            ActivityTimelineSnapshots::from_parts(thread, &self.project, self.smart_run, cx);
 
-        v_flex()
-            .id("stcode-activity-timeline")
-            .flex_none()
-            .gap_1()
-            .px_3()
-            .py_2()
-            .bg(cx.theme().colors().panel_background)
-            .border_b_1()
-            .border_color(cx.theme().colors().border)
-            .child(
-                h_flex()
-                    .w_full()
-                    .justify_between()
-                    .gap_2()
-                    .child(
-                        h_flex()
-                            .min_w_0()
-                            .gap_2()
-                            .child(
-                                Icon::new(snapshot.icon)
-                                    .size(IconSize::Small)
-                                    .color(snapshot.tone.color()),
-                            )
-                            .child(
-                                Label::new("Workspace Activity")
-                                    .size(LabelSize::Small)
-                                    .color(Color::Muted),
-                            ),
-                    )
-                    .child(
-                        h_flex()
-                            .min_w_0()
-                            .gap_1()
-                            .child(
-                                Label::new(snapshot.status)
-                                    .size(LabelSize::Small)
-                                    .color(snapshot.tone.color()),
-                            )
-                            .child(
-                                Label::new(snapshot.detail)
-                                    .size(LabelSize::XSmall)
-                                    .color(Color::Muted)
-                                    .truncate(),
-                            ),
-                    ),
-            )
-            .children(smart_run.map(|snapshot| render_stcode_smart_run_card(snapshot, cx)))
-            .children(smart_panel.map(|snapshot| render_smart_panel_card(snapshot, cx)))
-            .children(smart_todo.map(|snapshot| render_smart_todo_card(snapshot, cx)))
-            .children(smart_start.map(|snapshot| render_smart_start_guard(snapshot, cx)))
-            .children(smart_parallel.map(|snapshot| render_smart_parallel_card(snapshot, cx)))
-            .children(smart_merge.map(|snapshot| render_smart_merge_card(snapshot, cx)))
-            .children(snapshot.entries.into_iter().map(render_activity_entry))
+        match self.layout {
+            StcodeActivityLayout::Summary => render_activity_summary(snapshots, cx),
+            StcodeActivityLayout::SidePanel => render_activity_side_panel(snapshots, cx),
+        }
     }
+}
+
+fn render_activity_summary(snapshots: ActivityTimelineSnapshots, cx: &mut App) -> gpui::AnyElement {
+    let activity = snapshots.activity;
+    let live_run = snapshots
+        .smart_run
+        .as_ref()
+        .filter(|snapshot| snapshot.should_render_card());
+    let (status, detail, icon, tone) = live_run
+        .map(|snapshot| {
+            (
+                snapshot.status,
+                snapshot.detail.clone(),
+                stcode_smart_run_phase_icon(snapshot.phase),
+                stcode_smart_run_phase_tone(snapshot.phase),
+            )
+        })
+        .unwrap_or((
+            activity.status,
+            activity.detail.to_string(),
+            activity.icon,
+            activity.tone,
+        ));
+
+    h_flex()
+        .id("stcode-activity-summary")
+        .flex_none()
+        .w_full()
+        .justify_between()
+        .gap_3()
+        .px_3()
+        .py_2()
+        .bg(cx.theme().colors().panel_background)
+        .border_b_1()
+        .border_color(cx.theme().colors().border)
+        .child(
+            h_flex()
+                .min_w_0()
+                .gap_2()
+                .child(Icon::new(icon).size(IconSize::Small).color(tone.color()))
+                .child(
+                    Label::new("Workspace Activity")
+                        .size(LabelSize::Default)
+                        .color(Color::Muted),
+                ),
+        )
+        .child(
+            h_flex()
+                .min_w_0()
+                .gap_1()
+                .child(
+                    Label::new(status)
+                        .size(LabelSize::Small)
+                        .color(tone.color()),
+                )
+                .child(
+                    Label::new(detail)
+                        .size(LabelSize::Small)
+                        .color(Color::Muted)
+                        .truncate(),
+                ),
+        )
+        .into_any_element()
+}
+
+fn render_activity_side_panel(
+    snapshots: ActivityTimelineSnapshots,
+    cx: &mut App,
+) -> gpui::AnyElement {
+    let ActivityTimelineSnapshots {
+        activity,
+        smart_run,
+        smart_start,
+        smart_panel,
+        smart_todo,
+        smart_parallel,
+        smart_merge,
+    } = snapshots;
+
+    v_flex()
+        .id("stcode-activity-side-panel")
+        .flex_none()
+        .h_full()
+        .w(px(320.))
+        .min_w(px(280.))
+        .gap_1()
+        .px_3()
+        .py_2()
+        .bg(cx.theme().colors().panel_background)
+        .border_l_1()
+        .border_color(cx.theme().colors().border)
+        .overflow_y_scroll()
+        .child(
+            h_flex()
+                .w_full()
+                .justify_between()
+                .gap_2()
+                .child(
+                    h_flex()
+                        .min_w_0()
+                        .gap_2()
+                        .child(
+                            Icon::new(activity.icon)
+                                .size(IconSize::Small)
+                                .color(activity.tone.color()),
+                        )
+                        .child(
+                            Label::new("AI Smart Panel")
+                                .size(LabelSize::Default)
+                                .color(Color::Muted),
+                        ),
+                )
+                .child(
+                    h_flex()
+                        .min_w_0()
+                        .gap_1()
+                        .child(
+                            Label::new(activity.status)
+                                .size(LabelSize::Small)
+                                .color(activity.tone.color()),
+                        )
+                        .child(
+                            Label::new(activity.detail)
+                                .size(LabelSize::Small)
+                                .color(Color::Muted)
+                                .truncate(),
+                        ),
+                ),
+        )
+        .children(
+            smart_run
+                .filter(StcodeSmartRunSnapshot::should_render_card)
+                .map(|snapshot| render_stcode_smart_run_card(snapshot, cx)),
+        )
+        .children(
+            smart_panel
+                .filter(SmartPanelSnapshot::should_render_card)
+                .map(|snapshot| render_smart_panel_card(snapshot, cx)),
+        )
+        .children(
+            smart_todo
+                .filter(SmartTodoSnapshot::should_render_card)
+                .map(|snapshot| render_smart_todo_card(snapshot, cx)),
+        )
+        .children(smart_start.map(|snapshot| render_smart_start_guard(snapshot, cx)))
+        .children(
+            smart_parallel
+                .filter(SmartParallelSnapshot::should_render_card)
+                .map(|snapshot| render_smart_parallel_card(snapshot, cx)),
+        )
+        .children(
+            smart_merge
+                .filter(SmartMergeSnapshot::should_render_card)
+                .map(|snapshot| render_smart_merge_card(snapshot, cx)),
+        )
+        .children(activity.entries.into_iter().map(render_activity_entry))
+        .into_any_element()
 }
 
 fn render_stcode_smart_run_card(
@@ -187,7 +350,7 @@ fn render_stcode_smart_run_card(
                                 .gap_2()
                                 .child(
                                     Label::new(snapshot.title)
-                                        .size(LabelSize::Small)
+                                        .size(LabelSize::Default)
                                         .color(Color::Default),
                                 )
                                 .child(
@@ -198,18 +361,20 @@ fn render_stcode_smart_run_card(
                         )
                         .child(
                             Label::new(snapshot.detail)
-                                .size(LabelSize::XSmall)
+                                .size(LabelSize::Small)
                                 .color(Color::Muted)
                                 .truncate(),
                         ),
                 ),
         )
         .child(
-            h_flex()
-                .w_full()
-                .gap_1()
-                .flex_wrap()
-                .children(snapshot.steps.into_iter().map(render_stcode_smart_run_step)),
+            h_flex().w_full().gap_1().flex_wrap().children(
+                snapshot
+                    .steps
+                    .into_iter()
+                    .filter(|step| step.phase != StcodeSmartRunPhase::Complete)
+                    .map(render_stcode_smart_run_step),
+            ),
         )
 }
 
@@ -290,12 +455,12 @@ fn render_smart_start_guard(snapshot: SmartStartSnapshot, cx: &mut App) -> impl 
                         .gap_0p5()
                         .child(
                             Label::new("AI Smart Start")
-                                .size(LabelSize::Small)
+                                .size(LabelSize::Default)
                                 .color(Color::Default),
                         )
                         .child(
                             Label::new(snapshot.detail)
-                                .size(LabelSize::XSmall)
+                                .size(LabelSize::Small)
                                 .color(Color::Muted)
                                 .truncate(),
                         ),
@@ -401,7 +566,7 @@ fn render_smart_panel_card(snapshot: SmartPanelSnapshot, cx: &mut App) -> impl I
                                 .gap_2()
                                 .child(
                                     Label::new("AI Smart Panel")
-                                        .size(LabelSize::Small)
+                                        .size(LabelSize::Default)
                                         .color(Color::Default),
                                 )
                                 .child(
@@ -412,7 +577,7 @@ fn render_smart_panel_card(snapshot: SmartPanelSnapshot, cx: &mut App) -> impl I
                         )
                         .child(
                             Label::new(snapshot.detail)
-                                .size(LabelSize::XSmall)
+                                .size(LabelSize::Small)
                                 .color(Color::Muted)
                                 .truncate(),
                         ),
@@ -469,6 +634,7 @@ fn render_smart_panel_card(snapshot: SmartPanelSnapshot, cx: &mut App) -> impl I
                 snapshot
                     .work_items
                     .into_iter()
+                    .filter(|item| item.tone.is_live())
                     .map(render_smart_panel_work_item),
             ),
         )
@@ -479,7 +645,7 @@ fn render_smart_panel_card(snapshot: SmartPanelSnapshot, cx: &mut App) -> impl I
                 .when(!has_files, |this| {
                     this.child(
                         Label::new("No local file changes")
-                            .size(LabelSize::XSmall)
+                            .size(LabelSize::Small)
                             .color(Color::Muted),
                     )
                 })
@@ -542,7 +708,7 @@ fn render_smart_panel_work_item(item: SmartPanelWorkItem) -> impl IntoElement {
                 )
                 .child(
                     Label::new(item.detail)
-                        .size(LabelSize::XSmall)
+                        .size(LabelSize::Small)
                         .color(Color::Default)
                         .truncate(),
                 ),
@@ -599,7 +765,7 @@ fn render_smart_panel_file(file: SmartPanelFile) -> impl IntoElement {
                 .gap_2()
                 .child(
                     Label::new(file.path)
-                        .size(LabelSize::XSmall)
+                        .size(LabelSize::Small)
                         .color(Color::Default)
                         .truncate(),
                 )
@@ -658,7 +824,7 @@ fn render_smart_todo_card(snapshot: SmartTodoSnapshot, cx: &mut App) -> impl Int
                                 .gap_2()
                                 .child(
                                     Label::new("AI Smart Todo")
-                                        .size(LabelSize::Small)
+                                        .size(LabelSize::Default)
                                         .color(Color::Default),
                                 )
                                 .child(
@@ -669,7 +835,7 @@ fn render_smart_todo_card(snapshot: SmartTodoSnapshot, cx: &mut App) -> impl Int
                         )
                         .child(
                             Label::new(snapshot.detail)
-                                .size(LabelSize::XSmall)
+                                .size(LabelSize::Small)
                                 .color(Color::Muted)
                                 .truncate(),
                         ),
@@ -700,7 +866,7 @@ fn render_smart_todo_card(snapshot: SmartTodoSnapshot, cx: &mut App) -> impl Int
                 .when(snapshot.items.is_empty(), |this| {
                     this.child(
                         Label::new("No active todo items")
-                            .size(LabelSize::XSmall)
+                            .size(LabelSize::Small)
                             .color(Color::Muted),
                     )
                 })
@@ -747,7 +913,7 @@ fn render_smart_todo_item(item: SmartTodoItem) -> impl IntoElement {
                 .gap_2()
                 .child(
                     Label::new(item.label)
-                        .size(LabelSize::XSmall)
+                        .size(LabelSize::Small)
                         .color(Color::Default)
                         .truncate(),
                 )
@@ -1140,6 +1306,13 @@ impl SmartPanelSnapshot {
             can_review: counts.changed_count > 0,
             can_commit: counts.changed_count > 0,
         })
+    }
+
+    fn should_render_card(&self) -> bool {
+        self.tone.is_live()
+            || self.counts.changed_count > 0
+            || self.counts.conflicted_count > 0
+            || self.counts.shared_branch_lane_count > 0
     }
 }
 
@@ -1581,6 +1754,10 @@ impl SmartTodoSnapshot {
         let latest_tool = latest_tool_snapshot(thread, cx);
         let latest_tool_label = latest_tool.as_ref().map(|tool| tool.label.clone());
         let latest_tool_tone = latest_tool.as_ref().map(|tool| tool.tone);
+        if !has_plan && !latest_tool_tone.is_some_and(ActivityTone::is_live) {
+            return None;
+        }
+
         let state = smart_todo_state(
             has_plan,
             pending,
@@ -1626,6 +1803,10 @@ impl SmartTodoSnapshot {
             left_label: smart_todo_left_label(pending),
             items,
         })
+    }
+
+    fn should_render_card(&self) -> bool {
+        self.tone.is_live()
     }
 }
 
@@ -1869,6 +2050,10 @@ impl SmartParallelSnapshot {
             tone: state.tone(),
         })
     }
+
+    fn should_render_card(&self) -> bool {
+        self.tone.needs_attention()
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -2019,6 +2204,10 @@ impl SmartMergeSnapshot {
             can_create_pull_request: state == SmartMergeState::Ready,
             can_commit: changed_count > 0,
         })
+    }
+
+    fn should_render_card(&self) -> bool {
+        self.can_create_pull_request || self.tone.needs_attention()
     }
 }
 
@@ -2230,6 +2419,7 @@ impl ActivitySnapshot {
             .filter_map(|(entry_index, entry)| {
                 ActivityEntry::from_thread_entry(entry_index, entry, cx)
             })
+            .filter(|entry| entry.tone.is_live())
             .take(MAX_TIMELINE_ENTRIES)
             .collect::<Vec<_>>();
 
@@ -2449,6 +2639,13 @@ impl ActivityTone {
 
     fn needs_attention(self) -> bool {
         matches!(self, ActivityTone::Waiting | ActivityTone::Failed)
+    }
+
+    fn is_live(self) -> bool {
+        matches!(
+            self,
+            ActivityTone::Running | ActivityTone::Waiting | ActivityTone::Failed
+        )
     }
 }
 
