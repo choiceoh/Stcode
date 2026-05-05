@@ -720,7 +720,6 @@ pub(crate) fn run(launch_mode: LaunchMode) {
             cx,
         );
 
-        repl::init(app_state.fs.clone(), cx);
         recent_projects::init(cx);
         dev_container::init(cx);
 
@@ -728,7 +727,6 @@ pub(crate) fn run(launch_mode: LaunchMode) {
 
         editor::init(cx);
         image_viewer::init(cx);
-        repl::notebook::init(cx);
         diagnostics::init(cx);
 
         audio::init(cx);
@@ -756,7 +754,6 @@ pub(crate) fn run(launch_mode: LaunchMode) {
         });
         vim::init(cx);
         terminal_view::init(cx);
-        journal::init(app_state.clone(), cx);
         encoding_selector::init(cx);
         language_selector::init(cx);
         line_ending_selector::init(cx);

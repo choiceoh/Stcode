@@ -5198,7 +5198,6 @@ mod tests {
                 "icon_theme_selector",
                 "image_viewer",
                 "inline_assistant",
-                "journal",
                 "keymap_editor",
                 "keystroke_input",
                 "language_selector",
@@ -5209,7 +5208,6 @@ mod tests {
                 "menu",
                 "multi_workspace",
                 "new_process_modal",
-                "notebook",
                 "onboarding",
                 "outline",
                 "outline_panel",
@@ -5222,7 +5220,6 @@ mod tests {
                 "projects",
                 "recent_projects",
                 "remote_debug",
-                "repl",
                 "rules_library",
                 "search",
                 "settings_editor",
@@ -5458,8 +5455,6 @@ mod tests {
                 cx,
             );
 
-            repl::init(app_state.fs.clone(), cx);
-            repl::notebook::init(cx);
             tasks_ui::init(cx);
             project::debugger::breakpoint_store::BreakpointStore::init(
                 &app_state.client.clone().into(),
