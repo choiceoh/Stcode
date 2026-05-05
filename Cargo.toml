@@ -32,7 +32,6 @@ members = [
     "crates/command_palette",
     "crates/command_palette_hooks",
     "crates/component",
-    "crates/component_preview",
     "crates/context_server",
     "crates/copilot",
     "crates/copilot_chat",
@@ -62,14 +61,12 @@ members = [
     "crates/extensions_ui",
     "crates/feature_flags",
     "crates/feature_flags_macros",
-    "crates/feedback",
     "crates/file_finder",
     "crates/file_icons",
     "crates/fs",
     "crates/fuzzy",
     "crates/fuzzy_nucleo",
     "crates/git",
-    "crates/git_graph",
     "crates/git_hosting_providers",
     "crates/git_ui",
     "crates/go_to_line",
@@ -92,7 +89,6 @@ members = [
     "crates/icons",
     "crates/image_viewer",
     "crates/input_latency_ui",
-    "crates/inspector_ui",
     "crates/install_cli",
     "crates/json_schema_store",
     "crates/keymap_editor",
@@ -115,7 +111,6 @@ members = [
     "crates/media",
     "crates/menu",
     "crates/migrator",
-    "crates/miniprofiler_ui",
     "crates/mistral",
     "crates/multi_buffer",
     "crates/nc",
@@ -260,7 +255,6 @@ collections = { path = "crates/collections", version = "0.1.0" }
 command_palette = { path = "crates/command_palette" }
 command_palette_hooks = { path = "crates/command_palette_hooks" }
 component = { path = "crates/component" }
-component_preview = { path = "crates/component_preview" }
 console = "0.16"
 context_server = { path = "crates/context_server" }
 copilot = { path = "crates/copilot" }
@@ -288,14 +282,12 @@ extension_host = { path = "crates/extension_host" }
 extensions_ui = { path = "crates/extensions_ui" }
 feature_flags = { path = "crates/feature_flags" }
 feature_flags_macros = { path = "crates/feature_flags_macros" }
-feedback = { path = "crates/feedback" }
 file_finder = { path = "crates/file_finder" }
 file_icons = { path = "crates/file_icons" }
 fs = { path = "crates/fs" }
 fuzzy = { path = "crates/fuzzy" }
 fuzzy_nucleo = { path = "crates/fuzzy_nucleo" }
 git = { path = "crates/git" }
-git_graph = { path = "crates/git_graph" }
 git_hosting_providers = { path = "crates/git_hosting_providers" }
 git_ui = { path = "crates/git_ui" }
 go_to_line = { path = "crates/go_to_line" }
@@ -321,7 +313,6 @@ edit_prediction_types = { path = "crates/edit_prediction_types" }
 edit_prediction_ui = { path = "crates/edit_prediction_ui" }
 edit_prediction_context = { path = "crates/edit_prediction_context" }
 input_latency_ui = { path = "crates/input_latency_ui" }
-inspector_ui = { path = "crates/inspector_ui" }
 install_cli = { path = "crates/install_cli" }
 json_schema_store = { path = "crates/json_schema_store" }
 keymap_editor = { path = "crates/keymap_editor" }
@@ -348,7 +339,6 @@ mermaid-rs-renderer = { git = "https://github.com/zed-industries/mermaid-rs-rend
 migrator = { path = "crates/migrator" }
 mistral = { path = "crates/mistral" }
 multi_buffer = { path = "crates/multi_buffer" }
-miniprofiler_ui = { path = "crates/miniprofiler_ui" }
 nc = { path = "crates/nc" }
 net = { path = "crates/net" }
 node_runtime = { path = "crates/node_runtime" }
