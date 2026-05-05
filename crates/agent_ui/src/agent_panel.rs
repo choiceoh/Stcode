@@ -17,10 +17,11 @@ use db::kvp::{Dismissable, KeyValueStore};
 use itertools::Itertools;
 use project::AgentId;
 use serde::{Deserialize, Serialize};
-use settings::{LanguageModelProviderSetting, LanguageModelSelection};
+use settings::{LanguageModelProviderSetting, LanguageModelSelection, NewThreadLocation};
 
 use zed_actions::{
-    DecreaseBufferFontSize, IncreaseBufferFontSize, ResetBufferFontSize,
+    CreateWorktree, DecreaseBufferFontSize, IncreaseBufferFontSize, NewWorktreeBranchTarget,
+    ResetBufferFontSize,
     agent::{
         AddSelectionToThread, ConflictContent, OpenSettings, ReauthenticateAgent, ResetAgentZoom,
         ResetOnboarding, ResolveConflictedFilesWithAgent, ResolveConflictsWithAgent,
@@ -172,14 +173,61 @@ struct SerializedActiveThread {
     work_dirs: Option<SerializedPathList>,
 }
 
+#[derive(Debug, PartialEq, Eq)]
+enum NewThreadRoute {
+    CurrentWorkspace,
+    NewWorktree,
+    WorktreeAlreadyStarting,
+}
+
+fn stcode_new_thread_route(workspace: &Workspace, cx: &App) -> NewThreadRoute {
+    if !AppLaunchMode::is_stcode(cx)
+        || AgentSettings::get_global(cx).new_thread_location != NewThreadLocation::NewWorktree
+    {
+        return NewThreadRoute::CurrentWorkspace;
+    }
+
+    if workspace.active_worktree_creation().label.is_some() {
+        return NewThreadRoute::WorktreeAlreadyStarting;
+    }
+
+    let project = workspace.project().read(cx);
+    if project.is_via_collab() || project.repositories(cx).is_empty() {
+        return NewThreadRoute::CurrentWorkspace;
+    }
+
+    NewThreadRoute::NewWorktree
+}
+
 pub fn init(cx: &mut App) {
     cx.observe_new(
         |workspace: &mut Workspace, _window, _cx: &mut Context<Workspace>| {
             workspace
                 .register_action(|workspace, action: &NewThread, window, cx| {
-                    if let Some(panel) = workspace.panel::<AgentPanel>(cx) {
-                        panel.update(cx, |panel, cx| panel.new_thread(action, window, cx));
-                        workspace.focus_panel::<AgentPanel>(window, cx);
+                    match stcode_new_thread_route(workspace, cx) {
+                        NewThreadRoute::NewWorktree => {
+                            git_ui::worktree_service::handle_create_worktree(
+                                workspace,
+                                &CreateWorktree {
+                                    worktree_name: None,
+                                    branch_target: NewWorktreeBranchTarget::CurrentBranch,
+                                },
+                                window,
+                                Some(DockPosition::Left),
+                                cx,
+                            );
+                        }
+                        NewThreadRoute::WorktreeAlreadyStarting => {
+                            if workspace.panel::<AgentPanel>(cx).is_some() {
+                                workspace.focus_panel::<AgentPanel>(window, cx);
+                            }
+                        }
+                        NewThreadRoute::CurrentWorkspace => {
+                            if let Some(panel) = workspace.panel::<AgentPanel>(cx) {
+                                panel.update(cx, |panel, cx| panel.new_thread(action, window, cx));
+                                workspace.focus_panel::<AgentPanel>(window, cx);
+                            }
+                        }
                     }
                 })
                 .register_action(
@@ -3901,6 +3949,12 @@ mod tests {
     use std::time::Instant;
     use workspace::MultiWorkspace;
 
+    fn set_new_thread_location(location: NewThreadLocation, cx: &mut App) {
+        let mut settings = AgentSettings::get_global(cx).clone();
+        settings.new_thread_location = location;
+        AgentSettings::override_global(settings, cx);
+    }
+
     #[derive(Clone, Default)]
     struct SessionTrackingConnection {
         next_session_number: Arc<Mutex<usize>>,
@@ -6472,6 +6526,110 @@ mod tests {
                  (not matched to nested_repo inside it)"
             );
         });
+    }
+
+    #[gpui::test]
+    async fn test_stcode_new_thread_routes_to_new_worktree(cx: &mut TestAppContext) {
+        init_test(cx);
+        cx.update(|cx| {
+            AppLaunchMode::set_global(AppLaunchMode::Stcode, cx);
+            set_new_thread_location(NewThreadLocation::NewWorktree, cx);
+            agent::ThreadStore::init_global(cx);
+            language_model::LanguageModelRegistry::test(cx);
+        });
+
+        let fs = FakeFs::new(cx.executor());
+        fs.insert_tree(
+            "/project",
+            json!({
+                ".git": {},
+                "src": { "main.rs": "" }
+            }),
+        )
+        .await;
+        let project = Project::test(fs.clone(), [Path::new("/project")], cx).await;
+        cx.executor().run_until_parked();
+
+        let multi_workspace =
+            cx.add_window(|window, cx| MultiWorkspace::test_new(project.clone(), window, cx));
+        let workspace = multi_workspace
+            .read_with(cx, |multi_workspace, _cx| {
+                multi_workspace.workspace().clone()
+            })
+            .unwrap();
+
+        let route = workspace.read_with(cx, |workspace, cx| stcode_new_thread_route(workspace, cx));
+        assert_eq!(route, NewThreadRoute::NewWorktree);
+    }
+
+    #[gpui::test]
+    async fn test_stcode_new_thread_waits_for_active_worktree_creation(cx: &mut TestAppContext) {
+        init_test(cx);
+        cx.update(|cx| {
+            AppLaunchMode::set_global(AppLaunchMode::Stcode, cx);
+            set_new_thread_location(NewThreadLocation::NewWorktree, cx);
+            agent::ThreadStore::init_global(cx);
+            language_model::LanguageModelRegistry::test(cx);
+        });
+
+        let fs = FakeFs::new(cx.executor());
+        fs.insert_tree("/project", json!({ ".git": {} })).await;
+        let project = Project::test(fs.clone(), [Path::new("/project")], cx).await;
+        cx.executor().run_until_parked();
+
+        let multi_workspace =
+            cx.add_window(|window, cx| MultiWorkspace::test_new(project.clone(), window, cx));
+        let workspace = multi_workspace
+            .read_with(cx, |multi_workspace, _cx| {
+                multi_workspace.workspace().clone()
+            })
+            .unwrap();
+        let mut cx = VisualTestContext::from_window(multi_workspace.into(), cx);
+
+        workspace.update_in(&mut cx, |workspace, _window, cx| {
+            workspace.set_active_worktree_creation(Some("lane".into()), false, cx);
+            assert_eq!(
+                stcode_new_thread_route(workspace, cx),
+                NewThreadRoute::WorktreeAlreadyStarting
+            );
+        });
+    }
+
+    #[gpui::test]
+    async fn test_new_thread_route_falls_back_without_stcode_or_git(cx: &mut TestAppContext) {
+        init_test(cx);
+        cx.update(|cx| {
+            AppLaunchMode::set_global(AppLaunchMode::Zed, cx);
+            set_new_thread_location(NewThreadLocation::NewWorktree, cx);
+            agent::ThreadStore::init_global(cx);
+            language_model::LanguageModelRegistry::test(cx);
+        });
+
+        let fs = FakeFs::new(cx.executor());
+        fs.insert_tree("/project", json!({ "src": { "main.rs": "" } }))
+            .await;
+        let project = Project::test(fs.clone(), [Path::new("/project")], cx).await;
+        cx.executor().run_until_parked();
+
+        let multi_workspace =
+            cx.add_window(|window, cx| MultiWorkspace::test_new(project.clone(), window, cx));
+        let workspace = multi_workspace
+            .read_with(cx, |multi_workspace, _cx| {
+                multi_workspace.workspace().clone()
+            })
+            .unwrap();
+
+        let zed_route =
+            workspace.read_with(cx, |workspace, cx| stcode_new_thread_route(workspace, cx));
+        assert_eq!(zed_route, NewThreadRoute::CurrentWorkspace);
+
+        cx.update(|cx| {
+            AppLaunchMode::set_global(AppLaunchMode::Stcode, cx);
+        });
+
+        let no_git_route =
+            workspace.read_with(cx, |workspace, cx| stcode_new_thread_route(workspace, cx));
+        assert_eq!(no_git_route, NewThreadRoute::CurrentWorkspace);
     }
     #[gpui::test]
     async fn test_vim_search_does_not_steal_focus_from_agent_panel(cx: &mut TestAppContext) {
