@@ -746,7 +746,9 @@ pub(crate) fn run(launch_mode: LaunchMode) {
         outline_panel::init(cx);
         tasks_ui::init(cx);
         snippets_ui::init(cx);
-        channel::init(&app_state.client.clone(), app_state.user_store.clone(), cx);
+        if launch_mode != LaunchMode::Stcode {
+            channel::init(&app_state.client.clone(), app_state.user_store.clone(), cx);
+        }
         search::init(cx);
         cx.set_global(workspace::PaneSearchBarCallbacks {
             setup_search_bar: |languages, toolbar, window, cx| {
@@ -767,9 +769,13 @@ pub(crate) fn run(launch_mode: LaunchMode) {
         theme_selector::init(cx);
         settings_profile_selector::init(cx);
         language_tools::init(cx);
-        call::init(app_state.client.clone(), app_state.user_store.clone(), cx);
+        if launch_mode != LaunchMode::Stcode {
+            call::init(app_state.client.clone(), app_state.user_store.clone(), cx);
+        }
         notifications::init(app_state.client.clone(), app_state.user_store.clone(), cx);
-        collab_ui::init(&app_state, cx);
+        if launch_mode != LaunchMode::Stcode {
+            collab_ui::init(&app_state, cx);
+        }
         git_ui::init(cx);
         git_graph::init(cx);
         feedback::init(cx);
@@ -1409,6 +1415,7 @@ pub(crate) async fn restore_or_create_workspace(
     cx: &mut AsyncApp,
 ) -> Result<()> {
     let kvp = cx.update(|cx| KeyValueStore::global(cx));
+    let is_stcode = cx.update(|cx| LaunchMode::is_stcode(cx));
     if let Some(multi_workspaces) = restorable_workspaces(cx, &app_state).await {
         let mut error_count = 0;
         for multi_workspace in multi_workspaces {
@@ -1513,7 +1520,7 @@ pub(crate) async fn restore_or_create_workspace(
                 .await?;
             }
         }
-    } else if matches!(kvp.read_kvp(FIRST_OPEN), Ok(None)) {
+    } else if !is_stcode && matches!(kvp.read_kvp(FIRST_OPEN), Ok(None)) {
         cx.update(|cx| show_onboarding_view(app_state, cx)).await?;
     } else {
         cx.update(|cx| {

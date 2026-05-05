@@ -707,13 +707,13 @@ fn show_software_emulation_warning_if_needed(
 }
 
 fn initialize_panels(window: &mut Window, cx: &mut Context<Workspace>) -> Task<anyhow::Result<()>> {
+    let is_stcode = workspace::AppLaunchMode::is_stcode(cx);
+
     cx.spawn_in(window, async move |workspace_handle, cx| {
         let project_panel = ProjectPanel::load(workspace_handle.clone(), cx.clone());
         let outline_panel = OutlinePanel::load(workspace_handle.clone(), cx.clone());
         let terminal_panel = TerminalPanel::load(workspace_handle.clone(), cx.clone());
         let git_panel = GitPanel::load(workspace_handle.clone(), cx.clone());
-        let channels_panel =
-            collab_ui::collab_panel::CollabPanel::load(workspace_handle.clone(), cx.clone());
         let debug_panel = DebugPanel::load(workspace_handle.clone(), cx);
 
         async fn add_panel_when_ready(
@@ -731,15 +731,28 @@ fn initialize_panels(window: &mut Window, cx: &mut Context<Workspace>) -> Task<a
             }
         }
 
-        futures::join!(
-            add_panel_when_ready(project_panel, workspace_handle.clone(), cx.clone()),
-            add_panel_when_ready(outline_panel, workspace_handle.clone(), cx.clone()),
-            add_panel_when_ready(terminal_panel, workspace_handle.clone(), cx.clone()),
-            add_panel_when_ready(git_panel, workspace_handle.clone(), cx.clone()),
-            add_panel_when_ready(channels_panel, workspace_handle.clone(), cx.clone()),
-            add_panel_when_ready(debug_panel, workspace_handle.clone(), cx.clone()),
-            initialize_agent_panel(workspace_handle, cx.clone()).map(|r| r.log_err()),
-        );
+        if is_stcode {
+            futures::join!(
+                add_panel_when_ready(project_panel, workspace_handle.clone(), cx.clone()),
+                add_panel_when_ready(outline_panel, workspace_handle.clone(), cx.clone()),
+                add_panel_when_ready(terminal_panel, workspace_handle.clone(), cx.clone()),
+                add_panel_when_ready(git_panel, workspace_handle.clone(), cx.clone()),
+                add_panel_when_ready(debug_panel, workspace_handle.clone(), cx.clone()),
+                initialize_agent_panel(workspace_handle, cx.clone()).map(|r| r.log_err()),
+            );
+        } else {
+            let channels_panel =
+                collab_ui::collab_panel::CollabPanel::load(workspace_handle.clone(), cx.clone());
+            futures::join!(
+                add_panel_when_ready(project_panel, workspace_handle.clone(), cx.clone()),
+                add_panel_when_ready(outline_panel, workspace_handle.clone(), cx.clone()),
+                add_panel_when_ready(terminal_panel, workspace_handle.clone(), cx.clone()),
+                add_panel_when_ready(git_panel, workspace_handle.clone(), cx.clone()),
+                add_panel_when_ready(channels_panel, workspace_handle.clone(), cx.clone()),
+                add_panel_when_ready(debug_panel, workspace_handle.clone(), cx.clone()),
+                initialize_agent_panel(workspace_handle, cx.clone()).map(|r| r.log_err()),
+            );
+        }
 
         anyhow::Ok(())
     })
@@ -845,6 +858,17 @@ fn register_actions(
     _: &mut Window,
     cx: &mut Context<Workspace>,
 ) {
+    if !workspace::AppLaunchMode::is_stcode(cx) {
+        workspace.register_action(
+            |workspace: &mut Workspace,
+             _: &collab_ui::collab_panel::ToggleFocus,
+             window: &mut Window,
+             cx: &mut Context<Workspace>| {
+                workspace.toggle_panel_focus::<collab_ui::collab_panel::CollabPanel>(window, cx);
+            },
+        );
+    }
+
     workspace
         .register_action(|_, _: &OpenDocs, _, cx| cx.open_url(DOCS_URL))
         .register_action(
@@ -1120,14 +1144,6 @@ fn register_actions(
              window: &mut Window,
              cx: &mut Context<Workspace>| {
                 workspace.toggle_panel_focus::<OutlinePanel>(window, cx);
-            },
-        )
-        .register_action(
-            |workspace: &mut Workspace,
-             _: &collab_ui::collab_panel::ToggleFocus,
-             window: &mut Window,
-             cx: &mut Context<Workspace>| {
-                workspace.toggle_panel_focus::<collab_ui::collab_panel::CollabPanel>(window, cx);
             },
         )
         .register_action(
