@@ -206,6 +206,11 @@ pub fn init(cx: &mut App) {
                 .register_action(|workspace, action: &NewThread, window, cx| {
                     match stcode_new_thread_route(workspace, cx) {
                         NewThreadRoute::NewWorktree => {
+                            if let Some(panel) = workspace.panel::<AgentPanel>(cx) {
+                                panel.update(cx, |panel, cx| {
+                                    panel.prepare_stcode_worktree_thread_transfer(cx);
+                                });
+                            }
                             git_ui::worktree_service::handle_create_worktree(
                                 workspace,
                                 &CreateWorktree {
@@ -710,6 +715,12 @@ enum WhichFontSize {
     None,
 }
 
+struct SourcePanelInitialization {
+    agent: Agent,
+    initial_content: Option<AgentInitialContent>,
+    focus: bool,
+}
+
 impl BaseView {
     pub fn which_font_size_used(&self) -> WhichFontSize {
         WhichFontSize::AgentFont
@@ -745,6 +756,7 @@ pub struct AgentPanel {
     retained_threads: HashMap<ThreadId, Entity<ConversationView>>,
     new_thread_menu_handle: PopoverMenuHandle<ContextMenu>,
     agent_panel_menu_handle: PopoverMenuHandle<ContextMenu>,
+    pending_stcode_worktree_thread_transfer: bool,
     _extension_subscription: Option<Subscription>,
     _project_subscription: Subscription,
     zoomed: bool,
@@ -1102,6 +1114,7 @@ impl AgentPanel {
             retained_threads: HashMap::default(),
             new_thread_menu_handle: PopoverMenuHandle::default(),
             agent_panel_menu_handle: PopoverMenuHandle::default(),
+            pending_stcode_worktree_thread_transfer: false,
 
             _extension_subscription: extension_subscription,
             _project_subscription,
@@ -2691,6 +2704,15 @@ impl AgentPanel {
         }
     }
 
+    fn prepare_stcode_worktree_thread_transfer(&mut self, cx: &mut Context<Self>) {
+        self.pending_stcode_worktree_thread_transfer = true;
+        cx.notify();
+    }
+
+    fn consume_stcode_worktree_thread_transfer(&mut self) -> bool {
+        std::mem::take(&mut self.pending_stcode_worktree_thread_transfer)
+    }
+
     fn destination_has_meaningful_state(&self, cx: &App) -> bool {
         if self.overlay_view.is_some() || !self.retained_threads.is_empty() {
             return true;
@@ -2759,18 +2781,32 @@ impl AgentPanel {
 
     fn source_panel_initialization(
         source_workspace: &WeakEntity<Workspace>,
-        cx: &App,
-    ) -> Option<(Agent, AgentInitialContent)> {
+        cx: &mut Context<Self>,
+    ) -> Option<SourcePanelInitialization> {
         let source_workspace = source_workspace.upgrade()?;
         let source_panel = source_workspace.read(cx).panel::<AgentPanel>(cx)?;
-        let source_panel = source_panel.read(cx);
-        let initial_content = source_panel.active_initial_content(cx)?;
-        let agent = if source_panel.project.read(cx).is_via_collab() {
-            Agent::NativeAgent
-        } else {
-            source_panel.selected_agent.clone()
-        };
-        Some((agent, initial_content))
+        if source_panel.entity_id() == cx.entity().entity_id() {
+            return None;
+        }
+
+        source_panel.update(cx, |source_panel, cx| {
+            let initial_content = source_panel.active_initial_content(cx);
+            let start_empty_thread = source_panel.consume_stcode_worktree_thread_transfer();
+            if initial_content.is_none() && !start_empty_thread {
+                return None;
+            }
+
+            let agent = if source_panel.project.read(cx).is_via_collab() {
+                Agent::NativeAgent
+            } else {
+                source_panel.selected_agent.clone()
+            };
+            Some(SourcePanelInitialization {
+                agent,
+                initial_content,
+                focus: start_empty_thread,
+            })
+        })
     }
 
     pub fn initialize_from_source_workspace_if_needed(
@@ -2783,25 +2819,23 @@ impl AgentPanel {
             return false;
         }
 
-        let Some((agent, initial_content)) =
-            Self::source_panel_initialization(&source_workspace, cx)
-        else {
+        let Some(initialization) = Self::source_panel_initialization(&source_workspace, cx) else {
             return false;
         };
 
         let thread = self.create_agent_thread(
-            agent,
+            initialization.agent,
             None,
             None,
             None,
-            Some(initial_content),
+            initialization.initial_content,
             "agent_panel",
             window,
             cx,
         );
         self.draft_thread = Some(thread.conversation_view.clone());
         self.observe_draft_editor(&thread.conversation_view, cx);
-        self.set_base_view(thread.into(), false, window, cx);
+        self.set_base_view(thread.into(), initialization.focus, window, cx);
         true
     }
 
@@ -7193,6 +7227,83 @@ mod tests {
                 "panel_b should have a draft_thread set after initialization"
             );
         });
+    }
+
+    #[gpui::test]
+    async fn test_initialize_from_source_opens_empty_thread_for_stcode_worktree_request(
+        cx: &mut TestAppContext,
+    ) {
+        init_test(cx);
+        cx.update(|cx| {
+            agent::ThreadStore::init_global(cx);
+            language_model::LanguageModelRegistry::test(cx);
+        });
+
+        let fs = FakeFs::new(cx.executor());
+        let project_a = Project::test(fs.clone(), [], cx).await;
+        let project_b = Project::test(fs.clone(), [], cx).await;
+
+        let multi_workspace =
+            cx.add_window(|window, cx| MultiWorkspace::test_new(project_a.clone(), window, cx));
+
+        let workspace_a = multi_workspace
+            .read_with(cx, |multi_workspace, _cx| {
+                multi_workspace.workspace().clone()
+            })
+            .unwrap();
+
+        let workspace_b = multi_workspace
+            .update(cx, |multi_workspace, window, cx| {
+                multi_workspace.test_add_workspace(project_b.clone(), window, cx)
+            })
+            .unwrap();
+
+        let cx = &mut VisualTestContext::from_window(multi_workspace.into(), cx);
+
+        let panel_a = workspace_a.update_in(cx, |workspace, window, cx| {
+            let panel = cx.new(|cx| AgentPanel::new(workspace, None, window, cx));
+            workspace.add_panel(panel.clone(), window, cx);
+            panel
+        });
+        cx.run_until_parked();
+
+        panel_a.update(cx, |panel, cx| {
+            panel.prepare_stcode_worktree_thread_transfer(cx);
+        });
+
+        let panel_b = workspace_b.update_in(cx, |workspace, window, cx| {
+            let panel = cx.new(|cx| AgentPanel::new(workspace, None, window, cx));
+            workspace.add_panel(panel.clone(), window, cx);
+            panel
+        });
+        cx.run_until_parked();
+
+        let transferred = panel_b.update_in(cx, |panel, window, cx| {
+            panel.initialize_from_source_workspace_if_needed(workspace_a.downgrade(), window, cx)
+        });
+        assert!(
+            transferred,
+            "pending Stcode worktree request should open a fresh destination draft"
+        );
+
+        panel_b.read_with(cx, |panel, _cx| {
+            assert!(
+                panel.active_conversation_view().is_some(),
+                "panel_b should have a conversation view after initialization"
+            );
+            assert!(
+                panel.draft_thread.is_some(),
+                "panel_b should have a draft thread after initialization"
+            );
+        });
+
+        let transferred_again = panel_b.update_in(cx, |panel, window, cx| {
+            panel.initialize_from_source_workspace_if_needed(workspace_a.downgrade(), window, cx)
+        });
+        assert!(
+            !transferred_again,
+            "pending Stcode worktree request should be consumed after one transfer"
+        );
     }
 
     #[gpui::test]
