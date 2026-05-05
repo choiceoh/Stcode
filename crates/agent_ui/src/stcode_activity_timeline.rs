@@ -103,6 +103,7 @@ impl RenderOnce for StcodeActivityTimeline {
 }
 
 fn render_smart_start_guard(snapshot: SmartStartSnapshot, cx: &mut App) -> impl IntoElement {
+    let smart_start_action = crate::StcodeSmartStart.boxed_clone();
     let review_repository = snapshot.repository.clone();
     let worktree_action = zed_git::Worktree.boxed_clone();
     let stash_repository = snapshot.repository.clone();
@@ -151,6 +152,14 @@ fn render_smart_start_guard(snapshot: SmartStartSnapshot, cx: &mut App) -> impl 
                 .gap_1()
                 .flex_wrap()
                 .child(
+                    Button::new("stcode-smart-start-auto", "AI Start")
+                        .label_size(LabelSize::XSmall)
+                        .style(ButtonStyle::Outlined)
+                        .on_click(move |_, window, cx| {
+                            window.dispatch_action(smart_start_action.boxed_clone(), cx);
+                        }),
+                )
+                .child(
                     Button::new("stcode-smart-start-review", "Review")
                         .label_size(LabelSize::XSmall)
                         .style(ButtonStyle::Outlined)
@@ -186,6 +195,7 @@ fn render_smart_start_guard(snapshot: SmartStartSnapshot, cx: &mut App) -> impl 
 }
 
 fn render_smart_panel_card(snapshot: SmartPanelSnapshot, cx: &mut App) -> impl IntoElement {
+    let smart_panel_action = crate::StcodeSmartPanel.boxed_clone();
     let review_repository = snapshot.repository.clone();
     let commit_action = git::ExpandCommitEditor.boxed_clone();
     let has_files = !snapshot.files.is_empty();
@@ -325,6 +335,14 @@ fn render_smart_panel_card(snapshot: SmartPanelSnapshot, cx: &mut App) -> impl I
                 .w_full()
                 .gap_1()
                 .flex_wrap()
+                .child(
+                    Button::new("stcode-smart-panel-auto", "Ask Agent")
+                        .label_size(LabelSize::XSmall)
+                        .style(ButtonStyle::Outlined)
+                        .on_click(move |_, window, cx| {
+                            window.dispatch_action(smart_panel_action.boxed_clone(), cx);
+                        }),
+                )
                 .child(
                     Button::new("stcode-smart-panel-review", "Review Files")
                         .label_size(LabelSize::XSmall)
@@ -587,6 +605,7 @@ fn render_smart_todo_item(item: SmartTodoItem) -> impl IntoElement {
 }
 
 fn render_smart_parallel_card(snapshot: SmartParallelSnapshot, cx: &mut App) -> impl IntoElement {
+    let smart_parallel_action = crate::StcodeSmartParallel.boxed_clone();
     let create_lane_action = CreateWorktree {
         worktree_name: None,
         branch_target: NewWorktreeBranchTarget::CurrentBranch,
@@ -662,6 +681,14 @@ fn render_smart_parallel_card(snapshot: SmartParallelSnapshot, cx: &mut App) -> 
                 .gap_1()
                 .flex_wrap()
                 .child(
+                    Button::new("stcode-smart-parallel-auto", "AI Parallel")
+                        .label_size(LabelSize::XSmall)
+                        .style(ButtonStyle::Outlined)
+                        .on_click(move |_, window, cx| {
+                            window.dispatch_action(smart_parallel_action.boxed_clone(), cx);
+                        }),
+                )
+                .child(
                     Button::new("stcode-smart-parallel-create-lane", "Create Lane")
                         .label_size(LabelSize::XSmall)
                         .style(ButtonStyle::Outlined)
@@ -681,6 +708,7 @@ fn render_smart_parallel_card(snapshot: SmartParallelSnapshot, cx: &mut App) -> 
 }
 
 fn render_smart_merge_card(snapshot: SmartMergeSnapshot, cx: &mut App) -> impl IntoElement {
+    let smart_merge_action = crate::StcodeSmartMerge.boxed_clone();
     let review_repository = snapshot.repository.clone();
     let create_pull_request_action = zed_git::CreatePullRequest.boxed_clone();
     let commit_action = git::ExpandCommitEditor.boxed_clone();
@@ -752,6 +780,14 @@ fn render_smart_merge_card(snapshot: SmartMergeSnapshot, cx: &mut App) -> impl I
                 .w_full()
                 .gap_1()
                 .flex_wrap()
+                .child(
+                    Button::new("stcode-smart-merge-auto", "AI Merge")
+                        .label_size(LabelSize::XSmall)
+                        .style(ButtonStyle::Outlined)
+                        .on_click(move |_, window, cx| {
+                            window.dispatch_action(smart_merge_action.boxed_clone(), cx);
+                        }),
+                )
                 .child(
                     Button::new("stcode-smart-merge-review", "Review Merge")
                         .label_size(LabelSize::XSmall)

@@ -39,7 +39,8 @@ use crate::{
     AddContextServer, AgentDiffPane, ConversationView, CopyThreadToClipboard, Follow,
     InlineAssistant, LoadThreadFromClipboard, NewThread, OpenActiveThreadAsMarkdown, OpenAgentDiff,
     ResetTrialEndUpsell, ResetTrialUpsell, ShowAllSidebarThreadMetadata, ShowThreadMetadata,
-    ToggleNewThreadMenu, ToggleOptionsMenu,
+    StcodeSmartMerge, StcodeSmartPanel, StcodeSmartParallel, StcodeSmartStart, ToggleNewThreadMenu,
+    ToggleOptionsMenu,
     agent_configuration::{AgentConfiguration, AssistantConfigurationEvent},
     conversation_view::{AcpThreadViewEvent, ThreadView},
     stcode_activity_timeline::StcodeActivityTimeline,
@@ -643,6 +644,50 @@ fn build_conflicted_files_resolution_prompt(
         content.push(acp::ContentBlock::Text(acp::TextContent::new("\n")));
     }
     content
+}
+
+fn stcode_smart_prompt(instruction: &'static str) -> Vec<acp::ContentBlock> {
+    vec![acp::ContentBlock::Text(acp::TextContent::new(instruction))]
+}
+
+fn build_stcode_smart_start_prompt() -> Vec<acp::ContentBlock> {
+    stcode_smart_prompt(indoc::indoc!(
+        "AI Smart Start: prepare this workspace for an autonomous coding session.
+
+         Inspect the current branch, worktree, and local changes. If leftover work exists, decide the safest path yourself: preserve useful changes in a commit, stash unrelated leftovers, resolve obvious conflicts, or split the next task into an isolated worktree lane. Do not ask the user to choose between routine Git/worktree options.
+
+         Continue until the session has a clean, understandable handoff state and the next coding lane cannot overwrite another agent's work. Summarize what you preserved, what lane/branch is active, and the next autonomous step."
+    ))
+}
+
+fn build_stcode_smart_panel_prompt() -> Vec<acp::ContentBlock> {
+    stcode_smart_prompt(indoc::indoc!(
+        "AI Smart Panel: review the live workspace state and turn it into the next useful action.
+
+         Inspect the current goal, branch, worktree isolation, changed files, latest checks, blockers, and merge readiness. Then take the next concrete step yourself instead of only describing it. Prefer focused fixes, focused checks, and clear commits when changes are ready.
+
+         Do not ask for approval for routine code, Git, worktree, formatting, or test commands. Stop only for missing credentials, destructive data loss risk, or a decision that changes product direction."
+    ))
+}
+
+fn build_stcode_smart_parallel_prompt() -> Vec<acp::ContentBlock> {
+    stcode_smart_prompt(indoc::indoc!(
+        "AI Smart Parallel: make this workspace safe for parallel autonomous agents.
+
+         Inspect linked worktrees, the current branch, local changes, and any branch overlap. If this session is on the main checkout or shares a branch with another lane, create or move work into an isolated task lane where possible. Preserve local changes before switching lanes.
+
+         Continue until agents can work without sharing the same checkout or branch accidentally. Summarize the active lane, any other lanes you found, and the next task that can run safely."
+    ))
+}
+
+fn build_stcode_smart_merge_prompt() -> Vec<acp::ContentBlock> {
+    stcode_smart_prompt(indoc::indoc!(
+        "AI Smart Merge: autonomously prepare this branch for merge.
+
+         Inspect the current branch, local changes, conflicts, default branch, recent commits, and available checks. If local changes remain, review and commit them with a clear message. If conflicts or stale base changes exist, resolve or rebase them. Run the fastest meaningful checks first, then widen only when needed for confidence.
+
+         If no PR exists, create one. If CI or local checks fail, inspect the failure and fix it. Continue until the branch is clean, non-conflicting, and merge-ready with checks passing or with a precise blocker that cannot be solved locally. Do not ask the user to operate Git, pick routine merge options, or approve normal commands."
+    ))
 }
 
 fn format_timestamp_human(dt: &DateTime<Utc>) -> String {
@@ -3839,6 +3884,94 @@ impl AgentPanel {
         )
     }
 
+    fn start_stcode_smart_start(
+        &mut self,
+        _: &StcodeSmartStart,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.start_stcode_smart_thread(
+            "AI Smart Start",
+            build_stcode_smart_start_prompt(),
+            "stcode_smart_start",
+            window,
+            cx,
+        );
+    }
+
+    fn start_stcode_smart_panel(
+        &mut self,
+        _: &StcodeSmartPanel,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.start_stcode_smart_thread(
+            "AI Smart Panel",
+            build_stcode_smart_panel_prompt(),
+            "stcode_smart_panel",
+            window,
+            cx,
+        );
+    }
+
+    fn start_stcode_smart_parallel(
+        &mut self,
+        _: &StcodeSmartParallel,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.start_stcode_smart_thread(
+            "AI Smart Parallel",
+            build_stcode_smart_parallel_prompt(),
+            "stcode_smart_parallel",
+            window,
+            cx,
+        );
+    }
+
+    fn start_stcode_smart_merge(
+        &mut self,
+        _: &StcodeSmartMerge,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.start_stcode_smart_thread(
+            "AI Smart Merge",
+            build_stcode_smart_merge_prompt(),
+            "stcode_smart_merge",
+            window,
+            cx,
+        );
+    }
+
+    fn start_stcode_smart_thread(
+        &mut self,
+        title: &'static str,
+        blocks: Vec<acp::ContentBlock>,
+        source: &'static str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !AppLaunchMode::is_stcode(cx) || blocks.is_empty() {
+            return;
+        }
+
+        self.external_thread(
+            None,
+            None,
+            None,
+            Some(title.into()),
+            Some(AgentInitialContent::ContentBlock {
+                blocks,
+                auto_submit: true,
+            }),
+            true,
+            source,
+            window,
+            cx,
+        );
+    }
+
     fn key_context(&self) -> KeyContext {
         let mut key_context = KeyContext::new_with_defaults();
         key_context.add("AgentPanel");
@@ -3880,6 +4013,10 @@ impl Render for AgentPanel {
             .on_action(cx.listener(Self::decrease_font_size))
             .on_action(cx.listener(Self::reset_font_size))
             .on_action(cx.listener(Self::toggle_zoom))
+            .on_action(cx.listener(Self::start_stcode_smart_start))
+            .on_action(cx.listener(Self::start_stcode_smart_panel))
+            .on_action(cx.listener(Self::start_stcode_smart_parallel))
+            .on_action(cx.listener(Self::start_stcode_smart_merge))
             .on_action(cx.listener(|this, _: &ReauthenticateAgent, window, cx| {
                 if let Some(conversation_view) = this.active_conversation_view() {
                     conversation_view.update(cx, |conversation_view, cx| {
@@ -4570,6 +4707,30 @@ mod tests {
             },
             other => panic!("expected Resource block, got {:?}", other),
         }
+    }
+
+    #[test]
+    fn test_stcode_smart_prompts_drive_autonomous_work() {
+        let start_blocks = build_stcode_smart_start_prompt();
+        let start = expect_text_block(&start_blocks[0]);
+        assert!(start.contains("AI Smart Start"));
+        assert!(start.contains("isolated worktree lane"));
+
+        let panel_blocks = build_stcode_smart_panel_prompt();
+        let panel = expect_text_block(&panel_blocks[0]);
+        assert!(panel.contains("take the next concrete step yourself"));
+        assert!(panel.contains("Do not ask for approval"));
+
+        let parallel_blocks = build_stcode_smart_parallel_prompt();
+        let parallel = expect_text_block(&parallel_blocks[0]);
+        assert!(parallel.contains("parallel autonomous agents"));
+        assert!(parallel.contains("branch overlap"));
+
+        let merge_blocks = build_stcode_smart_merge_prompt();
+        let merge = expect_text_block(&merge_blocks[0]);
+        assert!(merge.contains("AI Smart Merge"));
+        assert!(merge.contains("CI or local checks fail"));
+        assert!(merge.contains("merge-ready"));
     }
 
     #[test]
