@@ -10,6 +10,61 @@ use std::sync::Arc;
 
 use crate::{AgentTool, ThreadEnvironment, ToolCallEventStream, ToolInput};
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum SubagentRole {
+    Explore,
+    Plan,
+    Task,
+    Review,
+    Verify,
+}
+
+impl SubagentRole {
+    fn instruction(self) -> &'static str {
+        match self {
+            SubagentRole::Explore => {
+                "Role: Explore. Investigate the requested scope quickly and report concrete findings, relevant files, and uncertainties. Do not edit files unless explicitly asked."
+            }
+            SubagentRole::Plan => {
+                "Role: Plan. Design an implementation approach from the provided context. Focus on sequencing, risks, file ownership, and validation. Do not edit files unless explicitly asked."
+            }
+            SubagentRole::Task => {
+                "Role: Task. Execute the bounded implementation task. Stay within the assigned files or modules, and report changed files, checks run, and remaining risks."
+            }
+            SubagentRole::Review => {
+                "Role: Review. Inspect the assigned work for bugs, regressions, missing tests, and integration risks. Report findings with precise file references."
+            }
+            SubagentRole::Verify => {
+                "Role: Verify. Run or inspect the requested validation path and summarize pass/fail status with the important diagnostics. Avoid unrelated code changes."
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{SpawnAgentTool, SubagentRole};
+
+    #[test]
+    fn role_hint_is_added_only_for_new_sessions() {
+        let new_message = SpawnAgentTool::message_for_subagent(
+            "inspect crates/agent".to_string(),
+            Some(SubagentRole::Explore),
+            true,
+        );
+        assert!(new_message.starts_with("Role: Explore."));
+        assert!(new_message.ends_with("inspect crates/agent"));
+
+        let follow_up = SpawnAgentTool::message_for_subagent(
+            "check one more file".to_string(),
+            Some(SubagentRole::Explore),
+            false,
+        );
+        assert_eq!(follow_up, "check one more file");
+    }
+}
+
 /// Spawn a sub-agent for a well-scoped task.
 ///
 /// ### Designing delegated subtasks
@@ -18,10 +73,11 @@ use crate::{AgentTool, ThreadEnvironment, ToolCallEventStream, ToolInput};
 /// - Delegated subtasks must materially advance the main task.
 /// - Do not duplicate work between your work and delegated subtasks.
 /// - Do not use this tool for tasks you could accomplish directly with one or two tool calls.
-/// - When you delegate work, focus on coordinating and synthesizing results instead of duplicating the same work yourself.
+/// - When you delegate work, focus on coordinating, reviewing, and integrating results instead of duplicating the same work yourself.
 /// - Avoid issuing multiple delegate calls for the same unresolved subproblem unless the new delegated task is genuinely different and necessary.
 /// - Narrow the delegated ask to the concrete output you need next.
-/// - For code-edit subtasks, decompose work so each delegated task has a disjoint write set.
+/// - For code-edit subtasks, decompose work so each delegated task has a disjoint write set. Prefer parallel edits only when the files or modules do not overlap.
+/// - Ask code-editing subagents to report the files they changed, the checks they ran, and any remaining risk so you can review their work.
 /// - When sending a follow-up using an existing agent session_id, the agent already has the context from the previous turn. Send only a short, direct message. Do NOT repeat the original task or context.
 ///
 /// ### Parallel delegation patterns
@@ -29,6 +85,7 @@ use crate::{AgentTool, ThreadEnvironment, ToolCallEventStream, ToolInput};
 /// - Split implementation into disjoint codebase slices and spawn multiple agents for them in parallel when the write scopes do not overlap.
 /// - When a plan has multiple independent steps, prefer delegating those steps in parallel rather than serializing them unnecessarily.
 /// - Reuse the returned session_id when you want to follow up on the same delegated subproblem instead of creating a duplicate session.
+/// - The parent agent is responsible for inspecting completed subagent work and making any final corrections before responding to the user.
 ///
 /// ### Output
 /// - You will receive only the agent's final message as output.
@@ -39,6 +96,9 @@ use crate::{AgentTool, ThreadEnvironment, ToolCallEventStream, ToolInput};
 pub struct SpawnAgentToolInput {
     /// Short label displayed in the UI while the agent runs (e.g., "Researching alternatives")
     pub label: String,
+    /// Optional role hint for new sessions. Use explore, plan, task, review, or verify to shape the subagent's behavior.
+    #[serde(default)]
+    pub role: Option<SubagentRole>,
     /// The prompt for the agent. For new sessions, include full context needed for the task. For follow-ups (with session_id), you can rely on the agent already having the previous message.
     pub message: String,
     /// Session ID of an existing agent session to continue instead of creating a new one.
@@ -98,6 +158,18 @@ impl SpawnAgentTool {
     pub fn new(environment: Rc<dyn ThreadEnvironment>) -> Self {
         Self { environment }
     }
+
+    fn message_for_subagent(
+        message: String,
+        role: Option<SubagentRole>,
+        is_new_session: bool,
+    ) -> String {
+        let Some(role) = role.filter(|_| is_new_session) else {
+            return message;
+        };
+
+        format!("{}\n\n{}", role.instruction(), message)
+    }
 }
 
 impl AgentTool for SpawnAgentTool {
@@ -140,12 +212,19 @@ impl AgentTool for SpawnAgentTool {
                     error: format!("Failed to receive tool input: {e}"),
                     session_info: None,
                 })?;
+            let SpawnAgentToolInput {
+                label,
+                role,
+                message,
+                session_id,
+            } = input;
+            let is_new_session = session_id.is_none();
 
             let (subagent, mut session_info) = cx.update(|cx| {
-                let subagent = if let Some(session_id) = input.session_id {
+                let subagent = if let Some(session_id) = session_id {
                     self.environment.resume_subagent(session_id, cx)
                 } else {
-                    self.environment.create_subagent(input.label, cx)
+                    self.environment.create_subagent(label, cx)
                 };
                 let subagent = subagent.map_err(|err| SpawnAgentToolOutput::Error {
                     session_id: None,
@@ -170,7 +249,8 @@ impl AgentTool for SpawnAgentTool {
                 Ok((subagent, session_info))
             })?;
 
-            let send_result = subagent.send(input.message, cx).await;
+            let message = Self::message_for_subagent(message, role, is_new_session);
+            let send_result = subagent.send(message, cx).await;
 
             let status = if send_result.is_ok() {
                 "completed"

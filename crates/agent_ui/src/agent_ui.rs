@@ -57,8 +57,8 @@ use prompt_store::PromptBuilder;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use settings::{
-    LanguageModelSelection, NewThreadLocation, NotifyWhenAgentWaiting, Settings as _,
-    SettingsStore, ToolPermissionMode,
+    LanguageModelProviderSetting, LanguageModelSelection, NewThreadLocation,
+    NotifyWhenAgentWaiting, Settings as _, SettingsStore, ToolPermissionMode, update_settings_file,
 };
 use std::any::TypeId;
 use workspace::{AppLaunchMode, Workspace};
@@ -382,16 +382,96 @@ impl ManageProfiles {
 
 #[derive(Clone)]
 pub(crate) enum ModelUsageContext {
+    MainAgent,
+    Subagent,
     InlineAssistant,
 }
 
 impl ModelUsageContext {
     pub fn configured_model(&self, cx: &App) -> Option<ConfiguredModel> {
         match self {
+            Self::MainAgent => LanguageModelRegistry::read_global(cx).default_model(),
+            Self::Subagent => {
+                let selection = AgentSettings::get_global(cx)
+                    .subagent_default_model
+                    .as_ref()?;
+                Self::configured_model_for_selection(selection, cx)
+            }
             Self::InlineAssistant => {
                 LanguageModelRegistry::read_global(cx).inline_assistant_model()
             }
         }
+    }
+
+    pub fn empty_model_label(&self) -> SharedString {
+        match self {
+            Self::MainAgent => "Select Main Model".into(),
+            Self::Subagent => "Use Main Model".into(),
+            Self::InlineAssistant => "Select a Model".into(),
+        }
+    }
+
+    pub fn set_model(
+        &self,
+        fs: Arc<dyn Fs>,
+        model: Arc<dyn language_model::LanguageModel>,
+        cx: &mut App,
+    ) {
+        let provider = model.provider_id().0.to_string();
+        let model_id = model.id().0.to_string();
+        let enable_thinking = model.supports_thinking();
+        let effort = model
+            .default_effort_level()
+            .map(|effort| effort.value.to_string());
+
+        match self {
+            Self::MainAgent => update_settings_file(fs, cx, move |settings, _cx| {
+                settings
+                    .agent
+                    .get_or_insert_default()
+                    .set_model(LanguageModelSelection {
+                        provider: LanguageModelProviderSetting(provider),
+                        model: model_id,
+                        enable_thinking,
+                        effort,
+                        speed: None,
+                    });
+            }),
+            Self::Subagent => update_settings_file(fs, cx, move |settings, _cx| {
+                let selection = LanguageModelSelection {
+                    provider: LanguageModelProviderSetting(provider),
+                    model: model_id,
+                    enable_thinking,
+                    effort,
+                    speed: None,
+                };
+                settings
+                    .agent
+                    .get_or_insert_default()
+                    .subagent_default_model = Some(selection);
+            }),
+            Self::InlineAssistant => update_settings_file(fs, cx, move |settings, _cx| {
+                settings
+                    .agent
+                    .get_or_insert_default()
+                    .set_inline_assistant_model(provider, model_id);
+            }),
+        }
+    }
+
+    fn configured_model_for_selection(
+        selection: &LanguageModelSelection,
+        cx: &App,
+    ) -> Option<ConfiguredModel> {
+        let registry = LanguageModelRegistry::read_global(cx);
+        let provider_id = LanguageModelProviderId::from(selection.provider.0.clone());
+        let provider = registry.provider(&provider_id)?;
+        let model = provider
+            .provided_models(cx)
+            .into_iter()
+            .find(|model| model.id().0 == selection.model.as_str())?;
+
+        Some(ConfiguredModel { provider, model })
     }
 }
 
@@ -791,6 +871,7 @@ mod tests {
             default_height: px(600.),
             max_content_width: Some(px(850.)),
             default_model: None,
+            subagent_default_model: None,
             inline_assistant_model: None,
             inline_assistant_use_streaming_tools: false,
             commit_message_model: None,

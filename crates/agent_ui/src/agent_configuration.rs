@@ -35,7 +35,7 @@ use settings::{Settings, SettingsStore, update_settings_file};
 use ui::{
     AiSettingItem, AiSettingItemSource, AiSettingItemStatus, ButtonStyle, Chip, ContextMenu,
     ContextMenuEntry, Disclosure, Divider, DividerColor, ElevationIndex, LabelSize, PopoverMenu,
-    Switch, Tooltip, WithScrollbar, prelude::*,
+    PopoverMenuHandle, Switch, Tooltip, WithScrollbar, prelude::*,
 };
 use util::ResultExt as _;
 use workspace::{Workspace, create_and_open_local_file};
@@ -46,9 +46,10 @@ pub(crate) use configure_context_server_tools_modal::ConfigureContextServerTools
 pub(crate) use manage_profiles_modal::ManageProfilesModal;
 
 use crate::{
-    Agent,
+    Agent, ModelUsageContext,
     agent_configuration::add_llm_provider_modal::{AddLlmProviderModal, LlmCompatibleProvider},
     agent_connection_store::{AgentConnectionStatus, AgentConnectionStore},
+    agent_model_selector::AgentModelSelector,
 };
 
 pub struct AgentConfiguration {
@@ -62,6 +63,8 @@ pub struct AgentConfiguration {
     context_server_store: Entity<ContextServerStore>,
     expanded_provider_configurations: HashMap<LanguageModelProviderId, bool>,
     context_server_registry: Entity<ContextServerRegistry>,
+    main_model_selector: Entity<AgentModelSelector>,
+    subagent_model_selector: Entity<AgentModelSelector>,
     _subscriptions: Vec<Subscription>,
     scroll_handle: ScrollHandle,
 }
@@ -79,8 +82,37 @@ impl AgentConfiguration {
         cx: &mut Context<Self>,
     ) -> Self {
         let focus_handle = cx.focus_handle();
+        let main_model_selector = {
+            let fs = fs.clone();
+            let focus_handle = focus_handle.clone();
+            cx.new(|cx| {
+                AgentModelSelector::new(
+                    fs.clone(),
+                    PopoverMenuHandle::default(),
+                    focus_handle.clone(),
+                    ModelUsageContext::MainAgent,
+                    window,
+                    cx,
+                )
+            })
+        };
+        let subagent_model_selector = {
+            let fs = fs.clone();
+            let focus_handle = focus_handle.clone();
+            cx.new(|cx| {
+                AgentModelSelector::new(
+                    fs.clone(),
+                    PopoverMenuHandle::default(),
+                    focus_handle.clone(),
+                    ModelUsageContext::Subagent,
+                    window,
+                    cx,
+                )
+            })
+        };
 
         let subscriptions = vec![
+            cx.observe_global::<SettingsStore>(|_, cx| cx.notify()),
             cx.subscribe_in(
                 &LanguageModelRegistry::global(cx),
                 window,
@@ -113,6 +145,8 @@ impl AgentConfiguration {
             context_server_store,
             expanded_provider_configurations: HashMap::default(),
             context_server_registry,
+            main_model_selector,
+            subagent_model_selector,
             _subscriptions: subscriptions,
             scroll_handle: ScrollHandle::new(),
         };
@@ -379,6 +413,105 @@ impl AgentConfiguration {
                             )
                         },
                     ),
+            )
+    }
+
+    fn render_model_setting_row(
+        &self,
+        id: impl Into<ElementId>,
+        icon: IconName,
+        title: impl Into<SharedString>,
+        description: impl Into<SharedString>,
+        selector: Entity<AgentModelSelector>,
+        extra_action: Option<AnyElement>,
+    ) -> impl IntoElement {
+        h_flex()
+            .id(id)
+            .min_w_0()
+            .w_full()
+            .gap_3()
+            .justify_between()
+            .child(
+                h_flex()
+                    .min_w_0()
+                    .flex_1()
+                    .gap_2()
+                    .child(Icon::new(icon).size(IconSize::Small).color(Color::Muted))
+                    .child(
+                        v_flex()
+                            .min_w_0()
+                            .gap_0p5()
+                            .child(Label::new(title.into()).truncate())
+                            .child(
+                                Label::new(description.into())
+                                    .size(LabelSize::Small)
+                                    .color(Color::Muted),
+                            ),
+                    ),
+            )
+            .child(
+                h_flex()
+                    .flex_none()
+                    .gap_0p5()
+                    .child(selector)
+                    .children(extra_action),
+            )
+    }
+
+    fn render_model_settings_section(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+        let has_subagent_model = agent_settings::AgentSettings::get_global(cx)
+            .subagent_default_model
+            .is_some();
+
+        let reset_subagent_model_button = has_subagent_model.then(|| {
+            IconButton::new("reset-subagent-model", IconName::Undo)
+                .icon_color(Color::Muted)
+                .icon_size(IconSize::Small)
+                .tooltip(Tooltip::text("Use Main Model"))
+                .on_click({
+                    let fs = self.fs.clone();
+                    move |_event, _window, cx| {
+                        update_settings_file(fs.clone(), cx, move |settings, _cx| {
+                            if let Some(agent) = settings.agent.as_mut() {
+                                agent.subagent_default_model = None;
+                            }
+                        });
+                    }
+                })
+                .into_any_element()
+        });
+
+        v_flex()
+            .min_w_0()
+            .border_b_1()
+            .border_color(cx.theme().colors().border)
+            .child(self.render_section_title(
+                "Agent Models",
+                "Choose the model used by the main agent and the default model used by spawned subagents.",
+                div().into_any_element(),
+            ))
+            .child(
+                v_flex()
+                    .p_4()
+                    .pt_0()
+                    .gap_2()
+                    .child(self.render_model_setting_row(
+                        "main-agent-model",
+                        IconName::Sparkle,
+                        "Main Model",
+                        "Used for the primary agent that plans, delegates, reviews, and responds.",
+                        self.main_model_selector.clone(),
+                        None,
+                    ))
+                    .child(Divider::horizontal().color(DividerColor::BorderFaded))
+                    .child(self.render_model_setting_row(
+                        "subagent-model",
+                        IconName::UserGroup,
+                        "Subagent Model",
+                        "Used for newly spawned subagents. Leave unset to inherit the main model.",
+                        self.subagent_model_selector.clone(),
+                        reset_subagent_model_button,
+                    )),
             )
     }
 
@@ -1277,6 +1410,7 @@ impl Render for AgentConfiguration {
                             .size_full()
                             .min_w_0()
                             .overflow_y_scroll()
+                            .child(self.render_model_settings_section(cx))
                             .child(self.render_agent_servers_section(cx))
                             .child(self.render_context_servers_section(cx))
                             .child(self.render_provider_configuration_section(cx)),

@@ -973,6 +973,8 @@ pub struct Thread {
     imported: bool,
     /// If this is a subagent thread, contains context about the parent
     subagent_context: Option<SubagentContext>,
+    /// True when this subagent is pinned to `agent.subagent_default_model`.
+    uses_configured_subagent_model: bool,
     /// The user's unsent prompt text, persisted so it can be restored when reloading the thread.
     draft_prompt: Option<Vec<acp::ContentBlock>>,
     ui_scroll_position: Option<gpui::ListOffset>,
@@ -993,7 +995,12 @@ impl Thread {
         let project_context = parent_thread.read(cx).project_context.clone();
         let context_server_registry = parent_thread.read(cx).context_server_registry.clone();
         let templates = parent_thread.read(cx).templates.clone();
-        let model = parent_thread.read(cx).model().cloned();
+        let configured_subagent_model = Self::resolve_subagent_default_model(cx);
+        let uses_configured_subagent_model = configured_subagent_model.is_some();
+        let model = configured_subagent_model
+            .as_ref()
+            .map(|(model, _selection)| model.clone())
+            .or_else(|| parent_thread.read(cx).model().cloned());
         let parent_action_log = parent_thread.read(cx).action_log().clone();
         let action_log =
             cx.new(|_cx| ActionLog::new(project.clone()).with_linked_action_log(parent_action_log));
@@ -1010,7 +1017,11 @@ impl Thread {
             parent_thread_id: parent_thread.read(cx).id().clone(),
             depth: parent_thread.read(cx).depth() + 1,
         });
+        thread.uses_configured_subagent_model = uses_configured_subagent_model;
         thread.inherit_parent_settings(parent_thread, cx);
+        if let Some((model, selection)) = configured_subagent_model {
+            thread.apply_model_selection_options(&model, &selection);
+        }
         thread
     }
 
@@ -1096,6 +1107,7 @@ impl Thread {
             action_log,
             imported: false,
             subagent_context: None,
+            uses_configured_subagent_model: false,
             draft_prompt: None,
             ui_scroll_position: None,
             running_subagents: Vec::new(),
@@ -1113,6 +1125,16 @@ impl Thread {
         self.thinking_effort = parent.thinking_effort.clone();
         self.summarization_model = parent.summarization_model.clone();
         self.profile_id = parent.profile_id.clone();
+    }
+
+    fn apply_model_selection_options(
+        &mut self,
+        model: &Arc<dyn LanguageModel>,
+        selection: &LanguageModelSelection,
+    ) {
+        self.thinking_enabled = selection.enable_thinking && model.supports_thinking();
+        self.thinking_effort = selection.effort.clone();
+        self.speed = selection.speed;
     }
 
     pub fn id(&self) -> &acp::SessionId {
@@ -1326,6 +1348,7 @@ impl Thread {
             prompt_capabilities_rx,
             imported: db_thread.imported,
             subagent_context: db_thread.subagent_context,
+            uses_configured_subagent_model: false,
             draft_prompt: db_thread.draft_prompt,
             ui_scroll_position: db_thread.ui_scroll_position.map(|sp| gpui::ListOffset {
                 item_ix: sp.item_ix,
@@ -1435,7 +1458,11 @@ impl Thread {
 
         for subagent in &self.running_subagents {
             subagent
-                .update(cx, |thread, cx| thread.set_model(model.clone(), cx))
+                .update(cx, |thread, cx| {
+                    if !thread.uses_configured_subagent_model {
+                        thread.set_model(model.clone(), cx);
+                    }
+                })
                 .ok();
         }
 
@@ -1601,8 +1628,9 @@ impl Thread {
 
         self.profile_id = profile_id.clone();
 
-        // Swap to the profile's preferred model when available.
-        if let Some(model) = Self::resolve_profile_model(&self.profile_id, cx) {
+        if !self.uses_configured_subagent_model
+            && let Some(model) = Self::resolve_profile_model(&self.profile_id, cx)
+        {
             self.set_model(model, cx);
         }
 
@@ -1732,6 +1760,16 @@ impl Thread {
         Self::resolve_model_from_selection(&selection, cx)
     }
 
+    fn resolve_subagent_default_model(
+        cx: &mut Context<Self>,
+    ) -> Option<(Arc<dyn LanguageModel>, LanguageModelSelection)> {
+        let selection = AgentSettings::get_global(cx)
+            .subagent_default_model
+            .clone()?;
+        let model = Self::resolve_model_from_selection(&selection, cx)?;
+        Some((model, selection))
+    }
+
     /// Translate a stored model selection into the configured model from the registry.
     fn resolve_model_from_selection(
         selection: &LanguageModelSelection,
@@ -1741,7 +1779,7 @@ impl Thread {
             provider: LanguageModelProviderId::from(selection.provider.0.clone()),
             model: LanguageModelId::from(selection.model.clone()),
         };
-        LanguageModelRegistry::global(cx).update(cx, |registry, cx| {
+        LanguageModelRegistry::try_global(cx)?.update(cx, |registry, cx| {
             registry
                 .select_model(&selected, cx)
                 .map(|configured| configured.model)
@@ -4131,7 +4169,7 @@ fn convert_image(image_content: acp::ImageContent) -> LanguageModelImage {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gpui::TestAppContext;
+    use gpui::{TestAppContext, UpdateGlobal};
     use language_model::LanguageModelToolUseId;
     use language_model::fake_provider::FakeLanguageModel;
     use serde_json::json;
@@ -4214,6 +4252,63 @@ mod tests {
                     "Subagent model should match parent model after set_model"
                 );
             }
+        });
+    }
+
+    #[gpui::test]
+    async fn test_configured_subagent_model_is_kept_separate(cx: &mut TestAppContext) {
+        let (parent, _event_stream) = setup_thread_for_test(cx).await;
+
+        cx.update(|cx| {
+            LanguageModelRegistry::test(cx);
+            settings::SettingsStore::update_global(cx, |store, cx| {
+                store.update_user_settings(cx, |settings| {
+                    let subagent_default_model = Some(LanguageModelSelection {
+                        provider: "fake".into(),
+                        model: "fake".to_string(),
+                        enable_thinking: false,
+                        effort: None,
+                        speed: None,
+                    });
+                    settings
+                        .agent
+                        .get_or_insert_default()
+                        .subagent_default_model = subagent_default_model;
+                });
+            });
+
+            let parent_model: Arc<dyn LanguageModel> = Arc::new(
+                FakeLanguageModel::with_id_and_thinking("fake", "frontier", "Frontier", false),
+            );
+            parent.update(cx, |thread, cx| {
+                thread.set_model(parent_model, cx);
+            });
+
+            let subagent = cx.new(|cx| Thread::new_subagent(&parent, cx));
+            parent.update(cx, |thread, _cx| {
+                thread.register_running_subagent(subagent.downgrade());
+            });
+
+            let subagent_model_id = subagent.read(cx).model().unwrap().id();
+            assert_eq!(subagent_model_id.0.as_ref(), "fake");
+
+            let new_parent_model: Arc<dyn LanguageModel> =
+                Arc::new(FakeLanguageModel::with_id_and_thinking(
+                    "fake",
+                    "new-frontier",
+                    "New Frontier",
+                    false,
+                ));
+            parent.update(cx, |thread, cx| {
+                thread.set_model(new_parent_model, cx);
+            });
+
+            let subagent_model_id = subagent.read(cx).model().unwrap().id();
+            assert_eq!(
+                subagent_model_id.0.as_ref(),
+                "fake",
+                "Configured subagent model should not be overwritten by parent model changes"
+            );
         });
     }
 

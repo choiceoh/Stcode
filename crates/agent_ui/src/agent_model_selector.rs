@@ -4,16 +4,18 @@ use crate::{
     ui::ModelSelectorTooltip,
 };
 use fs::Fs;
-use gpui::{Entity, FocusHandle, SharedString};
-use language_model::IconOrSvg;
+use gpui::{Entity, FocusHandle, SharedString, Subscription};
+use language_model::{IconOrSvg, LanguageModelRegistry};
 use picker::popover_menu::PickerPopoverMenu;
-use settings::update_settings_file;
+use settings::SettingsStore;
 use std::sync::Arc;
 use ui::{PopoverMenuHandle, Tooltip, prelude::*};
 
 pub struct AgentModelSelector {
     selector: Entity<LanguageModelSelector>,
     menu_handle: PopoverMenuHandle<LanguageModelSelector>,
+    empty_model_label: SharedString,
+    _subscriptions: Vec<Subscription>,
 }
 
 impl AgentModelSelector {
@@ -25,6 +27,26 @@ impl AgentModelSelector {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
+        let empty_model_label = model_usage_context.empty_model_label();
+        let subscriptions = vec![
+            cx.observe_global::<SettingsStore>(|_, cx| cx.notify()),
+            cx.subscribe(
+                &LanguageModelRegistry::global(cx),
+                |_, _, event: &language_model::Event, cx| {
+                    if matches!(
+                        event,
+                        language_model::Event::DefaultModelChanged
+                            | language_model::Event::InlineAssistantModelChanged
+                            | language_model::Event::ProviderStateChanged(_)
+                            | language_model::Event::AddedProvider(_)
+                            | language_model::Event::RemovedProvider(_)
+                            | language_model::Event::ProvidersChanged
+                    ) {
+                        cx.notify();
+                    }
+                },
+            ),
+        ];
         Self {
             selector: cx.new(move |cx| {
                 language_model_selector(
@@ -34,19 +56,9 @@ impl AgentModelSelector {
                     },
                     {
                         let fs = fs.clone();
+                        let model_context = model_usage_context.clone();
                         move |model, cx| {
-                            let provider = model.provider_id().0.to_string();
-                            let model_id = model.id().0.to_string();
-                            match &model_usage_context {
-                                ModelUsageContext::InlineAssistant => {
-                                    update_settings_file(fs.clone(), cx, move |settings, _cx| {
-                                        settings
-                                            .agent
-                                            .get_or_insert_default()
-                                            .set_inline_assistant_model(provider.clone(), model_id);
-                                    });
-                                }
-                            }
+                            model_context.set_model(fs.clone(), model, cx);
                         }
                     },
                     {
@@ -67,6 +79,8 @@ impl AgentModelSelector {
                 )
             }),
             menu_handle,
+            empty_model_label,
+            _subscriptions: subscriptions,
         }
     }
 
@@ -91,7 +105,7 @@ impl Render for AgentModelSelector {
         let model_name = model
             .as_ref()
             .map(|model| model.model.name().0)
-            .unwrap_or_else(|| SharedString::from("Select a Model"));
+            .unwrap_or_else(|| self.empty_model_label.clone());
 
         let provider_icon = model.as_ref().map(|model| model.provider.icon());
         let color = if self.menu_handle.is_deployed() {
