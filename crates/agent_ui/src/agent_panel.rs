@@ -721,6 +721,16 @@ struct SourcePanelInitialization {
     focus: bool,
 }
 
+fn initial_content_with_auto_submit(content: AgentInitialContent) -> AgentInitialContent {
+    match content {
+        AgentInitialContent::ContentBlock { blocks, .. } => AgentInitialContent::ContentBlock {
+            blocks,
+            auto_submit: true,
+        },
+        content => content,
+    }
+}
+
 impl BaseView {
     pub fn which_font_size_used(&self) -> WhichFontSize {
         WhichFontSize::AgentFont
@@ -2791,10 +2801,15 @@ impl AgentPanel {
 
         source_panel.update(cx, |source_panel, cx| {
             let initial_content = source_panel.active_initial_content(cx);
-            let start_empty_thread = source_panel.consume_stcode_worktree_thread_transfer();
-            if initial_content.is_none() && !start_empty_thread {
+            let stcode_new_thread = source_panel.consume_stcode_worktree_thread_transfer();
+            if initial_content.is_none() && !stcode_new_thread {
                 return None;
             }
+            let initial_content = if stcode_new_thread {
+                initial_content.map(initial_content_with_auto_submit)
+            } else {
+                initial_content
+            };
 
             let agent = if source_panel.project.read(cx).is_via_collab() {
                 Agent::NativeAgent
@@ -2804,7 +2819,7 @@ impl AgentPanel {
             Some(SourcePanelInitialization {
                 agent,
                 initial_content,
-                focus: start_empty_thread,
+                focus: stcode_new_thread,
             })
         })
     }
@@ -7304,6 +7319,28 @@ mod tests {
             !transferred_again,
             "pending Stcode worktree request should be consumed after one transfer"
         );
+    }
+
+    #[test]
+    fn test_stcode_worktree_transfer_marks_content_for_auto_submit() {
+        let content = AgentInitialContent::ContentBlock {
+            blocks: vec![acp::ContentBlock::Text(acp::TextContent::new(
+                "Build the feature",
+            ))],
+            auto_submit: false,
+        };
+
+        let content = initial_content_with_auto_submit(content);
+        let AgentInitialContent::ContentBlock {
+            blocks,
+            auto_submit,
+        } = content
+        else {
+            panic!("expected content block");
+        };
+
+        assert!(auto_submit);
+        assert_eq!(blocks.len(), 1);
     }
 
     #[gpui::test]
