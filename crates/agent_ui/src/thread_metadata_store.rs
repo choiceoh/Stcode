@@ -1703,7 +1703,6 @@ mod tests {
     use gpui::{TestAppContext, VisualTestContext};
     use project::FakeFs;
     use project::Project;
-    use remote::WslConnectionOptions;
     use std::path::Path;
     use std::rc::Rc;
     use workspace::MultiWorkspace;
@@ -2214,12 +2213,12 @@ mod tests {
             .write(move |conn| {
                 let mut stmt = Statement::prepare(
                     conn,
-                    "INSERT INTO remote_connections(id, kind, user, distro) VALUES (?1, ?2, ?3, ?4)",
+                    "INSERT INTO remote_connections(id, kind, host, user) VALUES (?1, ?2, ?3, ?4)",
                 )?;
                 let mut next_index = stmt.bind(&remote_connection_id, 1)?;
-                next_index = stmt.bind(&"wsl", next_index)?;
-                next_index = stmt.bind(&Some("anth".to_string()), next_index)?;
-                stmt.bind(&Some("Ubuntu".to_string()), next_index)?;
+                next_index = stmt.bind(&"ssh", next_index)?;
+                next_index = stmt.bind(&Some("example.com".to_string()), next_index)?;
+                stmt.bind(&Some("anth".to_string()), next_index)?;
                 stmt.exec()?;
 
                 let mut stmt = Statement::prepare(
@@ -2252,9 +2251,10 @@ mod tests {
 
         assert_eq!(
             metadata.remote_connection,
-            Some(RemoteConnectionOptions::Wsl(WslConnectionOptions {
-                distro_name: "Ubuntu".to_string(),
-                user: Some("anth".to_string()),
+            Some(RemoteConnectionOptions::Ssh(remote::SshConnectionOptions {
+                host: "example.com".into(),
+                username: Some("anth".to_string()),
+                ..Default::default()
             }))
         );
     }

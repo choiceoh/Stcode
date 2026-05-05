@@ -190,7 +190,6 @@ impl VsCodeSettings {
                 semantic_token_rules: self.semantic_token_rules(),
                 ..GlobalLspSettingsContent::default()
             }),
-            helix_mode: None,
             image_viewer: None,
             journal: None,
             language_models: None,
@@ -215,8 +214,6 @@ impl VsCodeSettings {
             terminal: self.terminal_settings_content(),
             theme: Box::new(self.theme_settings_content()),
             title_bar: None,
-            vim: None,
-            vim_mode: None,
             workspace: self.workspace_settings_content(),
             which_key: None,
             modeline_lines: None,

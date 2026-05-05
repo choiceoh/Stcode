@@ -3254,10 +3254,11 @@ impl Pane {
 
                             let visible_in_project_panel = relative_path.is_some()
                                 && worktree.is_some_and(|worktree| worktree.read(cx).is_visible());
-                            let is_local = pane.read(cx).project.upgrade().is_some_and(|project| {
-                                let project = project.read(cx);
-                                project.is_local() || project.is_via_wsl_with_host_interop(cx)
-                            });
+                            let is_local = pane
+                                .read(cx)
+                                .project
+                                .upgrade()
+                                .is_some_and(|project| project.read(cx).is_local());
                             let is_remote = pane
                                 .read(cx)
                                 .project

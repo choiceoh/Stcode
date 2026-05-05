@@ -140,6 +140,5 @@ search = { workspace = true, features = ["test-support"] }
 semver.workspace = true
 reqwest_client.workspace = true
 tempfile.workspace = true
-vim.workspace = true
 tree-sitter-md.workspace = true
 unindent.workspace = true

@@ -174,7 +174,6 @@ pub enum HighlightKey {
     SearchWithinRange,
     SelectedTextHighlight,
     SyntaxTreeView(usize),
-    VimExchange,
 }
 
 pub trait ToDisplayPoint {

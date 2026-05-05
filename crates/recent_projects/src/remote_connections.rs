@@ -16,7 +16,7 @@ use remote::{
     SshConnectionOptions,
 };
 pub use settings::SshConnection;
-use settings::{DevContainerConnection, ExtendingVec, RegisterSetting, Settings, WslConnection};
+use settings::{DevContainerConnection, ExtendingVec, RegisterSetting, Settings};
 use util::paths::PathWithPosition;
 use workspace::{
     AppState, MultiWorkspace, OpenOptions, SerializedWorkspaceLocation, Workspace,
@@ -31,7 +31,6 @@ pub use remote_connection::{
 #[derive(RegisterSetting)]
 pub struct RemoteSettings {
     pub ssh_connections: ExtendingVec<SshConnection>,
-    pub wsl_connections: ExtendingVec<WslConnection>,
     /// Whether to read ~/.ssh/config for ssh connection sources.
     pub read_ssh_config: bool,
 }
@@ -39,10 +38,6 @@ pub struct RemoteSettings {
 impl RemoteSettings {
     pub fn ssh_connections(&self) -> impl Iterator<Item = SshConnection> + use<> {
         self.ssh_connections.clone().0.into_iter()
-    }
-
-    pub fn wsl_connections(&self) -> impl Iterator<Item = WslConnection> + use<> {
-        self.wsl_connections.clone().0.into_iter()
     }
 
     pub fn fill_connection_options_from_settings(&self, options: &mut SshConnectionOptions) {
@@ -80,7 +75,6 @@ impl RemoteSettings {
 #[derive(Clone, PartialEq)]
 pub enum Connection {
     Ssh(SshConnection),
-    Wsl(WslConnection),
     DevContainer(DevContainerConnection),
 }
 
@@ -88,7 +82,6 @@ impl From<Connection> for RemoteConnectionOptions {
     fn from(val: Connection) -> Self {
         match val {
             Connection::Ssh(conn) => RemoteConnectionOptions::Ssh(conn.into()),
-            Connection::Wsl(conn) => RemoteConnectionOptions::Wsl(conn.into()),
             Connection::DevContainer(conn) => {
                 RemoteConnectionOptions::Docker(DockerConnectionOptions {
                     name: conn.name,
@@ -109,18 +102,11 @@ impl From<SshConnection> for Connection {
     }
 }
 
-impl From<WslConnection> for Connection {
-    fn from(val: WslConnection) -> Self {
-        Connection::Wsl(val)
-    }
-}
-
 impl Settings for RemoteSettings {
     fn from_settings(content: &settings::SettingsContent) -> Self {
         let remote = &content.remote;
         Self {
             ssh_connections: remote.ssh_connections.clone().unwrap_or_default().into(),
-            wsl_connections: remote.wsl_connections.clone().unwrap_or_default().into(),
             read_ssh_config: remote.read_ssh_config.unwrap(),
         }
     }
@@ -316,7 +302,6 @@ pub async fn open_remote_project(
                             PromptLevel::Critical,
                             match connection_options {
                                 RemoteConnectionOptions::Ssh(_) => "Failed to connect over SSH",
-                                RemoteConnectionOptions::Wsl(_) => "Failed to connect to WSL",
                                 RemoteConnectionOptions::Docker(_) => {
                                     "Failed to connect to Dev Container"
                                 }
@@ -377,7 +362,6 @@ pub async fn open_remote_project(
                             PromptLevel::Critical,
                             match connection_options {
                                 RemoteConnectionOptions::Ssh(_) => "Failed to connect over SSH",
-                                RemoteConnectionOptions::Wsl(_) => "Failed to connect to WSL",
                                 RemoteConnectionOptions::Docker(_) => {
                                     "Failed to connect to Dev Container"
                                 }

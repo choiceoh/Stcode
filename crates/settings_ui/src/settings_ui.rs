@@ -521,9 +521,6 @@ fn init_renderers(cx: &mut App) {
         .add_basic_renderer::<settings::DisplayIn>(render_dropdown)
         .add_basic_renderer::<settings::MinimapThumb>(render_dropdown)
         .add_basic_renderer::<settings::MinimapThumbBorder>(render_dropdown)
-        .add_basic_renderer::<settings::ModeContent>(render_dropdown)
-        .add_basic_renderer::<settings::UseSystemClipboard>(render_dropdown)
-        .add_basic_renderer::<settings::VimInsertModeCursorShape>(render_dropdown)
         .add_basic_renderer::<settings::SteppingGranularity>(render_dropdown)
         .add_basic_renderer::<settings::NotifyWhenAgentWaiting>(render_dropdown)
         .add_basic_renderer::<settings::PlaySoundWhenAgentDone>(render_dropdown)
@@ -3422,7 +3419,7 @@ impl SettingsWindow {
                             .clone()
                             .update(cx, |workspace, cx| {
                                 workspace
-                                    .with_local_or_wsl_workspace(
+                                    .with_local_workspace(
                                         window,
                                         cx,
                                         open_user_settings_in_workspace,
@@ -3846,14 +3843,8 @@ fn open_user_settings_in_workspace(
     let project = workspace.project().clone();
 
     cx.spawn_in(window, async move |workspace, cx| {
-        let (config_dir, settings_file) = project.update(cx, |project, cx| {
-            (
-                project.try_windows_path_to_wsl(paths::config_dir().as_path(), cx),
-                project.try_windows_path_to_wsl(paths::settings_file().as_path(), cx),
-            )
-        });
-        let config_dir = config_dir.await?;
-        let settings_file = settings_file.await?;
+        let config_dir = paths::config_dir().to_path_buf();
+        let settings_file = paths::settings_file().to_path_buf();
         project
             .update(cx, |project, cx| {
                 project.find_or_create_worktree(&config_dir, false, cx)

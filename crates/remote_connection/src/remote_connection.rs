@@ -24,7 +24,6 @@ use workspace::{DismissDecision, ModalView, Workspace};
 pub struct RemoteConnectionPrompt {
     connection_string: SharedString,
     nickname: Option<SharedString>,
-    is_wsl: bool,
     is_devcontainer: bool,
     status_message: Option<SharedString>,
     prompt: Option<(Entity<Markdown>, oneshot::Sender<EncryptedPassword>)>,
@@ -53,7 +52,6 @@ impl RemoteConnectionPrompt {
     pub fn new(
         connection_string: String,
         nickname: Option<String>,
-        is_wsl: bool,
         is_devcontainer: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -66,7 +64,6 @@ impl RemoteConnectionPrompt {
         Self {
             connection_string: connection_string.into(),
             nickname: nickname.map(|nickname| nickname.into()),
-            is_wsl,
             is_devcontainer,
             editor,
             status_message: None,
@@ -230,28 +227,19 @@ impl RemoteConnectionModal {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let (connection_string, nickname, is_wsl, is_devcontainer) = match connection_options {
-            RemoteConnectionOptions::Ssh(options) => (
-                options.connection_string(),
-                options.nickname.clone(),
-                false,
-                false,
-            ),
-            RemoteConnectionOptions::Wsl(options) => {
-                (options.distro_name.clone(), None, true, false)
+        let (connection_string, nickname, is_devcontainer) = match connection_options {
+            RemoteConnectionOptions::Ssh(options) => {
+                (options.connection_string(), options.nickname.clone(), false)
             }
-            RemoteConnectionOptions::Docker(options) => (options.name.clone(), None, false, true),
+            RemoteConnectionOptions::Docker(options) => (options.name.clone(), None, true),
             #[cfg(any(test, feature = "test-support"))]
-            RemoteConnectionOptions::Mock(options) => {
-                (format!("mock-{}", options.id), None, false, false)
-            }
+            RemoteConnectionOptions::Mock(options) => (format!("mock-{}", options.id), None, false),
         };
         Self {
             prompt: cx.new(|cx| {
                 RemoteConnectionPrompt::new(
                     connection_string,
                     nickname,
-                    is_wsl,
                     is_devcontainer,
                     window,
                     cx,
@@ -288,7 +276,6 @@ pub struct SshConnectionHeader {
     pub connection_string: SharedString,
     pub paths: Vec<PathBuf>,
     pub nickname: Option<SharedString>,
-    pub is_wsl: bool,
     pub is_devcontainer: bool,
 }
 
@@ -305,9 +292,7 @@ impl RenderOnce for SshConnectionHeader {
             (self.connection_string, None)
         };
 
-        let icon = if self.is_wsl {
-            IconName::Linux
-        } else if self.is_devcontainer {
+        let icon = if self.is_devcontainer {
             IconName::Box
         } else {
             IconName::Server
@@ -352,7 +337,6 @@ impl Render for RemoteConnectionModal {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl ui::IntoElement {
         let nickname = self.prompt.read(cx).nickname.clone();
         let connection_string = self.prompt.read(cx).connection_string.clone();
-        let is_wsl = self.prompt.read(cx).is_wsl;
         let is_devcontainer = self.prompt.read(cx).is_devcontainer;
 
         let theme = cx.theme().clone();
@@ -372,7 +356,6 @@ impl Render for RemoteConnectionModal {
                     paths: self.paths.clone(),
                     connection_string,
                     nickname,
-                    is_wsl,
                     is_devcontainer,
                 }
                 .render(window, cx),

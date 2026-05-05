@@ -501,10 +501,6 @@ pub struct LanguageSettingsContent {
     /// Default: "off"
     pub document_symbols: Option<DocumentSymbols>,
     /// Controls where the `editor::Rewrap` action is allowed for this language.
-    ///
-    /// Note: This setting has no effect in Vim mode, as rewrap is already
-    /// allowed everywhere.
-    ///
     /// Default: "in_comments"
     pub allow_rewrap: Option<RewrapBehavior>,
     /// Controls whether edit predictions are shown immediately (true)

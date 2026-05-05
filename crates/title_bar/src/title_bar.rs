@@ -553,7 +553,6 @@ impl TitleBar {
                 terminology.remote(),
                 IconName::Server,
             ),
-            RemoteConnectionOptions::Wsl(_) => (None, terminology.remote(), IconName::Linux),
             RemoteConnectionOptions::Docker(_dev_container_connection) => {
                 (None, "Dev Container", IconName::Box)
             }

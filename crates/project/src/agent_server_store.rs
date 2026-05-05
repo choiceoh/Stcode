@@ -736,9 +736,7 @@ impl AgentServerStore {
         match &self.state {
             AgentServerStoreState::Local {
                 downstream_client, ..
-            } => downstream_client
-                .as_ref()
-                .is_some_and(|(_, client)| !client.has_wsl_interop()),
+            } => downstream_client.is_some(),
             _ => false,
         }
     }
