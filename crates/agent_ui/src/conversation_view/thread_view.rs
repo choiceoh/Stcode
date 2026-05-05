@@ -3,6 +3,7 @@ use crate::{
     agent_configuration::configure_context_server_modal::default_markdown_style,
 };
 use std::cell::RefCell;
+use std::path::PathBuf;
 
 use acp_thread::{ContentBlock, PlanEntry};
 use cloud_api_types::{SubmitAgentThreadFeedbackBody, SubmitAgentThreadFeedbackCommentsBody};
@@ -23,6 +24,7 @@ use super::*;
 
 const STCODE_STARTUP_RULE_FILES: [&str; 2] = ["AGENTS.md", "CLAUDE.md"];
 const STCODE_STARTUP_RULE_MAX_BYTES: usize = 128 * 1024;
+const MAX_STCODE_STARTUP_SNAPSHOT_FILES: usize = 8;
 
 #[derive(Default)]
 struct ThreadFeedbackState {
@@ -1097,10 +1099,17 @@ impl ThreadView {
         let parent_session_id = self.thread.read(cx).parent_session_id().cloned();
         let agent_telemetry_id = self.thread.read(cx).connection().telemetry_id();
         let is_first_message = self.thread.read(cx).entries().is_empty();
-        let startup_rules = if is_first_message && AppLaunchMode::is_stcode(cx) {
-            self.load_stcode_startup_rules(cx)
+        let (startup_snapshot, startup_rules) = if is_first_message && AppLaunchMode::is_stcode(cx)
+        {
+            (
+                self.project
+                    .upgrade()
+                    .and_then(|project| stcode_startup_workspace_snapshot(project.read(cx), cx))
+                    .map(stcode_startup_workspace_snapshot_blocks),
+                self.load_stcode_startup_rules(cx),
+            )
         } else {
-            None
+            (None, None)
         };
         let thread = self.thread.downgrade();
 
@@ -1124,6 +1133,10 @@ impl ThreadView {
             let Some((mut contents, mut tracked_buffers)) = contents_task.await? else {
                 return Ok(());
             };
+
+            if let Some(mut startup_snapshot) = startup_snapshot {
+                contents.append(&mut startup_snapshot);
+            }
 
             if let Some(startup_rules) = startup_rules {
                 match startup_rules.await {
@@ -9089,6 +9102,29 @@ struct LoadedStcodeStartupRuleFile {
     text: String,
 }
 
+struct StcodeStartupWorkspaceSnapshot {
+    branch_name: Option<String>,
+    changed_count: usize,
+    staged_count: usize,
+    unstaged_count: usize,
+    conflicted_count: usize,
+    untracked_count: usize,
+    added_lines: usize,
+    removed_lines: usize,
+    linked_worktree_count: usize,
+    is_linked_worktree: bool,
+    shared_branch_lane_count: usize,
+    files: Vec<StcodeStartupChangedFile>,
+}
+
+struct StcodeStartupChangedFile {
+    path: String,
+    status: &'static str,
+    diff_label: Option<String>,
+    uri: Option<String>,
+    name: String,
+}
+
 fn stcode_startup_rule_files(project: &Project, cx: &App) -> Vec<StcodeStartupRuleFile> {
     let mut rule_files = Vec::new();
     let mut seen = HashSet::default();
@@ -9135,6 +9171,195 @@ fn stcode_startup_rule_files(project: &Project, cx: &App) -> Vec<StcodeStartupRu
     }
 
     rule_files
+}
+
+fn stcode_startup_workspace_snapshot(
+    project: &Project,
+    cx: &App,
+) -> Option<StcodeStartupWorkspaceSnapshot> {
+    let repository = project.active_repository(cx)?;
+    let repository = repository.read(cx);
+    let branch_name = repository
+        .branch
+        .as_ref()
+        .map(|branch| branch.name().to_string());
+    let branch_ref = repository
+        .branch
+        .as_ref()
+        .map(|branch| branch.ref_name.to_string());
+    let entries = repository
+        .cached_status()
+        .filter(|entry| entry.status.has_changes())
+        .collect::<Vec<_>>();
+    let shared_branch_lane_count = branch_ref
+        .as_deref()
+        .map(|branch_ref| {
+            repository
+                .linked_worktrees()
+                .iter()
+                .filter(|worktree| {
+                    worktree
+                        .ref_name
+                        .as_ref()
+                        .is_some_and(|ref_name| ref_name.as_ref() == branch_ref)
+                })
+                .count()
+        })
+        .unwrap_or(0);
+
+    Some(StcodeStartupWorkspaceSnapshot {
+        branch_name,
+        changed_count: entries.len(),
+        staged_count: entries
+            .iter()
+            .filter(|entry| entry.status.staging().has_staged())
+            .count(),
+        unstaged_count: entries
+            .iter()
+            .filter(|entry| entry.status.staging().has_unstaged())
+            .count(),
+        conflicted_count: entries
+            .iter()
+            .filter(|entry| entry.status.is_conflicted())
+            .count(),
+        untracked_count: entries
+            .iter()
+            .filter(|entry| entry.status.is_untracked())
+            .count(),
+        added_lines: entries
+            .iter()
+            .filter_map(|entry| entry.diff_stat)
+            .map(|stat| stat.added as usize)
+            .sum(),
+        removed_lines: entries
+            .iter()
+            .filter_map(|entry| entry.diff_stat)
+            .map(|stat| stat.deleted as usize)
+            .sum(),
+        linked_worktree_count: repository.linked_worktrees().len(),
+        is_linked_worktree: repository.is_linked_worktree(),
+        shared_branch_lane_count,
+        files: entries
+            .iter()
+            .take(MAX_STCODE_STARTUP_SNAPSHOT_FILES)
+            .map(|entry| {
+                let path = entry.repo_path.display(repository.path_style).to_string();
+                let uri = repository
+                    .path_style
+                    .join(&repository.work_directory_abs_path, path.as_str())
+                    .map(PathBuf::from)
+                    .map(|abs_path| MentionUri::File { abs_path })
+                    .map(|mention| mention.to_uri().to_string());
+                let name = Path::new(path.as_str())
+                    .file_name()
+                    .and_then(|file_name| file_name.to_str())
+                    .unwrap_or(path.as_str())
+                    .to_string();
+
+                StcodeStartupChangedFile {
+                    path,
+                    status: stcode_startup_file_status(entry.status),
+                    diff_label: entry
+                        .diff_stat
+                        .map(|stat| format!("+{} -{}", stat.added, stat.deleted)),
+                    uri,
+                    name,
+                }
+            })
+            .collect(),
+    })
+}
+
+fn stcode_startup_workspace_snapshot_blocks(
+    snapshot: StcodeStartupWorkspaceSnapshot,
+) -> Vec<acp::ContentBlock> {
+    let branch = snapshot.branch_name.as_deref().unwrap_or("detached HEAD");
+    let lane = if snapshot.is_linked_worktree {
+        "isolated linked worktree"
+    } else {
+        "main checkout"
+    };
+    let mut text = format!(
+        "\n\nStcode session-start workspace snapshot:\n\
+         - Branch: {branch}\n\
+         - Lane: {lane}; {} linked lane(s); {} branch overlap(s)\n\
+         - Changes: {} changed file(s), {} staged, {} unstaged, {} conflict(s), {} new, +{} -{}\n",
+        snapshot.linked_worktree_count,
+        snapshot.shared_branch_lane_count,
+        snapshot.changed_count,
+        snapshot.staged_count,
+        snapshot.unstaged_count,
+        snapshot.conflicted_count,
+        snapshot.untracked_count,
+        snapshot.added_lines,
+        snapshot.removed_lines,
+    );
+
+    if snapshot.files.is_empty() {
+        text.push_str("- Changed files: none\n");
+    } else {
+        text.push_str("- Changed files to inspect first:\n");
+        for file in &snapshot.files {
+            let diff = file
+                .diff_label
+                .as_ref()
+                .map(|diff| format!(" ({diff})"))
+                .unwrap_or_default();
+            text.push_str(&format!("  - [{}] {}{}\n", file.status, file.path, diff));
+        }
+        if snapshot.changed_count > snapshot.files.len() {
+            text.push_str(&format!(
+                "  - ...and {} more changed file(s)\n",
+                snapshot.changed_count - snapshot.files.len()
+            ));
+        }
+    }
+
+    text.push_str(
+        "Before editing, preserve or isolate leftover work if the lane is dirty, conflicted, \
+         or sharing a branch with another lane. Do this autonomously for routine Git/worktree \
+         choices.",
+    );
+
+    let mut blocks = vec![acp::ContentBlock::Text(acp::TextContent::new(text))];
+    let mut links_added = false;
+    for file in &snapshot.files {
+        let Some(uri) = &file.uri else {
+            continue;
+        };
+        if !links_added {
+            blocks.push(acp::ContentBlock::Text(acp::TextContent::new(
+                "\n\nSession-start changed file links:\n",
+            )));
+            links_added = true;
+        }
+        blocks.push(acp::ContentBlock::ResourceLink(acp::ResourceLink::new(
+            file.name.clone(),
+            uri.clone(),
+        )));
+        blocks.push(acp::ContentBlock::Text(acp::TextContent::new("\n")));
+    }
+
+    blocks
+}
+
+fn stcode_startup_file_status(status: git::status::FileStatus) -> &'static str {
+    if status.is_conflicted() {
+        return "Conflict";
+    }
+
+    if status.is_untracked() {
+        return "New";
+    }
+
+    let staging = status.staging();
+    if staging.has_staged() && staging.has_unstaged() {
+        "Partial"
+    } else if staging.has_staged() {
+        "Staged"
+    } else {
+        "Changed"
+    }
 }
 
 fn stcode_startup_rule_blocks(
@@ -9259,6 +9484,42 @@ mod tests {
             }
             other => panic!("expected text block, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn test_stcode_startup_workspace_snapshot_blocks_include_status_and_links() {
+        let blocks = stcode_startup_workspace_snapshot_blocks(StcodeStartupWorkspaceSnapshot {
+            branch_name: Some("codex/demo".to_string()),
+            changed_count: 2,
+            staged_count: 1,
+            unstaged_count: 1,
+            conflicted_count: 0,
+            untracked_count: 1,
+            added_lines: 12,
+            removed_lines: 3,
+            linked_worktree_count: 2,
+            is_linked_worktree: true,
+            shared_branch_lane_count: 1,
+            files: vec![StcodeStartupChangedFile {
+                path: "src/main.rs".to_string(),
+                status: "Changed",
+                diff_label: Some("+12 -3".to_string()),
+                uri: Some("file:///repo/src/main.rs".to_string()),
+                name: "main.rs".to_string(),
+            }],
+        });
+
+        assert!(matches!(&blocks[0], acp::ContentBlock::Text(text)
+            if text.text.contains("codex/demo")
+                && text.text.contains("isolated linked worktree")
+                && text.text.contains("[Changed] src/main.rs (+12 -3)")
+                && text.text.contains("preserve or isolate leftover work")
+        ));
+        assert!(blocks.iter().any(
+            |block| matches!(block, acp::ContentBlock::ResourceLink(link)
+                if link.name == "main.rs" && link.uri == "file:///repo/src/main.rs"
+            )
+        ));
     }
 
     #[test]
