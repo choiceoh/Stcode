@@ -337,6 +337,7 @@ impl ProfilePickerDelegate {
 
     fn documentation(candidate: &ProfileCandidate) -> Option<&'static str> {
         match candidate.id.as_str() {
+            builtin_profiles::ORCHESTRATE => Some("Coordinate parallel agent work."),
             builtin_profiles::WRITE => Some("Get help to write anything."),
             builtin_profiles::ASK => Some("Chat about your codebase."),
             builtin_profiles::MINIMAL => Some("Chat about anything with no tools."),

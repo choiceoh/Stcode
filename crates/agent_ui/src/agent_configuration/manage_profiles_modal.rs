@@ -663,6 +663,7 @@ impl ManageProfilesModal {
             .unwrap_or_else(|| "Unknown".into());
 
         let icon = match mode.profile_id.as_str() {
+            builtin_profiles::ORCHESTRATE => IconName::UserGroup,
             "write" => IconName::Pencil,
             "ask" => IconName::Chat,
             _ => IconName::UserRoundPen,
