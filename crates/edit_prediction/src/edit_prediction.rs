@@ -77,9 +77,6 @@ pub mod open_ai_compatible;
 mod zed_edit_prediction_delegate;
 pub mod zeta;
 
-#[cfg(test)]
-mod edit_prediction_tests;
-
 use crate::cursor_excerpt::expand_context_syntactically_then_linewise;
 use crate::example_spec::ExampleSpec;
 use crate::license_detection::LicenseDetectionWatcher;

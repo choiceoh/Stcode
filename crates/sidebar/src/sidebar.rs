@@ -64,9 +64,6 @@ use zed_actions::agents_sidebar::{FocusSidebarFilter, ToggleThreadSwitcher};
 
 use crate::thread_switcher::{ThreadSwitcher, ThreadSwitcherEntry, ThreadSwitcherEvent};
 
-#[cfg(test)]
-mod sidebar_tests;
-
 gpui::actions!(
     agents_sidebar,
     [

@@ -33,6 +33,8 @@ Stcode keeps the editor machinery that agents need to understand and change code
 
 Stcode does not keep editor surfaces whose main purpose is human hand-driving. Keymap editing, which-key discovery, go-to-line popups, tab-switcher modals, snippet management UI, modal editing, and similar shortcut-first workflows are outside the product boundary unless they directly support autonomous agent work.
 
+Test fixtures, golden corpora, evaluation runners, and visual-test harnesses are also outside the product boundary. Keep small test-support utilities only when retained runtime crates still need them for local validation.
+
 ## Current Baseline
 
 The current codebase is intentionally broad because it was imported from Zed 1.0 before pruning. The important retained areas are:

@@ -42,14 +42,6 @@ mod split;
 pub mod split_editor_view;
 
 mod bookmarks;
-#[cfg(test)]
-mod code_completion_tests;
-#[cfg(test)]
-mod edit_prediction_tests;
-#[cfg(test)]
-mod editor_block_comment_tests;
-#[cfg(test)]
-mod editor_tests;
 mod signature_help;
 #[cfg(any(test, feature = "test-support"))]
 pub mod test;

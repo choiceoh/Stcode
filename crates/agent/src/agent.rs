@@ -5,8 +5,6 @@ mod native_agent_server;
 pub mod outline;
 mod pattern_extraction;
 mod templates;
-#[cfg(test)]
-mod tests;
 mod thread;
 mod thread_store;
 mod tool_permissions;

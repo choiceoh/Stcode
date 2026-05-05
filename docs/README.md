@@ -42,6 +42,7 @@ Remove or avoid reintroducing:
 - snippet-management UI intended for manual typing
 - onboarding or settings pages for human editor customization
 - modal editing and other hand-driven editing modes
+- large test fixtures, golden data, evaluation runners, and visual-test harnesses
 
 ## What To Remove First
 
@@ -53,6 +54,7 @@ Remove upstream material that does not help Stcode's user:
 - hosted Zed collaboration server and deployment tooling
 - sample extensions
 - broad IDE panels that are not part of the non-coder multi-agent workflow
+- large upstream test/eval corpora that do not ship with or directly power the app
 
 ## Current Pruning Rule
 
