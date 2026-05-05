@@ -7,12 +7,11 @@ use zed_actions::{debug_panel, dev};
 pub fn app_menus(cx: &mut App) -> Vec<Menu> {
     let app_name = super::app_display_name(cx);
     let is_stcode = workspace::AppLaunchMode::is_stcode(cx);
-    let help_items = help_items(is_stcode);
 
     if is_stcode {
-        stcode_app_menus(cx, app_name, help_items)
+        stcode_app_menus(cx, app_name, stcode_help_items())
     } else {
-        zed_app_menus(cx, app_name, help_items)
+        zed_app_menus(cx, app_name, zed_help_items())
     }
 }
 
@@ -96,8 +95,8 @@ fn stcode_view_items(cx: &mut App) -> Vec<MenuItem> {
     view_items
 }
 
-fn help_items(is_stcode: bool) -> Vec<MenuItem> {
-    let mut help_items = vec![
+fn zed_help_items() -> Vec<MenuItem> {
+    vec![
         MenuItem::action(
             "View Release Notes Locally",
             auto_update_ui::ViewReleaseNotesLocally,
@@ -108,39 +107,36 @@ fn help_items(is_stcode: bool) -> Vec<MenuItem> {
         MenuItem::separator(),
         MenuItem::action("File Bug Report...", zed_actions::feedback::FileBugReport),
         MenuItem::action("Request Feature...", zed_actions::feedback::RequestFeature),
-    ];
-
-    if is_stcode {
-        help_items.push(MenuItem::separator());
-        help_items.push(MenuItem::action("Stcode Repository", feedback::OpenZedRepo));
-    } else {
-        help_items.push(MenuItem::action(
-            "Email Us...",
-            zed_actions::feedback::EmailZed,
-        ));
-        help_items.push(MenuItem::separator());
-        help_items.push(MenuItem::action(
+        MenuItem::action("Email Us...", zed_actions::feedback::EmailZed),
+        MenuItem::separator(),
+        MenuItem::action(
             "Documentation",
             super::OpenBrowser {
                 url: "https://zed.dev/docs".into(),
             },
-        ));
-        help_items.push(MenuItem::action("Zed Repository", feedback::OpenZedRepo));
-        help_items.push(MenuItem::action(
+        ),
+        MenuItem::action("Zed Repository", feedback::OpenZedRepo),
+        MenuItem::action(
             "Zed Twitter",
             super::OpenBrowser {
                 url: "https://twitter.com/zeddotdev".into(),
             },
-        ));
-        help_items.push(MenuItem::action(
+        ),
+        MenuItem::action(
             "Join the Team",
             super::OpenBrowser {
                 url: "https://zed.dev/jobs".into(),
             },
-        ));
-    }
+        ),
+    ]
+}
 
-    help_items
+fn stcode_help_items() -> Vec<MenuItem> {
+    vec![
+        MenuItem::action("View Dependency Licenses", zed_actions::OpenLicenses),
+        MenuItem::separator(),
+        MenuItem::action("Stcode Repository", feedback::OpenZedRepo),
+    ]
 }
 
 fn zed_app_menus(cx: &mut App, app_name: &'static str, help_items: Vec<MenuItem>) -> Vec<Menu> {
@@ -617,5 +613,26 @@ mod tests {
         assert!(labels.contains(&"Open Workspace Settings File".to_string()));
         assert!(!labels.contains(&"Open Project Settings".to_string()));
         assert!(!labels.contains(&"Open Project Settings File".to_string()));
+    }
+
+    #[test]
+    fn test_stcode_help_menu_removes_zed_support_surfaces() {
+        let help_labels = action_names(&Menu {
+            name: "Help".into(),
+            disabled: false,
+            items: super::stcode_help_items(),
+        });
+
+        assert!(help_labels.contains(&"View Dependency Licenses".to_string()));
+        assert!(help_labels.contains(&"Stcode Repository".to_string()));
+
+        assert!(!help_labels.contains(&"View Release Notes Locally".to_string()));
+        assert!(!help_labels.contains(&"View Telemetry".to_string()));
+        assert!(!help_labels.contains(&"Show Welcome".to_string()));
+        assert!(!help_labels.contains(&"File Bug Report...".to_string()));
+        assert!(!help_labels.contains(&"Request Feature...".to_string()));
+        assert!(!help_labels.contains(&"Zed Repository".to_string()));
+        assert!(!help_labels.contains(&"Zed Twitter".to_string()));
+        assert!(!help_labels.contains(&"Join the Team".to_string()));
     }
 }

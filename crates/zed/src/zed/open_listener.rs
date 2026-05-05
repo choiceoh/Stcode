@@ -666,7 +666,8 @@ async fn open_workspaces(
     if grouped_locations.is_empty() {
         // If we have no paths to open, show the welcome screen if this is the first launch
         let kvp = cx.update(|cx| KeyValueStore::global(cx));
-        if matches!(kvp.read_kvp(FIRST_OPEN), Ok(None)) {
+        let is_stcode = cx.update(|cx| workspace::AppLaunchMode::is_stcode(cx));
+        if !is_stcode && matches!(kvp.read_kvp(FIRST_OPEN), Ok(None)) {
             cx.update(|cx| show_onboarding_view(app_state, cx).detach());
         }
         // If not the first launch, show an empty window with empty editor
