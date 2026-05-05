@@ -4321,13 +4321,28 @@ impl AgentPanel {
         )
     }
 
-    fn render_stcode_activity_timeline(&self, cx: &Context<Self>) -> Option<AnyElement> {
+    fn render_stcode_activity_summary(&self, cx: &Context<Self>) -> Option<AnyElement> {
         if !AppLaunchMode::is_stcode(cx) {
             return None;
         }
 
         Some(
-            StcodeActivityTimeline::new(
+            StcodeActivityTimeline::summary(
+                self.active_agent_thread(cx),
+                self.project.clone(),
+                self.stcode_smart_run_snapshot(cx),
+            )
+            .into_any_element(),
+        )
+    }
+
+    fn render_stcode_activity_side_panel(&self, cx: &Context<Self>) -> Option<AnyElement> {
+        if !AppLaunchMode::is_stcode(cx) {
+            return None;
+        }
+
+        Some(
+            StcodeActivityTimeline::side_panel(
                 self.active_agent_thread(cx),
                 self.project.clone(),
                 self.stcode_smart_run_snapshot(cx),
@@ -4490,10 +4505,9 @@ impl Render for AgentPanel {
         // - Font size works as expected and can be changed with cmd-+/cmd-
         // - Scrolling in all views works as expected
         // - Files can be dropped into the panel
-        let content = v_flex()
+        let content = h_flex()
             .relative()
             .size_full()
-            .justify_between()
             .key_context(self.key_context())
             .on_action(cx.listener(|this, action: &NewThread, window, cx| {
                 this.new_thread(action, window, cx);
@@ -4520,20 +4534,29 @@ impl Render for AgentPanel {
                     })
                 }
             }))
-            .child(self.render_toolbar(window, cx))
-            .children(self.render_workspace_trust_message(cx))
-            .children(self.render_stcode_activity_timeline(cx))
-            .children(self.render_new_user_onboarding(window, cx))
-            .map(|parent| match self.visible_surface() {
-                VisibleSurface::Uninitialized => parent,
-                VisibleSurface::AgentThread(conversation_view) => parent
-                    .child(conversation_view.clone())
-                    .child(self.render_drag_target(cx)),
-                VisibleSurface::Configuration(configuration) => {
-                    parent.children(configuration.cloned())
-                }
-            })
-            .children(self.render_trial_end_upsell(window, cx));
+            .child(
+                v_flex()
+                    .relative()
+                    .h_full()
+                    .min_w_0()
+                    .flex_1()
+                    .justify_between()
+                    .child(self.render_toolbar(window, cx))
+                    .children(self.render_workspace_trust_message(cx))
+                    .children(self.render_stcode_activity_summary(cx))
+                    .children(self.render_new_user_onboarding(window, cx))
+                    .map(|parent| match self.visible_surface() {
+                        VisibleSurface::Uninitialized => parent,
+                        VisibleSurface::AgentThread(conversation_view) => parent
+                            .child(conversation_view.clone())
+                            .child(self.render_drag_target(cx)),
+                        VisibleSurface::Configuration(configuration) => {
+                            parent.children(configuration.cloned())
+                        }
+                    })
+                    .children(self.render_trial_end_upsell(window, cx)),
+            )
+            .children(self.render_stcode_activity_side_panel(cx));
 
         match self.visible_font_size() {
             WhichFontSize::AgentFont => {
