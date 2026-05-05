@@ -43,7 +43,9 @@ use crate::{
     ToggleOptionsMenu,
     agent_configuration::{AgentConfiguration, AssistantConfigurationEvent},
     conversation_view::{AcpThreadViewEvent, ThreadView},
-    stcode_activity_timeline::StcodeActivityTimeline,
+    stcode_activity_timeline::{
+        StcodeActivityTimeline, StcodeSmartRunPhase, StcodeSmartRunSnapshot, StcodeSmartRunStep,
+    },
     ui::EndTrialUpsell,
 };
 use crate::{
@@ -164,6 +166,8 @@ struct SerializedAgentPanel {
     #[serde(default)]
     last_active_thread: Option<SerializedActiveThread>,
     draft_thread_prompt: Option<Vec<acp::ContentBlock>>,
+    #[serde(default)]
+    stcode_smart_run: Option<StcodeSmartRunState>,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -172,6 +176,174 @@ struct SerializedActiveThread {
     agent_type: Agent,
     title: Option<String>,
     work_dirs: Option<SerializedPathList>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+struct StcodeSmartRunState {
+    kind: StcodeSmartRunKind,
+    session_id: Option<String>,
+    context_summary: String,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum StcodeSmartRunKind {
+    Start,
+    Panel,
+    Parallel,
+    Merge,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct StcodeSmartRunThreadStatus {
+    has_entries: bool,
+    is_waiting_for_confirmation: bool,
+    is_generating: bool,
+    has_in_progress_tool_calls: bool,
+    had_error: bool,
+}
+
+impl StcodeSmartRunKind {
+    fn title(self) -> &'static str {
+        match self {
+            Self::Start => "AI Smart Start",
+            Self::Panel => "AI Smart Panel",
+            Self::Parallel => "AI Smart Parallel",
+            Self::Merge => "AI Smart Merge",
+        }
+    }
+
+    fn source(self) -> &'static str {
+        match self {
+            Self::Start => "stcode_smart_start",
+            Self::Panel => "stcode_smart_panel",
+            Self::Parallel => "stcode_smart_parallel",
+            Self::Merge => "stcode_smart_merge",
+        }
+    }
+
+    fn checkpoint_label(self) -> &'static str {
+        match self {
+            Self::Start => "Handoff",
+            Self::Panel => "Next action",
+            Self::Parallel => "Lane safe",
+            Self::Merge => "Merge-ready",
+        }
+    }
+}
+
+impl StcodeSmartRunState {
+    fn snapshot(
+        &self,
+        thread_status: Option<StcodeSmartRunThreadStatus>,
+    ) -> StcodeSmartRunSnapshot {
+        let phase = stcode_smart_run_phase(thread_status);
+        let status = match phase {
+            StcodeSmartRunPhase::Pending => "Submitted",
+            StcodeSmartRunPhase::Active => "Working",
+            StcodeSmartRunPhase::Complete => "Ready",
+            StcodeSmartRunPhase::Blocked => "Blocked",
+        };
+        let detail = match phase {
+            StcodeSmartRunPhase::Pending => {
+                format!("Prompt submitted. {}", self.context_summary)
+            }
+            StcodeSmartRunPhase::Active => {
+                format!(
+                    "Agent is running this smart workflow. {}",
+                    self.context_summary
+                )
+            }
+            StcodeSmartRunPhase::Complete => {
+                format!("Agent reached an idle checkpoint. {}", self.context_summary)
+            }
+            StcodeSmartRunPhase::Blocked => {
+                format!(
+                    "Agent needs attention before it can continue. {}",
+                    self.context_summary
+                )
+            }
+        };
+
+        StcodeSmartRunSnapshot {
+            title: self.kind.title().to_string(),
+            status,
+            detail,
+            phase,
+            steps: stcode_smart_run_steps(self.kind, phase),
+        }
+    }
+}
+
+fn stcode_smart_run_phase(
+    thread_status: Option<StcodeSmartRunThreadStatus>,
+) -> StcodeSmartRunPhase {
+    let Some(thread_status) = thread_status else {
+        return StcodeSmartRunPhase::Pending;
+    };
+
+    if thread_status.is_waiting_for_confirmation || thread_status.had_error {
+        return StcodeSmartRunPhase::Blocked;
+    }
+
+    if thread_status.is_generating || thread_status.has_in_progress_tool_calls {
+        return StcodeSmartRunPhase::Active;
+    }
+
+    if thread_status.has_entries {
+        StcodeSmartRunPhase::Complete
+    } else {
+        StcodeSmartRunPhase::Pending
+    }
+}
+
+fn stcode_smart_run_steps(
+    kind: StcodeSmartRunKind,
+    phase: StcodeSmartRunPhase,
+) -> Vec<StcodeSmartRunStep> {
+    let agent_phase = match phase {
+        StcodeSmartRunPhase::Pending => StcodeSmartRunPhase::Active,
+        StcodeSmartRunPhase::Active => StcodeSmartRunPhase::Active,
+        StcodeSmartRunPhase::Complete => StcodeSmartRunPhase::Complete,
+        StcodeSmartRunPhase::Blocked => StcodeSmartRunPhase::Blocked,
+    };
+    let checkpoint_phase = match phase {
+        StcodeSmartRunPhase::Complete => StcodeSmartRunPhase::Complete,
+        StcodeSmartRunPhase::Blocked => StcodeSmartRunPhase::Blocked,
+        _ => StcodeSmartRunPhase::Pending,
+    };
+
+    vec![
+        StcodeSmartRunStep {
+            label: "Snapshot",
+            status: "Done",
+            phase: StcodeSmartRunPhase::Complete,
+        },
+        StcodeSmartRunStep {
+            label: "Prompt",
+            status: "Sent",
+            phase: StcodeSmartRunPhase::Complete,
+        },
+        StcodeSmartRunStep {
+            label: "Agent",
+            status: match agent_phase {
+                StcodeSmartRunPhase::Active => "Running",
+                StcodeSmartRunPhase::Complete => "Done",
+                StcodeSmartRunPhase::Blocked => "Blocked",
+                StcodeSmartRunPhase::Pending => "Waiting",
+            },
+            phase: agent_phase,
+        },
+        StcodeSmartRunStep {
+            label: kind.checkpoint_label(),
+            status: match checkpoint_phase {
+                StcodeSmartRunPhase::Complete => "Ready",
+                StcodeSmartRunPhase::Blocked => "Blocked",
+                _ => "Waiting",
+            },
+            phase: checkpoint_phase,
+        },
+    ]
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -816,6 +988,19 @@ impl StcodeSmartPromptContext {
         text
     }
 
+    fn run_context_summary(&self) -> String {
+        let branch = self.branch_name.as_deref().unwrap_or("detached HEAD");
+        let lane = if self.is_linked_worktree {
+            "isolated lane"
+        } else {
+            "main checkout"
+        };
+        format!(
+            "{branch}: {lane}, {} changed, {} conflict(s), {} branch overlap(s).",
+            self.changed_count, self.conflicted_count, self.shared_branch_lane_count
+        )
+    }
+
     fn resource_links(&self) -> Vec<acp::ContentBlock> {
         self.files
             .iter()
@@ -848,6 +1033,13 @@ fn stcode_smart_file_status(status: git::status::FileStatus) -> &'static str {
     } else {
         "Changed"
     }
+}
+
+fn stcode_smart_run_context_summary(context: Option<&StcodeSmartPromptContext>) -> String {
+    context.map_or_else(
+        || "No active Git repository detected.".to_string(),
+        StcodeSmartPromptContext::run_context_summary,
+    )
 }
 
 fn stcode_smart_prompt(
@@ -1159,6 +1351,7 @@ pub struct AgentPanel {
     new_thread_menu_handle: PopoverMenuHandle<ContextMenu>,
     agent_panel_menu_handle: PopoverMenuHandle<ContextMenu>,
     pending_stcode_worktree_thread_transfer: bool,
+    stcode_smart_run: Option<StcodeSmartRunState>,
     _extension_subscription: Option<Subscription>,
     _project_subscription: Subscription,
     zoomed: bool,
@@ -1234,6 +1427,7 @@ impl AgentPanel {
                     .to_vec(),
             )
         });
+        let stcode_smart_run = self.stcode_smart_run.clone();
         self.pending_serialization = Some(cx.background_spawn(async move {
             save_serialized_panel(
                 workspace_id,
@@ -1241,6 +1435,7 @@ impl AgentPanel {
                     selected_agent: Some(selected_agent),
                     last_active_thread,
                     draft_thread_prompt,
+                    stcode_smart_run,
                 },
                 kvp,
             )
@@ -1331,6 +1526,7 @@ impl AgentPanel {
                         global_last_used_agent.filter(|agent| !is_via_collab || agent.is_native());
 
                     if let Some(serialized_panel) = &serialized_panel {
+                        panel.stcode_smart_run = serialized_panel.stcode_smart_run.clone();
                         if let Some(selected_agent) = serialized_panel.selected_agent.clone() {
                             panel.selected_agent = selected_agent;
                         } else if let Some(agent) = global_fallback {
@@ -1517,6 +1713,7 @@ impl AgentPanel {
             new_thread_menu_handle: PopoverMenuHandle::default(),
             agent_panel_menu_handle: PopoverMenuHandle::default(),
             pending_stcode_worktree_thread_transfer: false,
+            stcode_smart_run: None,
 
             _extension_subscription: extension_subscription,
             _project_subscription,
@@ -4130,9 +4327,39 @@ impl AgentPanel {
         }
 
         Some(
-            StcodeActivityTimeline::new(self.active_agent_thread(cx), self.project.clone())
-                .into_any_element(),
+            StcodeActivityTimeline::new(
+                self.active_agent_thread(cx),
+                self.project.clone(),
+                self.stcode_smart_run_snapshot(cx),
+            )
+            .into_any_element(),
         )
+    }
+
+    fn stcode_smart_run_snapshot(&self, cx: &App) -> Option<StcodeSmartRunSnapshot> {
+        let run = self.stcode_smart_run.as_ref()?;
+        Some(run.snapshot(self.stcode_smart_run_thread_status(run, cx)))
+    }
+
+    fn stcode_smart_run_thread_status(
+        &self,
+        run: &StcodeSmartRunState,
+        cx: &App,
+    ) -> Option<StcodeSmartRunThreadStatus> {
+        let session_id = run.session_id.as_deref()?;
+        let thread = self.active_agent_thread(cx)?;
+        let thread = thread.read(cx);
+        if thread.session_id().0.to_string() != session_id {
+            return None;
+        }
+
+        Some(StcodeSmartRunThreadStatus {
+            has_entries: !thread.entries().is_empty(),
+            is_waiting_for_confirmation: thread.is_waiting_for_confirmation(),
+            is_generating: thread.status() == ThreadStatus::Generating,
+            has_in_progress_tool_calls: thread.has_in_progress_tool_calls(),
+            had_error: thread.had_error(),
+        })
     }
 
     fn start_stcode_smart_start(
@@ -4143,9 +4370,9 @@ impl AgentPanel {
     ) {
         let context = StcodeSmartPromptContext::from_project(&self.project, cx);
         self.start_stcode_smart_thread(
-            "AI Smart Start",
+            StcodeSmartRunKind::Start,
             build_stcode_smart_start_prompt(context.as_ref()),
-            "stcode_smart_start",
+            stcode_smart_run_context_summary(context.as_ref()),
             window,
             cx,
         );
@@ -4159,9 +4386,9 @@ impl AgentPanel {
     ) {
         let context = StcodeSmartPromptContext::from_project(&self.project, cx);
         self.start_stcode_smart_thread(
-            "AI Smart Panel",
+            StcodeSmartRunKind::Panel,
             build_stcode_smart_panel_prompt(context.as_ref()),
-            "stcode_smart_panel",
+            stcode_smart_run_context_summary(context.as_ref()),
             window,
             cx,
         );
@@ -4175,9 +4402,9 @@ impl AgentPanel {
     ) {
         let context = StcodeSmartPromptContext::from_project(&self.project, cx);
         self.start_stcode_smart_thread(
-            "AI Smart Parallel",
+            StcodeSmartRunKind::Parallel,
             build_stcode_smart_parallel_prompt(context.as_ref()),
-            "stcode_smart_parallel",
+            stcode_smart_run_context_summary(context.as_ref()),
             window,
             cx,
         );
@@ -4191,9 +4418,9 @@ impl AgentPanel {
     ) {
         let context = StcodeSmartPromptContext::from_project(&self.project, cx);
         self.start_stcode_smart_thread(
-            "AI Smart Merge",
+            StcodeSmartRunKind::Merge,
             build_stcode_smart_merge_prompt(context.as_ref()),
-            "stcode_smart_merge",
+            stcode_smart_run_context_summary(context.as_ref()),
             window,
             cx,
         );
@@ -4201,9 +4428,9 @@ impl AgentPanel {
 
     fn start_stcode_smart_thread(
         &mut self,
-        title: &'static str,
+        kind: StcodeSmartRunKind,
         blocks: Vec<acp::ContentBlock>,
-        source: &'static str,
+        context_summary: String,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -4211,20 +4438,34 @@ impl AgentPanel {
             return;
         }
 
-        self.external_thread(
+        let thread = self.create_agent_thread(
+            self.selected_agent(cx),
             None,
             None,
-            None,
-            Some(title.into()),
+            Some(kind.title().into()),
             Some(AgentInitialContent::ContentBlock {
                 blocks,
                 auto_submit: true,
             }),
-            true,
-            source,
+            kind.source(),
             window,
             cx,
         );
+        let session_id = thread
+            .conversation_view
+            .read(cx)
+            .root_session_id
+            .as_ref()
+            .map(|session_id| session_id.0.to_string());
+
+        self.stcode_smart_run = Some(StcodeSmartRunState {
+            kind,
+            session_id,
+            context_summary,
+        });
+        self.set_base_view(thread.into(), true, window, cx);
+        self.serialize(cx);
+        cx.notify();
     }
 
     fn key_context(&self) -> KeyContext {
@@ -5016,6 +5257,65 @@ mod tests {
         assert!(merge.contains("AI Smart Merge"));
         assert!(merge.contains("CI or local checks fail"));
         assert!(merge.contains("merge-ready"));
+    }
+
+    #[test]
+    fn test_stcode_smart_run_phase_tracks_agent_lifecycle() {
+        assert_eq!(stcode_smart_run_phase(None), StcodeSmartRunPhase::Pending);
+        assert_eq!(
+            stcode_smart_run_phase(Some(StcodeSmartRunThreadStatus {
+                has_entries: true,
+                is_waiting_for_confirmation: false,
+                is_generating: true,
+                has_in_progress_tool_calls: false,
+                had_error: false,
+            })),
+            StcodeSmartRunPhase::Active
+        );
+        assert_eq!(
+            stcode_smart_run_phase(Some(StcodeSmartRunThreadStatus {
+                has_entries: true,
+                is_waiting_for_confirmation: true,
+                is_generating: false,
+                has_in_progress_tool_calls: false,
+                had_error: false,
+            })),
+            StcodeSmartRunPhase::Blocked
+        );
+        assert_eq!(
+            stcode_smart_run_phase(Some(StcodeSmartRunThreadStatus {
+                has_entries: true,
+                is_waiting_for_confirmation: false,
+                is_generating: false,
+                has_in_progress_tool_calls: false,
+                had_error: false,
+            })),
+            StcodeSmartRunPhase::Complete
+        );
+
+        let run = StcodeSmartRunState {
+            kind: StcodeSmartRunKind::Merge,
+            session_id: Some("session-1".to_string()),
+            context_summary:
+                "feature: isolated lane, 0 changed, 0 conflict(s), 0 branch overlap(s).".to_string(),
+        };
+        let snapshot = run.snapshot(Some(StcodeSmartRunThreadStatus {
+            has_entries: true,
+            is_waiting_for_confirmation: false,
+            is_generating: false,
+            has_in_progress_tool_calls: false,
+            had_error: false,
+        }));
+
+        assert_eq!(snapshot.title, "AI Smart Merge");
+        assert_eq!(snapshot.phase, StcodeSmartRunPhase::Complete);
+        assert!(
+            snapshot
+                .steps
+                .iter()
+                .any(|step| step.label == "Merge-ready"
+                    && step.phase == StcodeSmartRunPhase::Complete)
+        );
     }
 
     #[test]

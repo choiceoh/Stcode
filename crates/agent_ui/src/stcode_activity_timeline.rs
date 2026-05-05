@@ -24,12 +24,45 @@ const MAX_TODO_LABEL_CHARS: usize = 84;
 pub(crate) struct StcodeActivityTimeline {
     thread: Option<Entity<AcpThread>>,
     project: Entity<Project>,
+    smart_run: Option<StcodeSmartRunSnapshot>,
 }
 
 impl StcodeActivityTimeline {
-    pub(crate) fn new(thread: Option<Entity<AcpThread>>, project: Entity<Project>) -> Self {
-        Self { thread, project }
+    pub(crate) fn new(
+        thread: Option<Entity<AcpThread>>,
+        project: Entity<Project>,
+        smart_run: Option<StcodeSmartRunSnapshot>,
+    ) -> Self {
+        Self {
+            thread,
+            project,
+            smart_run,
+        }
     }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum StcodeSmartRunPhase {
+    Pending,
+    Active,
+    Complete,
+    Blocked,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct StcodeSmartRunSnapshot {
+    pub(crate) title: String,
+    pub(crate) status: &'static str,
+    pub(crate) detail: String,
+    pub(crate) phase: StcodeSmartRunPhase,
+    pub(crate) steps: Vec<StcodeSmartRunStep>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct StcodeSmartRunStep {
+    pub(crate) label: &'static str,
+    pub(crate) status: &'static str,
+    pub(crate) phase: StcodeSmartRunPhase,
 }
 
 impl RenderOnce for StcodeActivityTimeline {
@@ -46,6 +79,7 @@ impl RenderOnce for StcodeActivityTimeline {
         let smart_panel = SmartPanelSnapshot::from_project(&self.project, thread, cx);
         let smart_parallel = SmartParallelSnapshot::from_project(&self.project, cx);
         let smart_merge = SmartMergeSnapshot::from_project(&self.project, cx);
+        let smart_run = self.smart_run;
 
         v_flex()
             .id("stcode-activity-timeline")
@@ -93,12 +127,133 @@ impl RenderOnce for StcodeActivityTimeline {
                             ),
                     ),
             )
+            .children(smart_run.map(|snapshot| render_stcode_smart_run_card(snapshot, cx)))
             .children(smart_panel.map(|snapshot| render_smart_panel_card(snapshot, cx)))
             .children(smart_todo.map(|snapshot| render_smart_todo_card(snapshot, cx)))
             .children(smart_start.map(|snapshot| render_smart_start_guard(snapshot, cx)))
             .children(smart_parallel.map(|snapshot| render_smart_parallel_card(snapshot, cx)))
             .children(smart_merge.map(|snapshot| render_smart_merge_card(snapshot, cx)))
             .children(snapshot.entries.into_iter().map(render_activity_entry))
+    }
+}
+
+fn render_stcode_smart_run_card(
+    snapshot: StcodeSmartRunSnapshot,
+    cx: &mut App,
+) -> impl IntoElement {
+    let (border_color, background_color) = match snapshot.phase {
+        StcodeSmartRunPhase::Complete => (
+            cx.theme().status().success_border,
+            cx.theme().status().success_background,
+        ),
+        StcodeSmartRunPhase::Blocked => (
+            cx.theme().status().error_border,
+            cx.theme().status().error_background,
+        ),
+        _ => (
+            cx.theme().status().warning_border,
+            cx.theme().status().warning_background,
+        ),
+    };
+
+    v_flex()
+        .id("stcode-smart-run-card")
+        .mt_1()
+        .gap_2()
+        .rounded_sm()
+        .border_1()
+        .border_color(border_color)
+        .bg(background_color)
+        .p_2()
+        .child(
+            h_flex()
+                .w_full()
+                .gap_2()
+                .items_start()
+                .child(
+                    Icon::new(stcode_smart_run_phase_icon(snapshot.phase))
+                        .size(IconSize::Small)
+                        .color(stcode_smart_run_phase_tone(snapshot.phase).color()),
+                )
+                .child(
+                    v_flex()
+                        .min_w_0()
+                        .flex_1()
+                        .gap_0p5()
+                        .child(
+                            h_flex()
+                                .w_full()
+                                .justify_between()
+                                .gap_2()
+                                .child(
+                                    Label::new(snapshot.title)
+                                        .size(LabelSize::Small)
+                                        .color(Color::Default),
+                                )
+                                .child(
+                                    Label::new(snapshot.status)
+                                        .size(LabelSize::XSmall)
+                                        .color(stcode_smart_run_phase_tone(snapshot.phase).color()),
+                                ),
+                        )
+                        .child(
+                            Label::new(snapshot.detail)
+                                .size(LabelSize::XSmall)
+                                .color(Color::Muted)
+                                .truncate(),
+                        ),
+                ),
+        )
+        .child(
+            h_flex()
+                .w_full()
+                .gap_1()
+                .flex_wrap()
+                .children(snapshot.steps.into_iter().map(render_stcode_smart_run_step)),
+        )
+}
+
+fn render_stcode_smart_run_step(step: StcodeSmartRunStep) -> impl IntoElement {
+    let tone = stcode_smart_run_phase_tone(step.phase);
+
+    h_flex()
+        .id(format!("stcode-smart-run-step-{}", step.label))
+        .gap_1()
+        .px_1p5()
+        .py_0p5()
+        .rounded_sm()
+        .child(
+            Icon::new(stcode_smart_run_phase_icon(step.phase))
+                .size(IconSize::XSmall)
+                .color(tone.color()),
+        )
+        .child(
+            Label::new(step.label)
+                .size(LabelSize::XSmall)
+                .color(Color::Default),
+        )
+        .child(
+            Label::new(step.status)
+                .size(LabelSize::XSmall)
+                .color(tone.color()),
+        )
+}
+
+fn stcode_smart_run_phase_icon(phase: StcodeSmartRunPhase) -> IconName {
+    match phase {
+        StcodeSmartRunPhase::Pending => IconName::Circle,
+        StcodeSmartRunPhase::Active => IconName::LoadCircle,
+        StcodeSmartRunPhase::Complete => IconName::Check,
+        StcodeSmartRunPhase::Blocked => IconName::Warning,
+    }
+}
+
+fn stcode_smart_run_phase_tone(phase: StcodeSmartRunPhase) -> ActivityTone {
+    match phase {
+        StcodeSmartRunPhase::Pending => ActivityTone::Idle,
+        StcodeSmartRunPhase::Active => ActivityTone::Running,
+        StcodeSmartRunPhase::Complete => ActivityTone::Done,
+        StcodeSmartRunPhase::Blocked => ActivityTone::Failed,
     }
 }
 
