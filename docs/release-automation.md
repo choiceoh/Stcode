@@ -2,6 +2,8 @@
 
 Stcode releases are published from GitHub Actions and attach macOS DMGs to a GitHub Release. The in-app updater reads these release assets through GitHub Releases, so the asset names must stay predictable.
 
+The normal path is automatic: when a pull request is merged into `main` or `codex/stcode-trim-test-fixtures`, the release workflow reads the latest `vX.Y.Z` tag, increments the patch version, creates the next tag, builds DMGs, and publishes the GitHub Release. No manual tag creation is required.
+
 ## Release Assets
 
 The workflow builds two macOS DMGs:
@@ -13,7 +15,18 @@ Each DMG also gets a `.sha256` file. The updater ignores checksum files and sele
 
 ## Running A Release
 
-Use the `Release Stcode` workflow in GitHub Actions.
+The default release path is PR merge:
+
+1. Merge a pull request into `main` or `codex/stcode-trim-test-fixtures`.
+2. The workflow resolves the next patch version from existing `vX.Y.Z` tags.
+3. The workflow builds macOS DMGs.
+4. The workflow creates the next GitHub Release and tag automatically.
+
+The first automatic release uses `v1.0.0` if no existing `vX.Y.Z` tag is present.
+
+Release workflow runs are serialized so simultaneous PR merges do not resolve the same next patch version.
+
+Manual releases are still available through the `Release Stcode` workflow in GitHub Actions.
 
 For a normal manual release:
 
@@ -23,7 +36,7 @@ For a normal manual release:
 4. Inspect the generated GitHub Release assets.
 5. Publish the draft release when the DMGs are good.
 
-Pushing a tag such as `v1.2.3` also runs the workflow. Tag-triggered releases are published immediately instead of being created as drafts.
+Manual releases create or update the matching `v<version>` release. Tag pushes do not trigger this workflow, because automatic releases create tags themselves and a tag trigger would rebuild the same release twice.
 
 ## Local Packaging
 
