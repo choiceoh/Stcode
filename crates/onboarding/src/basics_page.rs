@@ -565,6 +565,7 @@ fn render_registry_agent_button(
 }
 
 fn render_zed_agent_button(user_store: &Entity<UserStore>, cx: &mut App) -> impl IntoElement {
+    let is_stcode = AppLaunchMode::is_stcode(cx);
     let client = Client::global(cx);
     let status = *client.status().borrow();
 
@@ -581,7 +582,12 @@ fn render_zed_agent_button(user_store: &Entity<UserStore>, cx: &mut App) -> impl
     let is_signing_in = status.is_signing_in();
     let is_signed_in = !is_signed_out;
 
-    let state_element = if is_signed_out {
+    let state_element = if is_stcode {
+        Label::new("Configure Providers")
+            .size(LabelSize::XSmall)
+            .color(Color::Muted)
+            .into_any_element()
+    } else if is_signed_out {
         Label::new("Sign In")
             .size(LabelSize::XSmall)
             .color(Color::Muted)
@@ -622,9 +628,13 @@ fn render_zed_agent_button(user_store: &Entity<UserStore>, cx: &mut App) -> impl
             "Zed Agent"
         })
         .state(state_element)
-        .disabled(is_trial || is_pro)
+        .disabled(!is_stcode && (is_trial || is_pro))
         .map(|this| {
-            if is_signed_in && is_free {
+            if is_stcode {
+                this.on_click(move |_, window, cx| {
+                    window.dispatch_action(zed_actions::agent::OpenSettings.boxed_clone(), cx);
+                })
+            } else if is_signed_in && is_free {
                 this.on_click(move |_, _window, cx| {
                     telemetry::event!("Start Trial Clicked", state = "post-sign-in");
                     cx.open_url(&zed_urls::start_trial_url(cx))

@@ -272,7 +272,7 @@ impl Render for Onboarding {
             "Zed"
         };
         let tagline = if AppLaunchMode::is_stcode(cx) {
-            "The agent workspace for what's next"
+            "Hand off code work to agents"
         } else {
             "The editor for what's next"
         };
