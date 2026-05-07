@@ -1,7 +1,5 @@
 mod create_file_parser;
 mod edit_parser;
-#[cfg(all(test, feature = "unit-eval"))]
-mod evals;
 pub mod reindent;
 pub mod streaming_fuzzy_matcher;
 
