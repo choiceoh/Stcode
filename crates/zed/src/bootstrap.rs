@@ -741,7 +741,6 @@ pub(crate) fn run(launch_mode: LaunchMode) {
         extensions_ui::init(cx);
         edit_prediction::init(cx);
         json_schema_store::init(cx);
-        which_key::init(cx);
 
         cx.observe_global::<SettingsStore>({
             let http = app_state.client.http_client();

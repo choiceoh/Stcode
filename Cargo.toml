@@ -178,7 +178,6 @@ members = [
     "crates/util",
     "crates/util_macros",
     "crates/watch",
-    "crates/which_key",
     "crates/workspace",
     "crates/worktree",
     "crates/x_ai",
@@ -390,7 +389,6 @@ ui_macros = { path = "crates/ui_macros" }
 ui_prompt = { path = "crates/ui_prompt" }
 util = { path = "crates/util" }
 util_macros = { path = "crates/util_macros" }
-which_key = { path = "crates/which_key" }
 
 watch = { path = "crates/watch" }
 workspace = { path = "crates/workspace" }
