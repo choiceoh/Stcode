@@ -15,7 +15,6 @@ members = [
     "crates/assets",
     "crates/audio",
     "crates/auto_update",
-    "crates/auto_update_helper",
     "crates/auto_update_ui",
     "crates/aws_http_client",
     "crates/bedrock",
@@ -42,7 +41,6 @@ members = [
     "crates/dap_adapters",
     "crates/db",
     "crates/debug_adapter_extension",
-    "crates/denoise",
     "crates/diagnostics",
     "crates/edit_prediction",
     "crates/edit_prediction_context",
@@ -78,7 +76,6 @@ members = [
     "crates/gpui_platform",
     "crates/gpui_tokio",
     "crates/gpui_util",
-    "crates/gpui_web",
     "crates/gpui_wgpu",
     "crates/gpui_windows",
     "crates/html_to_markdown",
@@ -285,7 +282,6 @@ gpui_linux = { path = "crates/gpui_linux", default-features = false }
 gpui_macos = { path = "crates/gpui_macos", default-features = false }
 gpui_macros = { path = "crates/gpui_macros" }
 gpui_platform = { path = "crates/gpui_platform", default-features = false }
-gpui_web = { path = "crates/gpui_web" }
 gpui_wgpu = { path = "crates/gpui_wgpu" }
 gpui_windows = { path = "crates/gpui_windows", default-features = false }
 gpui_tokio = { path = "crates/gpui_tokio" }
