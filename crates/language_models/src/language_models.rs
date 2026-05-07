@@ -8,7 +8,6 @@ use gpui::{App, Context, Entity};
 use language_model::{
     ConfiguredModel, LanguageModelProviderId, LanguageModelRegistry, ZED_CLOUD_PROVIDER_ID,
 };
-use provider::deepseek::DeepSeekLanguageModelProvider;
 
 pub mod extension;
 pub mod provider;
@@ -21,14 +20,9 @@ use crate::provider::bedrock::BedrockLanguageModelProvider;
 use crate::provider::cloud::CloudLanguageModelProvider;
 use crate::provider::copilot_chat::CopilotChatLanguageModelProvider;
 use crate::provider::google::GoogleLanguageModelProvider;
-use crate::provider::lmstudio::LmStudioLanguageModelProvider;
-pub use crate::provider::mistral::MistralLanguageModelProvider;
-use crate::provider::ollama::OllamaLanguageModelProvider;
 use crate::provider::open_ai::OpenAiLanguageModelProvider;
 use crate::provider::open_ai_compatible::OpenAiCompatibleLanguageModelProvider;
-use crate::provider::open_router::OpenRouterLanguageModelProvider;
 use crate::provider::opencode::OpenCodeLanguageModelProvider;
-use crate::provider::vercel::VercelLanguageModelProvider;
 use crate::provider::vercel_ai_gateway::VercelAiGatewayLanguageModelProvider;
 use crate::provider::x_ai::XAiLanguageModelProvider;
 pub use crate::settings::*;
@@ -251,30 +245,6 @@ fn register_language_model_providers(
         cx,
     );
     registry.register_provider(
-        Arc::new(OllamaLanguageModelProvider::new(
-            client.http_client(),
-            credentials_provider.clone(),
-            cx,
-        )),
-        cx,
-    );
-    registry.register_provider(
-        Arc::new(LmStudioLanguageModelProvider::new(
-            client.http_client(),
-            credentials_provider.clone(),
-            cx,
-        )),
-        cx,
-    );
-    registry.register_provider(
-        Arc::new(DeepSeekLanguageModelProvider::new(
-            client.http_client(),
-            credentials_provider.clone(),
-            cx,
-        )),
-        cx,
-    );
-    registry.register_provider(
         Arc::new(GoogleLanguageModelProvider::new(
             client.http_client(),
             credentials_provider.clone(),
@@ -283,31 +253,7 @@ fn register_language_model_providers(
         cx,
     );
     registry.register_provider(
-        MistralLanguageModelProvider::global(
-            client.http_client(),
-            credentials_provider.clone(),
-            cx,
-        ),
-        cx,
-    );
-    registry.register_provider(
         Arc::new(BedrockLanguageModelProvider::new(
-            client.http_client(),
-            credentials_provider.clone(),
-            cx,
-        )),
-        cx,
-    );
-    registry.register_provider(
-        Arc::new(OpenRouterLanguageModelProvider::new(
-            client.http_client(),
-            credentials_provider.clone(),
-            cx,
-        )),
-        cx,
-    );
-    registry.register_provider(
-        Arc::new(VercelLanguageModelProvider::new(
             client.http_client(),
             credentials_provider.clone(),
             cx,
