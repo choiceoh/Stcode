@@ -705,7 +705,6 @@ pub(crate) fn run(launch_mode: LaunchMode) {
 
         go_to_line::init(cx);
         file_finder::init(cx);
-        tab_switcher::init(cx);
         outline::init(cx);
         project_symbols::init(cx);
         project_panel::init(cx);

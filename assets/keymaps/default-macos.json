@@ -713,8 +713,6 @@
       "ctrl-alt-cmd-p": "settings_profile_selector::Toggle",
       "cmd-t": "project_symbols::Toggle",
       "cmd-p": "file_finder::Toggle",
-      "ctrl-shift-tab": ["tab_switcher::Toggle", { "select_last": true }],
-      "ctrl-tab": "tab_switcher::Toggle",
       "cmd-shift-p": "command_palette::Toggle",
       "cmd-shift-m": "diagnostics::Deploy",
       "cmd-shift-e": "project_panel::ToggleFocus",
@@ -1130,16 +1128,6 @@
       "cmd-shift-a": "workspace::AddFolderToProject",
       "shift-backspace": "recent_projects::RemoveSelected",
       "cmd-shift-enter": "recent_projects::AddToWorkspace",
-    },
-  },
-  {
-    "context": "TabSwitcher",
-    "use_key_equivalents": true,
-    "bindings": {
-      "ctrl-shift-tab": "menu::SelectPrevious",
-      "ctrl-up": "menu::SelectPrevious",
-      "ctrl-down": "menu::SelectNext",
-      "ctrl-backspace": "tab_switcher::CloseSelectedItem",
     },
   },
   {

@@ -5134,7 +5134,6 @@ mod tests {
                 "stash_picker",
                 "svg",
                 "syntax_tree_view",
-                "tab_switcher",
                 "task",
                 "terminal",
                 "terminal_panel",
