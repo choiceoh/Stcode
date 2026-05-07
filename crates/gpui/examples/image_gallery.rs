@@ -254,21 +254,8 @@ fn run_example() {
     let app = gpui_platform::single_threaded_web();
 
     app.run(move |cx: &mut App| {
-        #[cfg(not(target_family = "wasm"))]
-        {
-            let http_client = ReqwestClient::user_agent("gpui example").unwrap();
-            cx.set_http_client(Arc::new(http_client));
-        }
-        #[cfg(target_family = "wasm")]
-        {
-            // Safety: the web examples run single-threaded; the client is
-            // created and used exclusively on the main thread.
-            let http_client = unsafe {
-                gpui_web::FetchHttpClient::with_user_agent("gpui example")
-                    .expect("failed to create FetchHttpClient")
-            };
-            cx.set_http_client(Arc::new(http_client));
-        }
+        let http_client = ReqwestClient::user_agent("gpui example").unwrap();
+        cx.set_http_client(Arc::new(http_client));
 
         cx.activate(true);
         cx.on_action(|_: &Quit, cx| cx.quit());
