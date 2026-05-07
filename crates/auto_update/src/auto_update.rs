@@ -12,8 +12,12 @@ use release_channel::{AppCommitSha, ReleaseChannel};
 use semver::Version;
 use serde::{Deserialize, Serialize};
 use settings::{RegisterSetting, Settings, SettingsStore};
+use sha2::{Digest, Sha256};
 use smol::fs::File;
-use smol::{fs, io::AsyncReadExt};
+use smol::{
+    fs,
+    io::{AsyncReadExt, AsyncWriteExt},
+};
 use std::mem;
 use std::{
     env::{
@@ -172,6 +176,10 @@ pub struct AutoUpdater {
 pub struct ReleaseAsset {
     pub version: String,
     pub url: String,
+    #[serde(default)]
+    pub digest: Option<String>,
+    #[serde(default)]
+    pub checksum_url: Option<String>,
 }
 
 struct MacOsUnmounter<'a> {
@@ -938,11 +946,25 @@ fn stcode_release_asset_from_github_release(
                 release.tag_name
             )
         })?;
+    let checksum_asset = stcode_checksum_asset_for(release, &asset.name);
 
     Ok(ReleaseAsset {
         version,
         url: asset.browser_download_url.clone(),
+        digest: asset.digest.as_deref().and_then(extract_sha_256),
+        checksum_url: checksum_asset.map(|asset| asset.browser_download_url.clone()),
     })
+}
+
+fn stcode_checksum_asset_for<'a>(
+    release: &'a http_client::github::GithubRelease,
+    asset_name: &str,
+) -> Option<&'a http_client::github::GithubReleaseAsset> {
+    let checksum_name = format!("{}.sha256", asset_name.to_ascii_lowercase());
+    release
+        .assets
+        .iter()
+        .find(|asset| asset.name.to_ascii_lowercase() == checksum_name)
 }
 
 fn stcode_semver_from_release_tag(tag_name: &str) -> Option<String> {
@@ -1053,6 +1075,14 @@ fn stcode_update_asset_has_other_arch(name: &str, arch: &str) -> bool {
     }
 }
 
+fn extract_sha_256(text: &str) -> Option<String> {
+    text.split(|character: char| !character.is_ascii_hexdigit())
+        .find(|token| {
+            token.len() == 64 && token.chars().all(|character| character.is_ascii_hexdigit())
+        })
+        .map(|token| token.to_ascii_lowercase())
+}
+
 async fn download_remote_server_binary(
     target_path: &PathBuf,
     release: ReleaseAsset,
@@ -1135,6 +1165,7 @@ async fn download_release(
     release: ReleaseAsset,
     client: Arc<HttpClientWithUrl>,
 ) -> Result<()> {
+    let expected_sha_256 = release_expected_sha_256(&release, client.clone()).await?;
     let mut target_file = File::create(&target_path).await?;
 
     let mut response = client.get(&release.url, Default::default(), true).await?;
@@ -1143,10 +1174,79 @@ async fn download_release(
         "failed to download update: {:?}",
         response.status()
     );
-    smol::io::copy(response.body_mut(), &mut target_file).await?;
+    let actual_sha_256 = copy_with_sha_256(response.body_mut(), &mut target_file).await?;
+    if let Some(expected_sha_256) = expected_sha_256 {
+        if actual_sha_256 != expected_sha_256 {
+            if let Err(error) = fs::remove_file(target_path).await {
+                log::warn!(
+                    "failed to remove update with SHA-256 mismatch. path:{:?}, error:{:#}",
+                    target_path,
+                    error
+                );
+            }
+
+            anyhow::bail!(
+                "downloaded update SHA-256 mismatch for {}. Expected: {}, Got: {}",
+                release.url,
+                expected_sha_256,
+                actual_sha_256
+            );
+        }
+    }
     log::info!("downloaded update. path:{:?}", target_path);
 
     Ok(())
+}
+
+async fn release_expected_sha_256(
+    release: &ReleaseAsset,
+    client: Arc<HttpClientWithUrl>,
+) -> Result<Option<String>> {
+    if let Some(digest) = release.digest.as_deref().and_then(extract_sha_256) {
+        return Ok(Some(digest));
+    }
+
+    let Some(checksum_url) = release.checksum_url.as_deref() else {
+        return Ok(None);
+    };
+
+    let mut response = client.get(checksum_url, Default::default(), true).await?;
+    anyhow::ensure!(
+        response.status().is_success(),
+        "failed to download update checksum: {:?}",
+        response.status()
+    );
+
+    let mut checksum_body = String::new();
+    response
+        .body_mut()
+        .read_to_string(&mut checksum_body)
+        .await?;
+    extract_sha_256(&checksum_body)
+        .with_context(|| format!("checksum file {checksum_url} did not contain a SHA-256 digest"))
+        .map(Some)
+}
+
+async fn copy_with_sha_256(
+    reader: &mut (impl smol::io::AsyncRead + Unpin),
+    writer: &mut (impl smol::io::AsyncWrite + Unpin),
+) -> Result<String> {
+    let mut hasher = Sha256::new();
+    let mut buffer = [0; 32 * 1024];
+
+    loop {
+        let bytes_read = reader.read(&mut buffer).await?;
+        if bytes_read == 0 {
+            break;
+        }
+
+        let chunk = &buffer[..bytes_read];
+        hasher.update(chunk);
+        writer.write_all(chunk).await?;
+    }
+    writer.flush().await?;
+
+    Ok(format!("{:x}", hasher.finalize()))
 }
 
 async fn install_release_linux(
@@ -1641,6 +1741,42 @@ mod tests {
     }
 
     #[test]
+    fn test_stcode_github_release_attaches_checksum_asset() {
+        let release = http_client::github::GithubRelease {
+            tag_name: "v1.2.3".to_string(),
+            pre_release: false,
+            tarball_url: "https://example.com/source.tar.gz".to_string(),
+            zipball_url: "https://example.com/source.zip".to_string(),
+            assets: vec![
+                http_client::github::GithubReleaseAsset {
+                    name: "Stcode-aarch64.dmg".to_string(),
+                    browser_download_url: "https://example.com/app.dmg".to_string(),
+                    digest: Some(
+                        "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+                            .to_string(),
+                    ),
+                },
+                http_client::github::GithubReleaseAsset {
+                    name: "Stcode-aarch64.dmg.sha256".to_string(),
+                    browser_download_url: "https://example.com/app.dmg.sha256".to_string(),
+                    digest: None,
+                },
+            ],
+        };
+
+        let asset = stcode_release_asset_from_github_release(&release, "macos", "aarch64").unwrap();
+
+        assert_eq!(
+            asset.digest.as_deref(),
+            Some("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
+        );
+        assert_eq!(
+            asset.checksum_url.as_deref(),
+            Some("https://example.com/app.dmg.sha256")
+        );
+    }
+
+    #[test]
     fn test_stcode_github_release_rejects_checksum_assets() {
         let release = http_client::github::GithubRelease {
             tag_name: "v1.2.3".to_string(),
@@ -1655,6 +1791,92 @@ mod tests {
         };
 
         assert!(stcode_release_asset_from_github_release(&release, "macos", "aarch64").is_err());
+    }
+
+    #[gpui::test]
+    async fn test_download_release_validates_checksum(cx: &mut TestAppContext) {
+        cx.background_executor.allow_parking();
+        let expected_sha_256 = format!("{:x}", Sha256::digest(b"<fake-zed-update>"));
+        let expected_sha_256_for_handler = expected_sha_256.clone();
+        let fake_client_http = FakeHttpClient::create(move |req| {
+            let expected_sha_256 = expected_sha_256_for_handler.clone();
+            async move {
+                if req.uri().path() == "/new-download" {
+                    return Ok(Response::builder()
+                        .status(200)
+                        .body("<fake-zed-update>".into())
+                        .unwrap());
+                } else if req.uri().path() == "/new-download.sha256" {
+                    return Ok(Response::builder()
+                        .status(200)
+                        .body(format!("{expected_sha_256}  Stcode.dmg").into())
+                        .unwrap());
+                }
+
+                Ok(Response::builder().status(404).body("".into()).unwrap())
+            }
+        });
+        let tmp_dir = tempdir().unwrap();
+        let target_path = tmp_dir.path().join("Stcode.dmg");
+
+        download_release(
+            &target_path,
+            ReleaseAsset {
+                version: "1.2.3".to_string(),
+                url: "https://test.example/new-download".to_string(),
+                digest: None,
+                checksum_url: Some("https://test.example/new-download.sha256".to_string()),
+            },
+            fake_client_http,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            std::fs::read_to_string(target_path).unwrap(),
+            "<fake-zed-update>"
+        );
+    }
+
+    #[gpui::test]
+    async fn test_download_release_rejects_checksum_mismatch(cx: &mut TestAppContext) {
+        cx.background_executor.allow_parking();
+        let fake_client_http = FakeHttpClient::create(move |req| async move {
+            if req.uri().path() == "/new-download" {
+                return Ok(Response::builder()
+                    .status(200)
+                    .body("<fake-zed-update>".into())
+                    .unwrap());
+            } else if req.uri().path() == "/new-download.sha256" {
+                return Ok(Response::builder()
+                    .status(200)
+                    .body(
+                        "0000000000000000000000000000000000000000000000000000000000000000  Stcode.dmg"
+                            .into(),
+                    )
+                    .unwrap());
+            }
+
+            Ok(Response::builder().status(404).body("".into()).unwrap())
+        });
+        let tmp_dir = tempdir().unwrap();
+        let target_path = tmp_dir.path().join("Stcode.dmg");
+
+        let error = download_release(
+            &target_path,
+            ReleaseAsset {
+                version: "1.2.3".to_string(),
+                url: "https://test.example/new-download".to_string(),
+                digest: None,
+                checksum_url: Some("https://test.example/new-download.sha256".to_string()),
+            },
+            fake_client_http,
+        )
+        .await
+        .unwrap_err();
+
+        assert!(error.to_string().contains("SHA-256 mismatch"));
+        assert!(!target_path.exists());
     }
 
     #[test]
