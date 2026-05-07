@@ -238,30 +238,6 @@ pub(crate) fn run(launch_mode: LaunchMode) {
         return;
     }
 
-    #[cfg(target_os = "windows")]
-    if args.record_etw_trace {
-        let zed_pid = args
-            .etw_zed_pid
-            .and_then(|pid| if pid >= 0 { Some(pid as u32) } else { None });
-        let Some(output_path) = args.etw_output else {
-            eprintln!("--etw-output is required for --record-etw-trace");
-            process::exit(1);
-        };
-
-        let Some(etw_socket) = args.etw_socket else {
-            eprintln!("--etw-socket is required for --record-etw-trace");
-            process::exit(1);
-        };
-
-        if let Err(error) =
-            etw_tracing::record_etw_trace(zed_pid, &output_path, etw_socket.as_str())
-        {
-            eprintln!("ETW trace recording failed: {error:#}");
-            process::exit(1);
-        }
-        return;
-    }
-
     // `zed --nc` Makes zed operate in nc/netcat mode for use with MCP
     if let Some(socket) = &args.nc {
         match nc::main(socket) {
@@ -698,8 +674,6 @@ pub(crate) fn run(launch_mode: LaunchMode) {
         zed::telemetry_log::init(cx);
         zed::remote_debug::init(cx);
         edit_prediction_ui::init(cx);
-        web_search::init(cx);
-        web_search_providers::init(app_state.client.clone(), app_state.user_store.clone(), cx);
         snippet_provider::init(cx);
         edit_prediction_registry::init(app_state.client.clone(), app_state.user_store.clone(), cx);
         let prompt_builder = PromptBuilder::load(app_state.fs.clone(), stdout_is_a_pty(), cx);
@@ -768,8 +742,6 @@ pub(crate) fn run(launch_mode: LaunchMode) {
         edit_prediction::init(cx);
         json_schema_store::init(cx);
         which_key::init(cx);
-        #[cfg(target_os = "windows")]
-        etw_tracing::init(cx);
 
         cx.observe_global::<SettingsStore>({
             let http = app_state.client.http_client();
@@ -1639,26 +1611,6 @@ struct Args {
     /// Output current environment variables as JSON to stdout
     #[arg(long, hide = true)]
     printenv: bool,
-
-    /// Record an ETW trace. Must be run as administrator.
-    #[cfg(target_os = "windows")]
-    #[arg(long, hide = true)]
-    record_etw_trace: bool,
-
-    /// The PID of the Zed process to trace for heap analysis.
-    #[cfg(target_os = "windows")]
-    #[arg(long, hide = true, allow_hyphen_values = true)]
-    etw_zed_pid: Option<i64>,
-
-    /// Output path for the ETW trace file.
-    #[cfg(target_os = "windows")]
-    #[arg(long, hide = true)]
-    etw_output: Option<PathBuf>,
-
-    /// Unix socket path for IPC with the parent Zed process.
-    #[cfg(target_os = "windows")]
-    #[arg(long, hide = true)]
-    etw_socket: Option<String>,
 }
 
 #[derive(Clone, Debug)]

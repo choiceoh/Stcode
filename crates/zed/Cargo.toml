@@ -143,7 +143,6 @@ log.workspace = true
 markdown.workspace = true
 markdown_preview.workspace = true
 menu.workspace = true
-migrator.workspace = true
 mimalloc = { version = "0.1", optional = true }
 nc.workspace = true
 node_runtime.workspace = true
@@ -203,8 +202,6 @@ urlencoding.workspace = true
 util.workspace = true
 uuid.workspace = true
 watch.workspace = true
-web_search.workspace = true
-web_search_providers.workspace = true
 which_key.workspace = true
 workspace.workspace = true
 zed_actions.workspace = true
@@ -213,7 +210,6 @@ zlog.workspace = true
 zlog_settings.workspace = true
 
 [target.'cfg(target_os = "windows")'.dependencies]
-etw_tracing.workspace = true
 windows.workspace = true
 gpui = { workspace = true, features = [
     "input-latency-histogram",
