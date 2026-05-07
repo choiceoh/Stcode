@@ -1055,6 +1055,8 @@ impl TitleBar {
         status: &client::Status,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
+        let is_stcode = AppLaunchMode::is_stcode(cx);
+
         match status {
             client::Status::ConnectionError
             | client::Status::ConnectionLost
@@ -1070,13 +1072,25 @@ impl TitleBar {
             client::Status::UpgradeRequired => {
                 let auto_updater = auto_update::AutoUpdater::get(cx);
                 let label = match auto_updater.map(|auto_update| auto_update.read(cx).status()) {
-                    Some(AutoUpdateStatus::Updated { .. }) => "Please restart Zed to Collaborate",
+                    Some(AutoUpdateStatus::Updated { .. }) => {
+                        if is_stcode {
+                            "Please restart Stcode to reconnect"
+                        } else {
+                            "Please restart Zed to Collaborate"
+                        }
+                    }
                     Some(AutoUpdateStatus::Installing { .. })
                     | Some(AutoUpdateStatus::Downloading { .. })
                     | Some(AutoUpdateStatus::Checking) => "Updating...",
                     Some(AutoUpdateStatus::Idle)
                     | Some(AutoUpdateStatus::Errored { .. })
-                    | None => "Please update Zed to Collaborate",
+                    | None => {
+                        if is_stcode {
+                            "Please update Stcode to reconnect"
+                        } else {
+                            "Please update Zed to Collaborate"
+                        }
+                    }
                 };
 
                 Some(
@@ -1098,10 +1112,15 @@ impl TitleBar {
         }
     }
 
-    pub fn render_sign_in_button(&mut self, _: &mut Context<Self>) -> Button {
+    pub fn render_sign_in_button(&mut self, cx: &mut Context<Self>) -> Button {
         let client = self.client.clone();
         let workspace = self.workspace.clone();
-        Button::new("sign_in", "Sign In")
+        let label = if AppLaunchMode::is_stcode(cx) {
+            "Connect Account"
+        } else {
+            "Sign In"
+        };
+        Button::new("sign_in", label)
             .label_size(LabelSize::Small)
             .on_click(move |_, window, cx| {
                 let client = client.clone();
@@ -1206,7 +1225,9 @@ impl TitleBar {
                                     .into_any_element()
                             },
                             move |_, cx| {
-                                cx.open_url(&zed_urls::account_url(cx));
+                                if !is_stcode {
+                                    cx.open_url(&zed_urls::account_url(cx));
+                                }
                             },
                         )
                         .separator()
@@ -1218,7 +1239,14 @@ impl TitleBar {
                                     .w_full()
                                     .gap_1()
                                     .justify_between()
-                                    .child(Label::new("Restart to update Zed").color(Color::Accent))
+                                    .child(
+                                        Label::new(if is_stcode {
+                                            "Restart to update Stcode"
+                                        } else {
+                                            "Restart to update Zed"
+                                        })
+                                        .color(Color::Accent),
+                                    )
                                     .child(
                                         Icon::new(IconName::Download)
                                             .size(IconSize::Small)
