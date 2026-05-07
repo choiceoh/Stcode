@@ -188,7 +188,7 @@ impl WelcomeMode {
 
     fn tagline(self) -> &'static str {
         match self {
-            Self::Stcode => "The agent workspace for what's next",
+            Self::Stcode => "Hand off code work to agents",
             Self::Zed => "The editor for what's next",
         }
     }
@@ -202,7 +202,7 @@ impl WelcomeMode {
 
     fn agent_card_title(self) -> &'static str {
         match self {
-            Self::Stcode => "Work with Stcode Agent",
+            Self::Stcode => "Start with a prompt",
             Self::Zed => "Collaborate with Agents",
         }
     }
@@ -210,7 +210,7 @@ impl WelcomeMode {
     fn agent_card_description(self) -> &'static str {
         match self {
             Self::Stcode => {
-                "Start a thread, let agents inspect the workspace, run tools, and return changes without making the terminal the primary interface."
+                "Describe the change, let agents inspect the workspace, run checks, and return a clean handoff."
             }
             Self::Zed => {
                 "Run multiple threads at once, mix and match any ACP-compatible agent, and keep work conflict-free with worktrees."
@@ -220,14 +220,14 @@ impl WelcomeMode {
 
     fn agent_button_label(self) -> &'static str {
         match self {
-            Self::Stcode => "Open Stcode Agent",
+            Self::Stcode => "Start Agent Thread",
             Self::Zed => "Open Agent Panel",
         }
     }
 
     fn onboarding_button_label(self) -> &'static str {
         match self {
-            Self::Stcode => "Return to Setup",
+            Self::Stcode => "Back to Setup",
             Self::Zed => "Return to Onboarding",
         }
     }
@@ -296,11 +296,11 @@ fn zed_content() -> (Section<4>, Section<3>) {
 fn stcode_content() -> (Section<4>, Section<3>) {
     (
         Section {
-            title: "Get Started",
+            title: "Start Work",
             entries: [
                 SectionEntry {
                     icon: IconName::ZedAgent,
-                    title: "Open Stcode Agent",
+                    title: "Start Agent Thread",
                     action: &ToggleFocus,
                     visibility_guard: SectionVisibility::Always,
                 },
@@ -312,7 +312,7 @@ fn stcode_content() -> (Section<4>, Section<3>) {
                 },
                 SectionEntry {
                     icon: IconName::CloudDownload,
-                    title: "Clone Repository",
+                    title: "Clone Workspace",
                     action: &GitClone,
                     visibility_guard: SectionVisibility::Always,
                 },
@@ -325,7 +325,7 @@ fn stcode_content() -> (Section<4>, Section<3>) {
             ],
         },
         Section {
-            title: "Configure",
+            title: "Tune Setup",
             entries: [
                 SectionEntry {
                     icon: IconName::Settings,
@@ -854,7 +854,7 @@ mod tests {
         );
         assert_eq!(
             WelcomeMode::Stcode.agent_button_label(),
-            "Open Stcode Agent"
+            "Start Agent Thread"
         );
     }
 }

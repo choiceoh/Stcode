@@ -4,7 +4,6 @@ use ai_onboarding::{AgentPanelOnboardingCard, PlanDefinitions};
 use client::zed_urls;
 use gpui::{AnyElement, App, IntoElement, RenderOnce, Window};
 use ui::{Divider, Tooltip, prelude::*};
-use workspace::AppLaunchMode;
 
 #[derive(IntoElement, RegisterComponent)]
 pub struct EndTrialUpsell {
@@ -19,11 +18,7 @@ impl EndTrialUpsell {
 
 impl RenderOnce for EndTrialUpsell {
     fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
-        let pro_plan_name = if AppLaunchMode::is_stcode(cx) {
-            "Stcode Pro"
-        } else {
-            "Zed Pro"
-        };
+        let pro_plan_name = "Zed Pro";
 
         let pro_section = v_flex()
             .gap_1()

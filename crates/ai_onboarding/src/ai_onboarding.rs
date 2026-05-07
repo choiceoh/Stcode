@@ -16,8 +16,10 @@ pub use young_account_banner::YoungAccountBanner;
 use std::sync::Arc;
 
 use client::{Client, UserStore, zed_urls};
-use gpui::{AnyElement, Entity, IntoElement, ParentElement};
-use ui::{Divider, RegisterComponent, Tooltip, Vector, VectorName, prelude::*};
+use gpui::{Action, AnyElement, Entity, IntoElement, ParentElement};
+use ui::{
+    Divider, List, ListBulletItem, RegisterComponent, Tooltip, Vector, VectorName, prelude::*,
+};
 use workspace::AppLaunchMode;
 
 #[derive(PartialEq)]
@@ -156,13 +158,8 @@ impl ZedAiOnboarding {
         }
     }
 
-    fn plan_name(cx: &App, plan: &str) -> String {
-        let app_name = if AppLaunchMode::is_stcode(cx) {
-            "Stcode"
-        } else {
-            "Zed"
-        };
-        format!("{app_name} {plan}")
+    fn plan_name(_cx: &App, plan: &str) -> String {
+        format!("Zed {plan}")
     }
 
     fn render_sign_in_disclaimer(&self, cx: &mut App) -> AnyElement {
@@ -199,6 +196,53 @@ impl ZedAiOnboarding {
                 }),
             )
             .children(self.render_dismiss_button())
+            .into_any_element()
+    }
+
+    fn render_stcode_setup_state(&self, _cx: &mut App) -> AnyElement {
+        let continue_callback = self.continue_with_zed_ai.clone();
+
+        v_flex()
+            .w_full()
+            .relative()
+            .gap_1()
+            .child(Headline::new("Set up Stcode agents"))
+            .child(
+                Label::new(
+                    "Use your own provider keys, local models, or external agents. Stcode is ready to work with the tools you bring.",
+                )
+                .color(Color::Muted)
+                .mb_2(),
+            )
+            .child(
+                List::new()
+                    .child(ListBulletItem::new("Connect model providers in Agent Settings"))
+                    .child(ListBulletItem::new("Keep using configured external agents"))
+                    .child(ListBulletItem::new("Start work from the agent panel when ready")),
+            )
+            .children(self.render_dismiss_button())
+            .child(
+                v_flex()
+                    .mt_2()
+                    .gap_1()
+                    .child(
+                        Button::new("configure-providers", "Configure Providers")
+                            .full_width()
+                            .style(ButtonStyle::Tinted(ui::TintColor::Accent))
+                            .on_click(move |_, window, cx| {
+                                window.dispatch_action(
+                                    zed_actions::agent::OpenSettings.boxed_clone(),
+                                    cx,
+                                );
+                            }),
+                    )
+                    .child(
+                        Button::new("continue-current-setup", "Continue with Current Setup")
+                            .full_width()
+                            .style(ButtonStyle::Outlined)
+                            .on_click(move |_, window, cx| continue_callback(window, cx)),
+                    ),
+            )
             .into_any_element()
     }
 
@@ -388,6 +432,10 @@ impl ZedAiOnboarding {
 
 impl RenderOnce for ZedAiOnboarding {
     fn render(self, _window: &mut ui::Window, cx: &mut App) -> impl IntoElement {
+        if AppLaunchMode::is_stcode(cx) {
+            return self.render_stcode_setup_state(cx);
+        }
+
         if matches!(self.sign_in_status, SignInStatus::SignedIn) {
             match self.plan {
                 None => self.render_free_plan_state(cx),
