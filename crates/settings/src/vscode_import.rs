@@ -177,7 +177,6 @@ impl VsCodeSettings {
             audio: None,
             auto_update: None,
             base_keymap: Some(BaseKeymapContent::VSCode),
-            calls: None,
             collaboration_panel: None,
             debugger: None,
             diagnostics: None,
@@ -191,7 +190,6 @@ impl VsCodeSettings {
                 ..GlobalLspSettingsContent::default()
             }),
             image_viewer: None,
-            journal: None,
             language_models: None,
             line_indicator_format: None,
             log: None,
@@ -204,7 +202,6 @@ impl VsCodeSettings {
             project_panel: self.project_panel_settings_content(),
             proxy: self.read_string("http.proxy"),
             remote: RemoteSettingsContent::default(),
-            repl: None,
             server_url: None,
             session: None,
             status_bar: self.status_bar_settings_content(),
