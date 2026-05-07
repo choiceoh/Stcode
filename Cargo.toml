@@ -42,7 +42,6 @@ members = [
     "crates/dap_adapters",
     "crates/db",
     "crates/debug_adapter_extension",
-    "crates/denoise",
     "crates/diagnostics",
     "crates/edit_prediction",
     "crates/edit_prediction_context",
