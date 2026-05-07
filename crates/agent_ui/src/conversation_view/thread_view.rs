@@ -1321,19 +1321,13 @@ impl ThreadView {
         let (error_kind, acp_error_code, message): (&str, Option<SharedString>, SharedString) =
             match error {
                 ThreadError::PaymentRequired => {
-                    let pro_plan_name = if AppLaunchMode::is_stcode(cx) {
-                        "Stcode Pro"
+                    let message = if AppLaunchMode::is_stcode(cx) {
+                        "The selected agent provider reported a usage limit. Configure another provider or check that provider account.".into()
                     } else {
-                        "Zed Pro"
+                        "You reached your free usage limit. Upgrade to Zed Pro for more prompts."
+                            .into()
                     };
-                    (
-                        "payment_required",
-                        None,
-                        format!(
-                            "You reached your free usage limit. Upgrade to {pro_plan_name} for more prompts."
-                        )
-                        .into(),
-                    )
+                    ("payment_required", None, message)
                 }
                 ThreadError::Refusal => {
                     let model_or_agent_name = self.current_model_name(cx);
@@ -8532,24 +8526,34 @@ impl ThreadView {
     }
 
     fn render_payment_required_error(&self, cx: &mut Context<Self>) -> Callout {
-        let pro_plan_name = if AppLaunchMode::is_stcode(cx) {
-            "Stcode Pro"
+        let is_stcode = AppLaunchMode::is_stcode(cx);
+        let error_message = if is_stcode {
+            SharedString::from(
+                "The selected agent provider reported a usage limit. Configure another provider or check that provider account.",
+            )
         } else {
-            "Zed Pro"
+            SharedString::from(
+                "You reached your free usage limit. Upgrade to Zed Pro for more prompts.",
+            )
         };
-        let error_message = SharedString::from(format!(
-            "You reached your free usage limit. Upgrade to {pro_plan_name} for more prompts."
-        ));
 
         Callout::new()
             .severity(Severity::Error)
             .icon(IconName::XCircle)
-            .title("Free Usage Exceeded")
+            .title(if is_stcode {
+                "Provider Usage Limit"
+            } else {
+                "Free Usage Exceeded"
+            })
             .description(error_message.clone())
             .actions_slot(
                 h_flex()
                     .gap_0p5()
-                    .child(self.upgrade_button(cx))
+                    .child(if is_stcode {
+                        self.configure_providers_button(cx).into_any_element()
+                    } else {
+                        self.upgrade_button(cx).into_any_element()
+                    })
                     .child(self.create_copy_button(error_message)),
             )
             .dismiss_action(self.dismiss_error_button(cx))
@@ -8629,6 +8633,18 @@ impl ThreadView {
                 move |this, _, _, cx| {
                     this.clear_thread_error(cx);
                     cx.open_url(&zed_urls::upgrade_to_zed_pro_url(cx));
+                }
+            }))
+    }
+
+    fn configure_providers_button(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        Button::new("configure_providers", "Configure Providers")
+            .label_size(LabelSize::Small)
+            .style(ButtonStyle::Filled)
+            .on_click(cx.listener({
+                move |this, _, window, cx| {
+                    this.clear_thread_error(cx);
+                    window.dispatch_action(zed_actions::agent::OpenSettings.boxed_clone(), cx);
                 }
             }))
     }

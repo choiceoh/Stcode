@@ -4088,6 +4088,10 @@ impl AgentPanel {
     }
 
     fn should_render_trial_end_upsell(&self, cx: &mut Context<Self>) -> bool {
+        if AppLaunchMode::is_stcode(cx) {
+            return false;
+        }
+
         if TrialEndUpsell::dismissed(cx) {
             return false;
         }

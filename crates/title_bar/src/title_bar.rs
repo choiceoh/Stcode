@@ -1119,6 +1119,7 @@ impl TitleBar {
 
     pub fn render_user_menu_button(&mut self, cx: &mut Context<Self>) -> impl Element {
         let show_update_button = self.update_version.read(cx).show_update_in_menu_bar();
+        let is_stcode = AppLaunchMode::is_stcode(cx);
 
         let user_store = self.user_store.clone();
         let user_store_read = user_store.read(cx);
@@ -1199,7 +1200,7 @@ impl TitleBar {
                                     .w_full()
                                     .justify_between()
                                     .child(Label::new(user_login))
-                                    .when(!has_organization, |parent| {
+                                    .when(!has_organization && !is_stcode, |parent| {
                                         parent.child(PlanChip::new(plan.unwrap_or(Plan::ZedFree)))
                                     })
                                     .into_any_element()
@@ -1264,7 +1265,9 @@ impl TitleBar {
                                                         )
                                                     }),
                                             )
-                                            .children(plan.map(|plan| PlanChip::new(plan)))
+                                            .when(!is_stcode, |this| {
+                                                this.children(plan.map(|plan| PlanChip::new(plan)))
+                                            })
                                             .into_any_element()
                                     }
                                 },
