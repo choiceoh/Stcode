@@ -213,7 +213,6 @@ zlog.workspace = true
 zlog_settings.workspace = true
 
 [target.'cfg(target_os = "windows")'.dependencies]
-etw_tracing.workspace = true
 windows.workspace = true
 gpui = { workspace = true, features = [
     "input-latency-histogram",
