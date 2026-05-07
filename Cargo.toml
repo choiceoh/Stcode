@@ -50,7 +50,6 @@ members = [
     "crates/editor",
     "crates/encoding_selector",
     "crates/env_var",
-    "crates/eval_utils",
     "crates/extension",
     "crates/extension_api",
     "crates/extension_host",
@@ -259,7 +258,6 @@ dialoguer = { version = "0.12", default-features = false }
 editor = { path = "crates/editor" }
 encoding_selector = { path = "crates/encoding_selector" }
 env_var = { path = "crates/env_var" }
-eval_utils = { path = "crates/eval_utils" }
 extension = { path = "crates/extension" }
 extension_host = { path = "crates/extension_host" }
 extensions_ui = { path = "crates/extensions_ui" }
