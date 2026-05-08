@@ -742,7 +742,7 @@ impl AutoUpdater {
         let installer_dir = InstallerDir::new()
             .await
             .context("Failed to create installer dir")?;
-        let target_path = Self::target_path(&installer_dir).await?;
+        let target_path = Self::target_path(&installer_dir, &fetched_release_data).await?;
         download_release(&target_path, fetched_release_data, client)
             .await
             .with_context(|| format!("Failed to download update to {}", target_path.display()))?;
@@ -843,9 +843,16 @@ impl AutoUpdater {
         Ok(())
     }
 
-    async fn target_path(installer_dir: &InstallerDir) -> Result<PathBuf> {
+    async fn target_path(installer_dir: &InstallerDir, release: &ReleaseAsset) -> Result<PathBuf> {
         let filename = match OS {
-            "macos" => anyhow::Ok("update.dmg"),
+            "macos" => {
+                if stcode_macos_release_asset_is_app_zip_name(release_asset_file_name(&release.url))
+                {
+                    anyhow::Ok("update.app.zip")
+                } else {
+                    anyhow::Ok("update.dmg")
+                }
+            }
             "linux" => Ok("update.tar.gz"),
             "windows" => Ok("update.exe"),
             unsupported_os => anyhow::bail!("not supported: {unsupported_os}"),
@@ -1014,17 +1021,33 @@ fn stcode_update_asset_score(name: &str, os: &str, arch: &str) -> Option<u16> {
     if name.contains("universal") {
         score += 2;
     }
+    if name.ends_with(".dmg") {
+        score += 2;
+    }
 
     Some(score)
 }
 
 fn stcode_update_asset_extension_matches(name: &str, os: &str) -> bool {
     match os {
-        "macos" => name.ends_with(".dmg"),
+        "macos" => name.ends_with(".dmg") || stcode_macos_release_asset_is_app_zip_name(name),
         "linux" => name.ends_with(".tar.gz") || name.ends_with(".tgz"),
         "windows" => name.ends_with(".exe"),
         _ => false,
     }
+}
+
+fn stcode_macos_release_asset_is_app_zip_name(name: &str) -> bool {
+    name.to_ascii_lowercase().ends_with(".app.zip")
+}
+
+fn release_asset_file_name(url: &str) -> &str {
+    url.split(['?', '#'])
+        .next()
+        .unwrap_or(url)
+        .rsplit('/')
+        .next()
+        .unwrap_or(url)
 }
 
 fn stcode_update_asset_platform_matches(name: &str, os: &str) -> bool {
@@ -1320,7 +1343,7 @@ async fn install_release_linux(
 
 async fn install_release_macos(
     temp_dir: &InstallerDir,
-    downloaded_dmg: &Path,
+    downloaded_package: &Path,
     cx: &AsyncApp,
 ) -> Result<Option<PathBuf>> {
     let running_app_path = cx.update(|cx| cx.app_path())?;
@@ -1328,9 +1351,43 @@ async fn install_release_macos(
         .file_name()
         .with_context(|| format!("invalid running app path {running_app_path:?}"))?;
 
+    if stcode_macos_release_asset_is_app_zip_name(
+        downloaded_package
+            .file_name()
+            .and_then(|filename| filename.to_str())
+            .unwrap_or_default(),
+    ) {
+        let extracted_path = temp_dir.path().join("app-zip");
+        fs::create_dir_all(&extracted_path)
+            .await
+            .context("failed to create directory into which to extract update")?;
+
+        let mut cmd = new_command("ditto");
+        cmd.args(["-x", "-k"])
+            .arg(downloaded_package)
+            .arg(&extracted_path);
+        let output = cmd
+            .output()
+            .await
+            .with_context(|| "failed to extract: {cmd}")?;
+
+        anyhow::ensure!(
+            output.status.success(),
+            "failed to extract {:?} to {:?}: {:?}",
+            downloaded_package,
+            extracted_path,
+            String::from_utf8_lossy(&output.stderr)
+        );
+
+        let extracted_app_path =
+            find_extracted_app_bundle(&extracted_path, running_app_filename).await?;
+        copy_macos_app_bundle(&extracted_app_path, &running_app_path).await?;
+        return Ok(None);
+    }
+
     let mut cmd = new_command("hdiutil");
     cmd.args(["attach", "-nobrowse"])
-        .arg(&downloaded_dmg)
+        .arg(&downloaded_package)
         .arg("-mountroot")
         .arg(temp_dir.path());
     let output = cmd
@@ -1353,10 +1410,19 @@ async fn install_release_macos(
         background_executor: cx.background_executor(),
     };
 
+    copy_macos_app_bundle(&mounted_app_path, &running_app_path).await?;
+
+    Ok(None)
+}
+
+async fn copy_macos_app_bundle(
+    source_app_path: impl AsRef<OsStr>,
+    running_app_path: &Path,
+) -> Result<()> {
     let mut cmd = new_command("rsync");
     cmd.args(["-av", "--delete", "--exclude", "Icon?"])
-        .arg(&mounted_app_path)
-        .arg(&running_app_path);
+        .arg(source_app_path.as_ref())
+        .arg(running_app_path);
     let output = cmd
         .output()
         .await
@@ -1368,7 +1434,36 @@ async fn install_release_macos(
         String::from_utf8_lossy(&output.stderr)
     );
 
-    Ok(None)
+    Ok(())
+}
+
+async fn find_extracted_app_bundle(
+    extract_root: &Path,
+    running_app_filename: &OsStr,
+) -> Result<OsString> {
+    let direct_app_path = extract_root.join(running_app_filename);
+    if fs::metadata(&direct_app_path).await.is_ok() {
+        let mut direct_app_path: OsString = direct_app_path.into();
+        direct_app_path.push("/");
+        return Ok(direct_app_path);
+    }
+
+    let mut entries = fs::read_dir(extract_root).await?;
+    while let Some(entry) = entries.next().await {
+        let entry = entry?;
+        let nested_app_path = entry.path().join(running_app_filename);
+        if fs::metadata(&nested_app_path).await.is_ok() {
+            let mut nested_app_path: OsString = nested_app_path.into();
+            nested_app_path.push("/");
+            return Ok(nested_app_path);
+        }
+    }
+
+    anyhow::bail!(
+        "extracted update did not contain {:?} under {:?}",
+        running_app_filename,
+        extract_root
+    );
 }
 
 async fn find_mounted_app_bundle(
@@ -1718,6 +1813,53 @@ mod tests {
 
         assert_eq!(asset.version, "1.2.3");
         assert_eq!(asset.url, "https://example.com/apple.dmg");
+    }
+
+    #[test]
+    fn test_stcode_github_release_accepts_macos_app_zip_asset() {
+        let release = http_client::github::GithubRelease {
+            tag_name: "v0.1.0".to_string(),
+            pre_release: false,
+            tarball_url: "https://example.com/source.tar.gz".to_string(),
+            zipball_url: "https://example.com/source.zip".to_string(),
+            assets: vec![http_client::github::GithubReleaseAsset {
+                name: "Stcode-v0.1.0.app.zip".to_string(),
+                browser_download_url: "https://example.com/Stcode-v0.1.0.app.zip".to_string(),
+                digest: None,
+            }],
+        };
+
+        let asset = stcode_release_asset_from_github_release(&release, "macos", "aarch64").unwrap();
+
+        assert_eq!(asset.version, "0.1.0");
+        assert_eq!(asset.url, "https://example.com/Stcode-v0.1.0.app.zip");
+    }
+
+    #[test]
+    fn test_stcode_github_release_prefers_dmg_over_app_zip_asset() {
+        let release = http_client::github::GithubRelease {
+            tag_name: "v1.2.3".to_string(),
+            pre_release: false,
+            tarball_url: "https://example.com/source.tar.gz".to_string(),
+            zipball_url: "https://example.com/source.zip".to_string(),
+            assets: vec![
+                http_client::github::GithubReleaseAsset {
+                    name: "Stcode-v1.2.3.app.zip".to_string(),
+                    browser_download_url: "https://example.com/app.zip".to_string(),
+                    digest: None,
+                },
+                http_client::github::GithubReleaseAsset {
+                    name: "Stcode-1.2.3-aarch64.dmg".to_string(),
+                    browser_download_url: "https://example.com/app.dmg".to_string(),
+                    digest: None,
+                },
+            ],
+        };
+
+        let asset = stcode_release_asset_from_github_release(&release, "macos", "aarch64").unwrap();
+
+        assert_eq!(asset.version, "1.2.3");
+        assert_eq!(asset.url, "https://example.com/app.dmg");
     }
 
     #[test]
