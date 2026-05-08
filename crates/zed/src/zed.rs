@@ -5101,7 +5101,6 @@ mod tests {
                 "rules_library",
                 "search",
                 "settings_editor",
-                "snippets",
                 "stash_picker",
                 "svg",
                 "syntax_tree_view",
@@ -5328,7 +5327,6 @@ mod tests {
                 cx,
             );
 
-            tasks_ui::init(cx);
             project::debugger::breakpoint_store::BreakpointStore::init(
                 &app_state.client.clone().into(),
             );

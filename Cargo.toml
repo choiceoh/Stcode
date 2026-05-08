@@ -143,7 +143,6 @@ members = [
     "crates/sidebar",
     "crates/snippet",
     "crates/snippet_provider",
-    "crates/snippets_ui",
     "crates/sqlez",
     "crates/sqlez_macros",
     "crates/streaming_diff",
@@ -152,7 +151,6 @@ members = [
     "crates/system_specs",
     "crates/syntax_theme",
     "crates/task",
-    "crates/tasks_ui",
     "crates/telemetry",
     "crates/telemetry_events",
     "crates/terminal",
@@ -348,7 +346,6 @@ settings_ui = { path = "crates/settings_ui" }
 shell_command_parser = { path = "crates/shell_command_parser" }
 snippet = { path = "crates/snippet" }
 snippet_provider = { path = "crates/snippet_provider" }
-snippets_ui = { path = "crates/snippets_ui" }
 sqlez = { path = "crates/sqlez" }
 sqlez_macros = { path = "crates/sqlez_macros" }
 streaming_diff = { path = "crates/streaming_diff" }
@@ -357,7 +354,6 @@ codestral = { path = "crates/codestral" }
 system_specs = { path = "crates/system_specs" }
 syntax_theme = { path = "crates/syntax_theme" }
 task = { path = "crates/task" }
-tasks_ui = { path = "crates/tasks_ui" }
 telemetry = { path = "crates/telemetry" }
 telemetry_events = { path = "crates/telemetry_events" }
 terminal = { path = "crates/terminal" }
@@ -837,7 +833,6 @@ reqwest_client = { codegen-units = 1 }
 session = { codegen-units = 1 }
 sidebar = { codegen-units = 1 }
 snippet = { codegen-units = 1 }
-snippets_ui = { codegen-units = 1 }
 telemetry_events = { codegen-units = 1 }
 theme_selector = { codegen-units = 1 }
 time_format = { codegen-units = 1 }
