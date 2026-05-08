@@ -537,8 +537,6 @@ pub fn initialize_workspace(app_state: Arc<AppState>, cx: &mut App) {
             window,
             cx,
         );
-        let active_toolchain_language =
-            cx.new(|cx| toolchain_selector::ActiveToolchain::new(workspace, window, cx));
         let image_info = cx.new(|_cx| ImageInfo::new(workspace));
 
         let lsp_button_menu_handle = PopoverMenuHandle::default();
@@ -562,7 +560,6 @@ pub fn initialize_workspace(app_state: Arc<AppState>, cx: &mut App) {
             status_bar.add_left_item(activity_indicator, window, cx);
             status_bar.add_left_item(merge_conflict_indicator, window, cx);
             status_bar.add_right_item(edit_prediction_ui, window, cx);
-            status_bar.add_right_item(active_toolchain_language, window, cx);
             status_bar.add_right_item(cursor_position, window, cx);
             status_bar.add_right_item(image_info, window, cx);
         });
@@ -5110,7 +5107,6 @@ mod tests {
                 "theme",
                 "theme_selector",
                 "toast",
-                "toolchain",
                 "variable_list",
                 "vim",
                 "window",
