@@ -2171,6 +2171,7 @@ fn open_local_file(
                 .update(cx, |editor, cx| {
                     if let Some(buffer) = editor.buffer().read(cx).as_singleton()
                         && buffer.read(cx).is_empty()
+                        && !file_exists
                     {
                         buffer.update(cx, |buffer, cx| {
                             buffer.edit([(0..0, initial_contents)], None, cx)
