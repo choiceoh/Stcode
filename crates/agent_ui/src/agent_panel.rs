@@ -303,6 +303,10 @@ fn stcode_smart_run_steps(
     kind: StcodeSmartRunKind,
     phase: StcodeSmartRunPhase,
 ) -> Vec<StcodeSmartRunStep> {
+    if kind == StcodeSmartRunKind::Merge {
+        return stcode_smart_merge_run_steps(phase);
+    }
+
     let agent_phase = match phase {
         StcodeSmartRunPhase::Pending => StcodeSmartRunPhase::Active,
         StcodeSmartRunPhase::Active => StcodeSmartRunPhase::Active,
@@ -344,6 +348,60 @@ fn stcode_smart_run_steps(
                 _ => "Waiting",
             },
             phase: checkpoint_phase,
+        },
+    ]
+}
+
+fn stcode_smart_merge_run_steps(phase: StcodeSmartRunPhase) -> Vec<StcodeSmartRunStep> {
+    let agent_phase = match phase {
+        StcodeSmartRunPhase::Pending | StcodeSmartRunPhase::Active => StcodeSmartRunPhase::Active,
+        StcodeSmartRunPhase::Complete => StcodeSmartRunPhase::Complete,
+        StcodeSmartRunPhase::Blocked => StcodeSmartRunPhase::Blocked,
+    };
+    let downstream_phase = match phase {
+        StcodeSmartRunPhase::Complete => StcodeSmartRunPhase::Complete,
+        StcodeSmartRunPhase::Blocked => StcodeSmartRunPhase::Blocked,
+        _ => StcodeSmartRunPhase::Pending,
+    };
+
+    vec![
+        StcodeSmartRunStep {
+            label: "Snapshot",
+            status: "Done",
+            phase: StcodeSmartRunPhase::Complete,
+        },
+        StcodeSmartRunStep {
+            label: "Merge runbook",
+            status: "Sent",
+            phase: StcodeSmartRunPhase::Complete,
+        },
+        StcodeSmartRunStep {
+            label: "Agent",
+            status: match agent_phase {
+                StcodeSmartRunPhase::Active => "Running",
+                StcodeSmartRunPhase::Complete => "Done",
+                StcodeSmartRunPhase::Blocked => "Blocked",
+                StcodeSmartRunPhase::Pending => "Waiting",
+            },
+            phase: agent_phase,
+        },
+        StcodeSmartRunStep {
+            label: "Checks + PR",
+            status: match downstream_phase {
+                StcodeSmartRunPhase::Complete => "Done",
+                StcodeSmartRunPhase::Blocked => "Blocked",
+                _ => "Waiting",
+            },
+            phase: downstream_phase,
+        },
+        StcodeSmartRunStep {
+            label: "Merge",
+            status: match downstream_phase {
+                StcodeSmartRunPhase::Complete => "Done",
+                StcodeSmartRunPhase::Blocked => "Blocked",
+                _ => "Waiting",
+            },
+            phase: downstream_phase,
         },
     ]
 }
@@ -824,6 +882,12 @@ const MAX_STCODE_SMART_PROMPT_FILES: usize = 8;
 
 struct StcodeSmartPromptContext {
     branch_name: Option<String>,
+    branch_ref: Option<String>,
+    upstream_ref: Option<String>,
+    upstream_remote: Option<String>,
+    ahead_count: Option<u32>,
+    behind_count: Option<u32>,
+    work_directory: PathBuf,
     changed_count: usize,
     staged_count: usize,
     unstaged_count: usize,
@@ -856,6 +920,21 @@ impl StcodeSmartPromptContext {
             .branch
             .as_ref()
             .map(|branch| branch.ref_name.to_string());
+        let upstream_ref = repository_ref
+            .branch
+            .as_ref()
+            .and_then(|branch| branch.upstream.as_ref())
+            .map(|upstream| upstream.ref_name.to_string());
+        let upstream_remote = repository_ref
+            .branch
+            .as_ref()
+            .and_then(|branch| branch.upstream.as_ref())
+            .and_then(|upstream| upstream.remote_name())
+            .map(str::to_string);
+        let tracking_status = repository_ref
+            .branch
+            .as_ref()
+            .and_then(|branch| branch.tracking_status());
         let entries = repository_ref
             .cached_status()
             .filter(|entry| entry.status.has_changes())
@@ -878,6 +957,12 @@ impl StcodeSmartPromptContext {
 
         Some(Self {
             branch_name,
+            branch_ref,
+            upstream_ref,
+            upstream_remote,
+            ahead_count: tracking_status.map(|status| status.ahead),
+            behind_count: tracking_status.map(|status| status.behind),
+            work_directory: repository_ref.work_directory_abs_path.to_path_buf(),
             changed_count: entries.len(),
             staged_count: entries
                 .iter()
@@ -936,6 +1021,17 @@ impl StcodeSmartPromptContext {
 
     fn snapshot_text(&self) -> String {
         let branch = self.branch_name.as_deref().unwrap_or("detached HEAD");
+        let branch_ref = self.branch_ref.as_deref().unwrap_or("none");
+        let upstream = self.upstream_ref.as_deref().unwrap_or("not configured");
+        let upstream_remote = self.upstream_remote.as_deref().unwrap_or("none");
+        let ahead = self
+            .ahead_count
+            .map(|count| count.to_string())
+            .unwrap_or_else(|| "unknown".to_string());
+        let behind = self
+            .behind_count
+            .map(|count| count.to_string())
+            .unwrap_or_else(|| "unknown".to_string());
         let lane = if self.is_linked_worktree {
             "isolated linked worktree"
         } else {
@@ -948,12 +1044,21 @@ impl StcodeSmartPromptContext {
         };
         let mut text = format!(
             indoc::indoc!(
-                "Live workspace snapshot:
+                 "Live workspace snapshot:
                  - Branch: {branch}
+                 - Branch ref: {branch_ref}
+                 - Worktree: {worktree}
+                 - Upstream: {upstream}; remote {upstream_remote}; ahead {ahead}; behind {behind}
                  - Lane: {lane}; {linked_worktree_count} linked lane(s); {shared_branch_lane_count} branch overlap(s)
                  - Changes: {changed_count} changed {file_label}, {staged_count} staged, {unstaged_count} unstaged, {conflicted_count} conflicts, {untracked_count} new, +{added_lines} -{removed_lines}"
             ),
             branch = branch,
+            branch_ref = branch_ref,
+            worktree = self.work_directory.display(),
+            upstream = upstream,
+            upstream_remote = upstream_remote,
+            ahead = ahead,
+            behind = behind,
             lane = lane,
             linked_worktree_count = self.linked_worktree_count,
             shared_branch_lane_count = self.shared_branch_lane_count,
@@ -1125,11 +1230,20 @@ fn build_stcode_smart_merge_prompt(
 ) -> Vec<acp::ContentBlock> {
     stcode_smart_prompt(
         indoc::indoc!(
-        "AI Smart Merge: autonomously prepare this branch for merge.
+        "AI Smart Merge: autonomously take this workline all the way through merge.
 
-         Inspect the current branch, local changes, conflicts, default branch, recent commits, and available checks. If local changes remain, review and commit them with a clear message. If conflicts or stale base changes exist, resolve or rebase them. Run the fastest meaningful checks first, then widen only when needed for confidence.
+         Treat this as a one-click merge run, not a status review. Do not stop at opening a pull request. Continue through the whole merge lifecycle unless there is a missing credential, destructive data-loss risk, or a product-direction decision that cannot be inferred from the repository.
 
-         If no PR exists, create one. If CI or local checks fail, inspect the failure and fix it. Continue until the branch is clean, non-conflicting, and merge-ready with checks passing or with a precise blocker that cannot be solved locally. Do not ask the user to operate Git, pick routine merge options, or approve normal commands."
+         Merge runbook:
+         1. Inspect the current branch, worktree, upstream, local changes, conflicts, default branch, recent commits, and repository PR/check conventions.
+         2. If local changes remain, review them, keep only task-related work, run formatting when cheap, and commit with a clear imperative message.
+         3. If the branch is detached, on a base branch, shared with another lane, or stale behind its base, create or move to a safe task branch and preserve the work before continuing.
+         4. Run the fastest meaningful local checks first, then widen only when needed for confidence. In this repository, prefer focused Rust checks before long full-suite runs.
+         5. Push the branch. If no pull request exists, create one with a clear imperative title, a useful body, verification notes, and a final Release Notes section.
+         6. Watch required checks. If GraphQL quota or a UI path fails, use GitHub REST or another available route. If checks fail, inspect logs, fix the branch, and continue.
+         7. When checks are passing or no required checks exist and the PR is clean, merge it using the repository's normal merge method, delete the remote branch when safe, and sync the local base branch.
+
+         End state required: merged PR or a precise blocker that cannot be solved from this machine. Do not ask the user to operate Git, pick routine merge options, approve normal commands, or manually babysit CI."
         ),
         context,
     )
@@ -5255,6 +5369,12 @@ mod tests {
     fn test_stcode_smart_prompts_drive_autonomous_work() {
         let context = StcodeSmartPromptContext {
             branch_name: Some("codex/v13".to_string()),
+            branch_ref: Some("refs/heads/codex/v13".to_string()),
+            upstream_ref: Some("refs/remotes/origin/codex/v13".to_string()),
+            upstream_remote: Some("origin".to_string()),
+            ahead_count: Some(1),
+            behind_count: Some(0),
+            work_directory: PathBuf::from("/project"),
             changed_count: 2,
             staged_count: 1,
             unstaged_count: 1,
@@ -5301,8 +5421,10 @@ mod tests {
         let merge_blocks = build_stcode_smart_merge_prompt(Some(&context));
         let merge = expect_text_block(&merge_blocks[0]);
         assert!(merge.contains("AI Smart Merge"));
-        assert!(merge.contains("CI or local checks fail"));
-        assert!(merge.contains("merge-ready"));
+        assert!(merge.contains("one-click merge run"));
+        assert!(merge.contains("Do not stop at opening a pull request"));
+        assert!(merge.contains("delete the remote branch"));
+        assert!(merge.contains("Upstream: refs/remotes/origin/codex/v13"));
     }
 
     #[test]
@@ -5359,7 +5481,13 @@ mod tests {
             snapshot
                 .steps
                 .iter()
-                .any(|step| step.label == "Merge-ready"
+                .any(|step| step.label == "Merge" && step.phase == StcodeSmartRunPhase::Complete)
+        );
+        assert!(
+            snapshot
+                .steps
+                .iter()
+                .any(|step| step.label == "Checks + PR"
                     && step.phase == StcodeSmartRunPhase::Complete)
         );
     }
