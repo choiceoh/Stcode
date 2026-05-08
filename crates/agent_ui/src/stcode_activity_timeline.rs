@@ -24,6 +24,7 @@ const MAX_ENTRY_LABEL_CHARS: usize = 48;
 const MAX_SMART_PANEL_GOAL_CHARS: usize = 64;
 const MAX_SMART_PANEL_FILES: usize = 2;
 const MAX_SMART_TODO_ENTRIES: usize = 2;
+const MAX_SMART_PARALLEL_LANES: usize = 4;
 const MAX_TODO_LABEL_CHARS: usize = 56;
 const MAX_WORKLINE_DETAIL_CHARS: usize = 72;
 const MAX_STATUS_WORKLINE_DETAIL_CHARS: usize = 64;
@@ -646,6 +647,7 @@ fn render_smart_workline_card(
     let detail_rows = smart_workline_detail_rows(
         smart_panel.as_ref(),
         smart_todo.as_ref(),
+        smart_parallel.as_ref(),
         smart_merge.as_ref(),
     );
     let has_detail_rows = !detail_rows.is_empty();
@@ -927,6 +929,7 @@ struct SmartWorklineDetailRow {
 fn smart_workline_detail_rows(
     smart_panel: Option<&SmartPanelSnapshot>,
     smart_todo: Option<&SmartTodoSnapshot>,
+    smart_parallel: Option<&SmartParallelSnapshot>,
     smart_merge: Option<&SmartMergeSnapshot>,
 ) -> Vec<SmartWorklineDetailRow> {
     let mut rows = Vec::new();
@@ -956,6 +959,32 @@ fn smart_workline_detail_rows(
                 tone: item.tone,
             });
         }
+    }
+
+    if let Some(parallel) = smart_parallel.filter(|snapshot| snapshot.should_render_card()) {
+        let detail = parallel
+            .lanes
+            .iter()
+            .find(|lane| lane.overlaps_active_branch)
+            .or_else(|| parallel.lanes.first())
+            .map(|lane| {
+                format!(
+                    "{} · {} · {}",
+                    lane.label,
+                    lane.branch_label(),
+                    lane.path_label
+                )
+            })
+            .unwrap_or_else(|| parallel.detail.clone());
+
+        rows.push(SmartWorklineDetailRow {
+            id: "parallel-lane".to_string(),
+            label: "Lane".to_string(),
+            detail: smart_panel_compact_label(detail, MAX_WORKLINE_DETAIL_CHARS),
+            status: parallel.status,
+            icon: parallel.icon,
+            tone: parallel.tone,
+        });
     }
 
     if let Some(panel) = smart_panel {
@@ -2278,6 +2307,24 @@ struct SmartParallelSnapshot {
     detail: String,
     icon: IconName,
     tone: ActivityTone,
+    lanes: Vec<SmartParallelLane>,
+}
+
+#[derive(Clone)]
+struct SmartParallelLane {
+    label: String,
+    branch_ref: Option<String>,
+    path_label: String,
+    overlaps_active_branch: bool,
+}
+
+impl SmartParallelLane {
+    fn branch_label(&self) -> &str {
+        self.branch_ref
+            .as_deref()
+            .map(smart_branch_ref_label)
+            .unwrap_or("detached HEAD")
+    }
 }
 
 impl SmartParallelSnapshot {
@@ -2292,21 +2339,11 @@ impl SmartParallelSnapshot {
             .branch
             .as_ref()
             .map(|branch| branch.ref_name.to_string());
-        let duplicate_branch_count = branch_ref
-            .as_deref()
-            .map(|branch_ref| {
-                repository_ref
-                    .linked_worktrees()
-                    .iter()
-                    .filter(|worktree| {
-                        worktree
-                            .ref_name
-                            .as_ref()
-                            .is_some_and(|ref_name| ref_name.as_ref() == branch_ref)
-                    })
-                    .count()
-            })
-            .unwrap_or(0);
+        let lanes = smart_parallel_lanes(repository_ref.linked_worktrees(), branch_ref.as_deref());
+        let duplicate_branch_count = lanes
+            .iter()
+            .filter(|lane| lane.overlaps_active_branch)
+            .count();
         let linked_worktree_count = repository_ref.linked_worktrees().len();
         let state =
             smart_parallel_state(repository_ref.is_linked_worktree(), duplicate_branch_count);
@@ -2318,9 +2355,11 @@ impl SmartParallelSnapshot {
                 branch_name.as_deref(),
                 linked_worktree_count,
                 duplicate_branch_count,
+                &lanes,
             ),
             icon: state.icon(),
             tone: state.tone(),
+            lanes,
         })
     }
 
@@ -2382,6 +2421,7 @@ fn smart_parallel_detail(
     branch_name: Option<&str>,
     linked_worktree_count: usize,
     duplicate_branch_count: usize,
+    lanes: &[SmartParallelLane],
 ) -> String {
     let branch = branch_name.unwrap_or("detached HEAD");
 
@@ -2422,11 +2462,61 @@ fn smart_parallel_detail(
             } else {
                 "linked lanes"
             };
+            let overlap_labels = lanes
+                .iter()
+                .filter(|lane| lane.overlaps_active_branch)
+                .map(|lane| lane.label.as_str())
+                .take(3)
+                .collect::<Vec<_>>()
+                .join(", ");
+            let overlap_detail = if overlap_labels.is_empty() {
+                String::new()
+            } else {
+                format!(": {overlap_labels}")
+            };
             format!(
-                "{branch} also appears in {duplicate_branch_count} {lane_label}. Switch lanes or create a fresh lane before more agents edit it."
+                "{branch} also appears in {duplicate_branch_count} {lane_label}{overlap_detail}. Switch lanes or create a fresh lane before more agents edit it."
             )
         }
     }
+}
+
+fn smart_parallel_lanes(
+    linked_worktrees: &[git::repository::Worktree],
+    active_branch_ref: Option<&str>,
+) -> Vec<SmartParallelLane> {
+    linked_worktrees
+        .iter()
+        .take(MAX_SMART_PARALLEL_LANES)
+        .map(|worktree| {
+            let branch_ref = worktree.ref_name.as_ref().map(ToString::to_string);
+            let overlaps_active_branch = active_branch_ref
+                .zip(branch_ref.as_deref())
+                .is_some_and(|(active, linked)| active == linked);
+
+            SmartParallelLane {
+                label: smart_lane_label(&worktree.path),
+                branch_ref,
+                path_label: worktree.path.display().to_string(),
+                overlaps_active_branch,
+            }
+        })
+        .collect()
+}
+
+fn smart_lane_label(path: &std::path::Path) -> String {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| !name.is_empty())
+        .unwrap_or("workspace")
+        .to_string()
+}
+
+fn smart_branch_ref_label(ref_name: &str) -> &str {
+    ref_name
+        .strip_prefix("refs/heads/")
+        .or_else(|| ref_name.strip_prefix("refs/remotes/"))
+        .unwrap_or(ref_name)
 }
 
 #[derive(Clone)]
@@ -3349,7 +3439,7 @@ mod tests {
 
     #[test]
     fn smart_parallel_detail_explains_main_checkout_risk() {
-        let detail = smart_parallel_detail(SmartParallelState::NeedsLane, Some("main"), 2, 0);
+        let detail = smart_parallel_detail(SmartParallelState::NeedsLane, Some("main"), 2, 0, &[]);
 
         assert!(detail.contains("main is the main checkout"));
         assert!(detail.contains("2 linked lanes exist"));
@@ -3358,7 +3448,8 @@ mod tests {
 
     #[test]
     fn smart_parallel_detail_explains_isolated_lane() {
-        let detail = smart_parallel_detail(SmartParallelState::Isolated, Some("feature"), 1, 0);
+        let detail =
+            smart_parallel_detail(SmartParallelState::Isolated, Some("feature"), 1, 0, &[]);
 
         assert!(detail.contains("feature is isolated"));
         assert!(detail.contains("1 other lane"));
@@ -3366,10 +3457,30 @@ mod tests {
 
     #[test]
     fn smart_parallel_detail_explains_branch_overlap() {
-        let detail = smart_parallel_detail(SmartParallelState::BranchShared, Some("feature"), 2, 2);
+        let detail = smart_parallel_detail(
+            SmartParallelState::BranchShared,
+            Some("feature"),
+            2,
+            2,
+            &[
+                SmartParallelLane {
+                    label: "lane-a".to_string(),
+                    branch_ref: Some("refs/heads/feature".to_string()),
+                    path_label: "/worktrees/lane-a".to_string(),
+                    overlaps_active_branch: true,
+                },
+                SmartParallelLane {
+                    label: "lane-b".to_string(),
+                    branch_ref: Some("refs/heads/feature".to_string()),
+                    path_label: "/worktrees/lane-b".to_string(),
+                    overlaps_active_branch: true,
+                },
+            ],
+        );
 
         assert!(detail.contains("feature also appears"));
         assert!(detail.contains("2 linked lanes"));
+        assert!(detail.contains("lane-a, lane-b"));
     }
 
     #[test]

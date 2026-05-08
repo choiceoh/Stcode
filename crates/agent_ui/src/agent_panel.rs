@@ -879,6 +879,7 @@ fn build_conflicted_files_resolution_prompt(
 }
 
 const MAX_STCODE_SMART_PROMPT_FILES: usize = 8;
+const MAX_STCODE_SMART_PROMPT_LANES: usize = 8;
 
 struct StcodeSmartPromptContext {
     branch_name: Option<String>,
@@ -899,6 +900,7 @@ struct StcodeSmartPromptContext {
     is_linked_worktree: bool,
     shared_branch_lane_count: usize,
     files: Vec<StcodeSmartPromptFile>,
+    lanes: Vec<StcodeSmartPromptLane>,
 }
 
 struct StcodeSmartPromptFile {
@@ -906,6 +908,14 @@ struct StcodeSmartPromptFile {
     status: &'static str,
     diff_label: Option<String>,
     abs_path: Option<PathBuf>,
+}
+
+struct StcodeSmartPromptLane {
+    label: String,
+    branch_ref: Option<String>,
+    path: PathBuf,
+    is_current: bool,
+    overlaps_active_branch: bool,
 }
 
 impl StcodeSmartPromptContext {
@@ -957,7 +967,7 @@ impl StcodeSmartPromptContext {
 
         Some(Self {
             branch_name,
-            branch_ref,
+            branch_ref: branch_ref.clone(),
             upstream_ref,
             upstream_remote,
             ahead_count: tracking_status.map(|status| status.ahead),
@@ -1016,6 +1026,11 @@ impl StcodeSmartPromptContext {
                     }
                 })
                 .collect(),
+            lanes: stcode_smart_prompt_lanes(
+                &repository_ref.work_directory_abs_path,
+                branch_ref.as_deref(),
+                repository_ref.linked_worktrees(),
+            ),
         })
     }
 
@@ -1092,6 +1107,28 @@ impl StcodeSmartPromptContext {
             }
         }
 
+        text.push_str("\n- Lane inventory:");
+        for lane in &self.lanes {
+            let role = if lane.is_current { "current" } else { "linked" };
+            let branch = lane
+                .branch_ref
+                .as_deref()
+                .map(stcode_smart_branch_ref_label)
+                .unwrap_or("detached HEAD");
+            let overlap = if lane.overlaps_active_branch {
+                "; overlaps active branch"
+            } else {
+                ""
+            };
+            text.push_str(&format!(
+                "\n  - {role}: {}; branch {}; path {}{}",
+                lane.label,
+                branch,
+                lane.path.display(),
+                overlap
+            ));
+        }
+
         text
     }
 
@@ -1121,6 +1158,57 @@ impl StcodeSmartPromptContext {
             })
             .collect()
     }
+}
+
+fn stcode_smart_prompt_lanes(
+    work_directory: &std::path::Path,
+    active_branch_ref: Option<&str>,
+    linked_worktrees: &[git::repository::Worktree],
+) -> Vec<StcodeSmartPromptLane> {
+    let mut lanes = vec![StcodeSmartPromptLane {
+        label: stcode_smart_lane_label(work_directory),
+        branch_ref: active_branch_ref.map(str::to_string),
+        path: work_directory.to_path_buf(),
+        is_current: true,
+        overlaps_active_branch: false,
+    }];
+
+    lanes.extend(
+        linked_worktrees
+            .iter()
+            .take(MAX_STCODE_SMART_PROMPT_LANES.saturating_sub(1))
+            .map(|worktree| {
+                let branch_ref = worktree.ref_name.as_ref().map(ToString::to_string);
+                let overlaps_active_branch = active_branch_ref
+                    .zip(branch_ref.as_deref())
+                    .is_some_and(|(active, linked)| active == linked);
+
+                StcodeSmartPromptLane {
+                    label: stcode_smart_lane_label(&worktree.path),
+                    branch_ref,
+                    path: worktree.path.clone(),
+                    is_current: false,
+                    overlaps_active_branch,
+                }
+            }),
+    );
+
+    lanes
+}
+
+fn stcode_smart_lane_label(path: &std::path::Path) -> String {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| !name.is_empty())
+        .unwrap_or("workspace")
+        .to_string()
+}
+
+fn stcode_smart_branch_ref_label(ref_name: &str) -> &str {
+    ref_name
+        .strip_prefix("refs/heads/")
+        .or_else(|| ref_name.strip_prefix("refs/remotes/"))
+        .unwrap_or(ref_name)
 }
 
 fn stcode_smart_file_status(status: git::status::FileStatus) -> &'static str {
@@ -5391,6 +5479,22 @@ mod tests {
                 diff_label: Some("+12 -3".to_string()),
                 abs_path: Some(PathBuf::from("/project/src/main.rs")),
             }],
+            lanes: vec![
+                StcodeSmartPromptLane {
+                    label: "project".to_string(),
+                    branch_ref: Some("refs/heads/codex/v13".to_string()),
+                    path: PathBuf::from("/project"),
+                    is_current: true,
+                    overlaps_active_branch: false,
+                },
+                StcodeSmartPromptLane {
+                    label: "project-parallel".to_string(),
+                    branch_ref: Some("refs/heads/codex/v13".to_string()),
+                    path: PathBuf::from("/worktrees/project-parallel"),
+                    is_current: false,
+                    overlaps_active_branch: true,
+                },
+            ],
         };
 
         let start_blocks = build_stcode_smart_start_prompt(Some(&context));
@@ -5417,6 +5521,9 @@ mod tests {
         let parallel = expect_text_block(&parallel_blocks[0]);
         assert!(parallel.contains("parallel autonomous agents"));
         assert!(parallel.contains("branch overlap"));
+        assert!(parallel.contains("Lane inventory"));
+        assert!(parallel.contains("project-parallel"));
+        assert!(parallel.contains("overlaps active branch"));
 
         let merge_blocks = build_stcode_smart_merge_prompt(Some(&context));
         let merge = expect_text_block(&merge_blocks[0]);
