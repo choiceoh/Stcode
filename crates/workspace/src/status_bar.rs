@@ -1,5 +1,5 @@
 use crate::{
-    ItemHandle, MultiWorkspace, Pane, SidebarSide, ToggleWorkspaceSidebar,
+    AppLaunchMode, ItemHandle, MultiWorkspace, Pane, SidebarSide, ToggleWorkspaceSidebar,
     sidebar_side_context_menu,
 };
 use gpui::{
@@ -19,6 +19,22 @@ pub trait StatusItemView: Render {
         window: &mut Window,
         cx: &mut Context<Self>,
     );
+}
+
+pub fn status_bar_icon_size(cx: &App) -> IconSize {
+    if AppLaunchMode::is_stcode(cx) {
+        IconSize::Medium
+    } else {
+        IconSize::Small
+    }
+}
+
+pub fn status_bar_compact_icon_size(cx: &App) -> IconSize {
+    if AppLaunchMode::is_stcode(cx) {
+        IconSize::Small
+    } else {
+        IconSize::XSmall
+    }
 }
 
 trait StatusItemViewHandle: Send {
@@ -141,6 +157,7 @@ impl StatusBar {
         let on_right = sidebar.side == SidebarSide::Right;
         let has_notifications = sidebar.has_notifications;
         let indicator_border = cx.theme().colors().status_bar_background;
+        let icon_size = status_bar_icon_size(cx);
 
         let toggle = sidebar_side_context_menu("sidebar-status-toggle-menu", cx)
             .anchor(if on_right {
@@ -162,7 +179,7 @@ impl StatusBar {
                         IconName::ThreadsSidebarLeftClosed
                     },
                 )
-                .icon_size(IconSize::Small)
+                .icon_size(icon_size)
                 .when(has_notifications, |this| {
                     this.indicator(Indicator::dot().color(Color::Accent))
                         .indicator_border_color(Some(indicator_border))
