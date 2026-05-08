@@ -1,7 +1,10 @@
 use acp_thread::{AcpThread, AgentThreadEntry, ThreadStatus, ToolCall, ToolCallStatus};
 use agent_client_protocol as acp;
 use anyhow::Result;
-use git::{repository::DiffType, status::FileStatus};
+use git::{
+    repository::{DiffType, UpstreamTrackingStatus},
+    status::FileStatus,
+};
 use gpui::{
     Action, Context, Entity, EntityId, IntoElement, Render, RenderOnce, Subscription, WeakEntity,
 };
@@ -677,6 +680,9 @@ fn render_smart_workline_card(
     let can_open_pull_request = smart_merge
         .as_ref()
         .is_some_and(|snapshot| snapshot.can_create_pull_request);
+    let can_run_smart_merge = smart_merge
+        .as_ref()
+        .is_some_and(|snapshot| snapshot.can_run_smart_merge);
     let can_commit_merge = smart_merge
         .as_ref()
         .is_some_and(|snapshot| snapshot.can_commit);
@@ -874,9 +880,19 @@ fn render_smart_workline_card(
                         )
                     })
                 })
+                .when(can_run_smart_merge, |this| {
+                    this.child(
+                        Button::new("stcode-smart-workline-ai-merge", "AI Merge")
+                            .label_size(LabelSize::XSmall)
+                            .style(ButtonStyle::Outlined)
+                            .on_click(move |_, window, cx| {
+                                window.dispatch_action(crate::StcodeSmartMerge.boxed_clone(), cx);
+                            }),
+                    )
+                })
                 .when(can_open_pull_request, |this| {
                     this.child(
-                        Button::new("stcode-smart-workline-open-pr", "Open PR")
+                        Button::new("stcode-smart-workline-open-pr", "Create PR Link")
                             .label_size(LabelSize::XSmall)
                             .style(ButtonStyle::Outlined)
                             .on_click(move |_, window, cx| {
@@ -951,6 +967,17 @@ fn smart_workline_detail_rows(
             icon: panel.icon,
             tone: panel.tone,
         });
+
+        if let Some(merge) = smart_merge.filter(|snapshot| snapshot.should_render_card()) {
+            rows.push(SmartWorklineDetailRow {
+                id: "merge".to_string(),
+                label: "Merge".to_string(),
+                detail: smart_panel_compact_label(&merge.detail, MAX_WORKLINE_DETAIL_CHARS),
+                status: merge.status,
+                icon: merge.icon,
+                tone: merge.tone,
+            });
+        }
 
         if let Some(item) = panel
             .work_items
@@ -1487,6 +1514,14 @@ impl SmartPanelSnapshot {
             .branch
             .as_ref()
             .map(|branch| branch.ref_name.to_string());
+        let tracking_status = repository_ref
+            .branch
+            .as_ref()
+            .and_then(|branch| branch.tracking_status());
+        let has_upstream = repository_ref
+            .branch
+            .as_ref()
+            .is_some_and(|branch| branch.upstream.is_some());
         let entries = repository_ref
             .cached_status()
             .filter(|entry| entry.status.has_changes())
@@ -1504,6 +1539,8 @@ impl SmartPanelSnapshot {
             branch_name.as_deref(),
             counts.changed_count,
             counts.conflicted_count,
+            tracking_status,
+            has_upstream,
         );
         let thread_summary = smart_panel_thread_summary(thread, cx);
         let work_items = smart_panel_work_items(
@@ -1914,7 +1951,14 @@ fn smart_panel_merge_item(
     SmartPanelWorkItem {
         id: "merge",
         label: "Merge readiness",
-        detail: smart_merge_detail(merge_state, branch_name, changed_count, conflicted_count),
+        detail: smart_merge_detail(
+            merge_state,
+            branch_name,
+            changed_count,
+            conflicted_count,
+            None,
+            None,
+        ),
         status: merge_state.status(),
         icon: merge_state.icon(),
         tone: merge_state.tone(),
@@ -2395,6 +2439,7 @@ struct SmartMergeSnapshot {
     can_review: bool,
     can_create_pull_request: bool,
     can_commit: bool,
+    can_run_smart_merge: bool,
 }
 
 impl SmartMergeSnapshot {
@@ -2405,6 +2450,14 @@ impl SmartMergeSnapshot {
             .branch
             .as_ref()
             .map(|branch| branch.name().to_string());
+        let tracking_status = repository_ref
+            .branch
+            .as_ref()
+            .and_then(|branch| branch.tracking_status());
+        let has_upstream = repository_ref
+            .branch
+            .as_ref()
+            .is_some_and(|branch| branch.upstream.is_some());
         let entries = repository_ref
             .cached_status()
             .filter(|entry| entry.status.has_changes())
@@ -2414,7 +2467,13 @@ impl SmartMergeSnapshot {
             .iter()
             .filter(|entry| entry.status.is_conflicted())
             .count();
-        let state = smart_merge_state(branch_name.as_deref(), changed_count, conflicted_count);
+        let state = smart_merge_state(
+            branch_name.as_deref(),
+            changed_count,
+            conflicted_count,
+            tracking_status,
+            has_upstream,
+        );
 
         Some(Self {
             repository,
@@ -2424,6 +2483,8 @@ impl SmartMergeSnapshot {
                 branch_name.as_deref(),
                 changed_count,
                 conflicted_count,
+                tracking_status.map(|status| status.ahead),
+                tracking_status.map(|status| status.behind),
             ),
             icon: state.icon(),
             tone: state.tone(),
@@ -2432,17 +2493,20 @@ impl SmartMergeSnapshot {
                 .is_some_and(|branch_name| !is_merge_base_branch(branch_name)),
             can_create_pull_request: state == SmartMergeState::Ready,
             can_commit: changed_count > 0,
+            can_run_smart_merge: state.can_automerge(),
         })
     }
 
     fn should_render_card(&self) -> bool {
-        self.can_create_pull_request || self.tone.needs_attention()
+        self.can_run_smart_merge || self.tone.needs_attention()
     }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SmartMergeState {
     Ready,
+    NeedsPublish,
+    NeedsSync,
     NeedsCheckpoint,
     HasConflicts,
     ProtectedBranch,
@@ -2453,6 +2517,8 @@ impl SmartMergeState {
     fn status(self) -> &'static str {
         match self {
             SmartMergeState::Ready => "Ready",
+            SmartMergeState::NeedsPublish => "Publish needed",
+            SmartMergeState::NeedsSync => "Sync needed",
             SmartMergeState::NeedsCheckpoint => "Checkpoint needed",
             SmartMergeState::HasConflicts => "Blocked",
             SmartMergeState::ProtectedBranch => "Base branch",
@@ -2463,6 +2529,8 @@ impl SmartMergeState {
     fn icon(self) -> IconName {
         match self {
             SmartMergeState::Ready => IconName::PullRequest,
+            SmartMergeState::NeedsPublish => IconName::GitBranchPlus,
+            SmartMergeState::NeedsSync => IconName::PullRequest,
             SmartMergeState::NeedsCheckpoint => IconName::GitCommit,
             SmartMergeState::HasConflicts => IconName::GitMergeConflict,
             SmartMergeState::ProtectedBranch | SmartMergeState::Detached => IconName::GitBranch,
@@ -2473,10 +2541,16 @@ impl SmartMergeState {
         match self {
             SmartMergeState::Ready => ActivityTone::Done,
             SmartMergeState::HasConflicts => ActivityTone::Failed,
-            SmartMergeState::NeedsCheckpoint
+            SmartMergeState::NeedsPublish
+            | SmartMergeState::NeedsSync
+            | SmartMergeState::NeedsCheckpoint
             | SmartMergeState::ProtectedBranch
             | SmartMergeState::Detached => ActivityTone::Waiting,
         }
+    }
+
+    fn can_automerge(self) -> bool {
+        !matches!(self, SmartMergeState::Detached)
     }
 }
 
@@ -2484,6 +2558,8 @@ fn smart_merge_state(
     branch_name: Option<&str>,
     changed_count: usize,
     conflicted_count: usize,
+    tracking_status: Option<UpstreamTrackingStatus>,
+    has_upstream: bool,
 ) -> SmartMergeState {
     let Some(branch_name) = branch_name else {
         return SmartMergeState::Detached;
@@ -2501,6 +2577,22 @@ fn smart_merge_state(
         return SmartMergeState::ProtectedBranch;
     }
 
+    if !has_upstream {
+        return SmartMergeState::NeedsPublish;
+    }
+
+    let Some(tracking_status) = tracking_status else {
+        return SmartMergeState::NeedsPublish;
+    };
+
+    if tracking_status.behind > 0 {
+        return SmartMergeState::NeedsSync;
+    }
+
+    if tracking_status.ahead > 0 {
+        return SmartMergeState::NeedsPublish;
+    }
+
     SmartMergeState::Ready
 }
 
@@ -2509,24 +2601,42 @@ fn smart_merge_detail(
     branch_name: Option<&str>,
     changed_count: usize,
     conflicted_count: usize,
+    ahead_count: Option<u32>,
+    behind_count: Option<u32>,
 ) -> String {
     let branch = branch_name.unwrap_or("detached HEAD");
 
     match state {
         SmartMergeState::Ready => format!(
-            "{branch} is clean locally. Review the merge diff or open a PR so checks can take over."
+            "{branch} is clean, published, and ready for AI Smart Merge to watch checks and merge."
         ),
+        SmartMergeState::NeedsPublish => {
+            let ahead = ahead_count
+                .map(|count| format!(" {count} local commit(s) are ahead of upstream."))
+                .unwrap_or_default();
+            format!(
+                "{branch} is clean locally but still needs publishing.{ahead} AI Smart Merge can push, create the PR, watch checks, and merge."
+            )
+        }
+        SmartMergeState::NeedsSync => {
+            let behind = behind_count
+                .map(|count| format!(" {count} upstream commit(s) are ahead."))
+                .unwrap_or_default();
+            format!(
+                "{branch} needs a base sync before merge.{behind} AI Smart Merge should rebase or pull, then continue through PR and CI."
+            )
+        }
         SmartMergeState::NeedsCheckpoint => {
             let file_label = if changed_count == 1 { "file" } else { "files" };
             format!(
-                "{changed_count} changed {file_label} remain on {branch}. Commit or stash them before Smart Merge can prepare a clean PR."
+                "{changed_count} changed {file_label} remain on {branch}. AI Smart Merge should review, commit, test, push, open the PR, and continue to merge."
             )
         }
         SmartMergeState::HasConflicts => format!(
-            "{conflicted_count} conflict(s) remain on {branch}. Resolve them before Smart Merge can make this merge-ready."
+            "{conflicted_count} conflict(s) remain on {branch}. AI Smart Merge should resolve them before continuing to checks, PR, and merge."
         ),
         SmartMergeState::ProtectedBranch => format!(
-            "{branch} is the base branch. Split into a task branch before asking Smart Merge to prepare a PR."
+            "{branch} is the base branch. AI Smart Merge should split work into a task branch before preparing the PR."
         ),
         SmartMergeState::Detached => {
             "This workspace is detached. Create a task branch before Smart Merge can prepare a PR."
@@ -3089,7 +3199,7 @@ mod tests {
         let item = smart_panel_merge_item(Some("feature"), 0, 0, SmartMergeState::Ready);
 
         assert_eq!(item.status, "Ready");
-        assert!(item.detail.contains("feature is clean locally"));
+        assert!(item.detail.contains("feature is clean, published"));
         assert_eq!(item.tone, ActivityTone::Done);
     }
 
@@ -3264,17 +3374,20 @@ mod tests {
 
     #[test]
     fn smart_merge_state_requires_a_branch() {
-        assert_eq!(smart_merge_state(None, 0, 0), SmartMergeState::Detached);
+        assert_eq!(
+            smart_merge_state(None, 0, 0, None, false),
+            SmartMergeState::Detached
+        );
     }
 
     #[test]
     fn smart_merge_state_blocks_base_branches() {
         assert_eq!(
-            smart_merge_state(Some("main"), 0, 0),
+            smart_merge_state(Some("main"), 0, 0, None, false),
             SmartMergeState::ProtectedBranch
         );
         assert_eq!(
-            smart_merge_state(Some("origin/master"), 0, 0),
+            smart_merge_state(Some("origin/master"), 0, 0, None, false),
             SmartMergeState::ProtectedBranch
         );
     }
@@ -3282,7 +3395,7 @@ mod tests {
     #[test]
     fn smart_merge_state_blocks_dirty_work() {
         assert_eq!(
-            smart_merge_state(Some("feature"), 2, 0),
+            smart_merge_state(Some("feature"), 2, 0, None, false),
             SmartMergeState::NeedsCheckpoint
         );
     }
@@ -3290,7 +3403,7 @@ mod tests {
     #[test]
     fn smart_merge_state_prioritizes_conflicts() {
         assert_eq!(
-            smart_merge_state(Some("feature"), 2, 1),
+            smart_merge_state(Some("feature"), 2, 1, None, false),
             SmartMergeState::HasConflicts
         );
     }
@@ -3298,17 +3411,67 @@ mod tests {
     #[test]
     fn smart_merge_state_accepts_clean_feature_branch() {
         assert_eq!(
-            smart_merge_state(Some("feature"), 0, 0),
+            smart_merge_state(
+                Some("feature"),
+                0,
+                0,
+                Some(UpstreamTrackingStatus {
+                    ahead: 0,
+                    behind: 0,
+                }),
+                true,
+            ),
             SmartMergeState::Ready
         );
     }
 
     #[test]
+    fn smart_merge_state_tracks_publish_and_sync_work() {
+        assert_eq!(
+            smart_merge_state(Some("feature"), 0, 0, None, false),
+            SmartMergeState::NeedsPublish
+        );
+        assert_eq!(
+            smart_merge_state(
+                Some("feature"),
+                0,
+                0,
+                Some(UpstreamTrackingStatus {
+                    ahead: 2,
+                    behind: 0,
+                }),
+                true,
+            ),
+            SmartMergeState::NeedsPublish
+        );
+        assert_eq!(
+            smart_merge_state(
+                Some("feature"),
+                0,
+                0,
+                Some(UpstreamTrackingStatus {
+                    ahead: 0,
+                    behind: 1,
+                }),
+                true,
+            ),
+            SmartMergeState::NeedsSync
+        );
+    }
+
+    #[test]
     fn smart_merge_detail_explains_checkpoint_requirement() {
-        let detail = smart_merge_detail(SmartMergeState::NeedsCheckpoint, Some("feature"), 3, 0);
+        let detail = smart_merge_detail(
+            SmartMergeState::NeedsCheckpoint,
+            Some("feature"),
+            3,
+            0,
+            None,
+            None,
+        );
 
         assert!(detail.contains("3 changed files remain on feature"));
-        assert!(detail.contains("Commit or stash"));
+        assert!(detail.contains("review, commit, test"));
     }
 
     fn status_entry(status: git::status::FileStatus) -> StatusEntry {

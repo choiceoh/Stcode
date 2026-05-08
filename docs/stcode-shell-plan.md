@@ -58,7 +58,7 @@ Stcode's product surface should make Git, CI, worktrees, and parallel agent coor
 - AI Smart Start: start each session from an isolated worktree when possible, route the default New Thread action to lane creation, name the new lane from the task prompt, auto-open the destination agent draft, auto-submit transferred prompt text, and surface leftover changes as a handoff task before the next session starts
 - AI Smart Parallel: keep parallel agents isolated so they do not edit the same worktree or overwrite each other's work
 - AI Smart Panel: show the current goal, todo state, lane isolation, changed files, checks, blockers, PR state, and merge readiness in a right-side work panel
-- AI Smart Merge: take a finished task to CI-passing, non-conflicting, merge-ready state automatically, then merge once the safe conditions are met
+- AI Smart Merge: take a task through the full merge runbook automatically: checkpoint local work, run focused checks, push, create or update the PR, watch CI, fix failures, merge when clean, delete the remote branch when safe, and sync the local base branch
 - AI Smart Workline: provide one shared state model for the right-side detail board and the bottom summary actions, with Start, Review, Merge, Parallel, and Logs available as the main controls
 
 ## What Stays Shared
