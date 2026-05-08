@@ -1328,7 +1328,14 @@ impl Window {
                 // Throttle frame rate based on conditions:
                 // - Thermal pressure (Serious/Critical): cap to ~60fps
                 // - Inactive window (not focused): cap to ~30fps to save energy
-                let min_frame_interval = if !request_frame_options.force_render
+                //
+                // On macOS, bypass throttling entirely. CVDisplayLink already paces frame
+                // requests to the display's native refresh rate, so letting it drive
+                // presentation directly preserves ProMotion 120Hz even when the window is
+                // unfocused or under thermal pressure.
+                let min_frame_interval = if cfg!(target_os = "macos") {
+                    None
+                } else if !request_frame_options.force_render
                     && !request_frame_options.require_presentation
                     && next_frame_callbacks.borrow().is_empty()
                 {
