@@ -724,8 +724,6 @@ pub(crate) fn run(launch_mode: LaunchMode) {
         notifications::init(app_state.client.clone(), app_state.user_store.clone(), cx);
         git_ui::init(cx);
         markdown_preview::init(cx);
-        csv_preview::init(cx);
-        svg_preview::init(cx);
         onboarding::init(cx);
         settings_ui::init(cx);
         keymap_editor::init(cx);
