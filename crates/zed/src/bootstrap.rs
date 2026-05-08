@@ -720,7 +720,6 @@ pub(crate) fn run(launch_mode: LaunchMode) {
             wrap_div_with_search_actions: search::buffer_search::register_pane_search_actions,
         });
         terminal_view::init(cx);
-        toolchain_selector::init(cx);
         theme_selector::init(cx);
         language_tools::init(cx);
         notifications::init(app_state.client.clone(), app_state.user_store.clone(), cx);

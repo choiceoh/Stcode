@@ -162,7 +162,6 @@ members = [
     "crates/theme_selector",
     "crates/time_format",
     "crates/title_bar",
-    "crates/toolchain_selector",
     "crates/ui",
     "crates/ui_input",
     "crates/ui_macros",
@@ -366,7 +365,6 @@ theme_selector = { path = "crates/theme_selector" }
 time_format = { path = "crates/time_format" }
 platform_title_bar = { path = "crates/platform_title_bar" }
 title_bar = { path = "crates/title_bar" }
-toolchain_selector = { path = "crates/toolchain_selector" }
 ui = { path = "crates/ui" }
 ui_input = { path = "crates/ui_input" }
 ui_macros = { path = "crates/ui_macros" }
