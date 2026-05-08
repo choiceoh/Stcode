@@ -198,11 +198,11 @@ pub struct AgentSettingsContent {
     pub enable_feedback: Option<bool>,
     /// Whether to have edit cards in the agent panel expanded, showing a preview of the full diff.
     ///
-    /// Default: true
+    /// Default: false
     pub expand_edit_card: Option<bool>,
     /// Whether to have terminal cards in the agent panel expanded, showing the whole command output.
     ///
-    /// Default: true
+    /// Default: false
     pub expand_terminal_card: Option<bool>,
     /// How thinking blocks should be displayed by default in the agent panel.
     ///
