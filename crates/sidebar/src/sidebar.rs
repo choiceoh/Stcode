@@ -502,7 +502,7 @@ impl Sidebar {
 
         let filter_editor = cx.new(|cx| {
             let mut editor = Editor::single_line(window, cx);
-            editor.set_placeholder_text("Search…", window, cx);
+            editor.set_placeholder_text("검색…", window, cx);
             editor
         });
 
@@ -1687,7 +1687,7 @@ impl Sidebar {
                         .when(!has_active_draft, |this| this.visible_on_hover(&group_name))
                         .tooltip(move |_, cx| {
                             Tooltip::for_action_in(
-                                "Start New Agent Thread",
+                                "새 에이전트 스레드 시작",
                                 &NewThread,
                                 &focus_handle,
                                 cx,
@@ -1750,7 +1750,7 @@ impl Sidebar {
                             Color::Custom(cx.theme().colors().icon_placeholder.opacity(0.1)),
                         ))
                         .child(
-                            Label::new("No threads yet")
+                            Label::new("아직 스레드 없음")
                                 .size(LabelSize::Small)
                                 .color(Color::Placeholder),
                         ),
@@ -1842,7 +1842,7 @@ impl Sidebar {
 
                         let menu = menu.when(show_multi_project_entries, |this| {
                             this.entry(
-                                "Open Project in New Window",
+                                "새 창에서 프로젝트 열기",
                                 Some(Box::new(workspace::MoveProjectToNewWindow)),
                                 {
                                     let project_group_key = project_group_key.clone();
@@ -1880,9 +1880,9 @@ impl Sidebar {
                                             .child(Label::new("-click").color(Color::Muted));
 
                                         let label = if has_threads {
-                                            "Focus Last Workspace"
+                                            "마지막 작업공간으로 포커스"
                                         } else {
-                                            "Focus Workspace"
+                                            "작업공간으로 포커스"
                                         };
 
                                         h_flex()
@@ -1928,7 +1928,7 @@ impl Sidebar {
                         let menu = if open_workspaces.is_empty() {
                             menu
                         } else {
-                            let mut menu = menu.separator().header("Open Workspaces");
+                            let mut menu = menu.separator().header("열린 작업공간");
 
                             for (
                                 workspace_index,
@@ -1994,7 +1994,7 @@ impl Sidebar {
                                                     )
                                                     .icon_size(IconSize::Small)
                                                     .visible_on_hover(&row_group_name)
-                                                    .tooltip(Tooltip::text("Close Workspace"))
+                                                    .tooltip(Tooltip::text("작업공간 닫기"))
                                                     .on_click(move |_, window, cx| {
                                                         cx.stop_propagation();
                                                         window.prevent_default();
@@ -2043,7 +2043,7 @@ impl Sidebar {
                         let project_group_key = project_group_key.clone();
                         let remove_multi_workspace = multi_workspace.clone();
                         menu.separator()
-                            .entry("Remove Project", None, move |window, cx| {
+                            .entry("프로젝트 제거", None, move |window, cx| {
                                 remove_multi_workspace
                                     .update(cx, |multi_workspace, cx| {
                                         multi_workspace
@@ -4340,9 +4340,9 @@ impl Sidebar {
     fn render_no_results(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let has_query = self.has_filter_query(cx);
         let message = if has_query {
-            "No threads match your search."
+            "검색과 일치하는 스레드 없음."
         } else {
-            "No threads yet"
+            "아직 스레드 없음"
         };
 
         v_flex()
@@ -4368,7 +4368,7 @@ impl Sidebar {
             .gap_1()
             .track_focus(&self.focus_handle(cx))
             .child(
-                Button::new("open_project", "Open Project")
+                Button::new("open_project", "프로젝트 열기")
                     .full_width()
                     .key_binding(KeyBinding::for_action(&workspace::Open::default(), cx))
                     .on_click(|_, window, cx| {
@@ -4391,11 +4391,15 @@ impl Sidebar {
                     .w_1_2()
                     .gap_2()
                     .child(Divider::horizontal().color(ui::DividerColor::Border))
-                    .child(Label::new("or").size(LabelSize::XSmall).color(Color::Muted))
+                    .child(
+                        Label::new("또는")
+                            .size(LabelSize::XSmall)
+                            .color(Color::Muted),
+                    )
                     .child(Divider::horizontal().color(ui::DividerColor::Border)),
             )
             .child(
-                Button::new("clone_repo", "Clone Repository")
+                Button::new("clone_repo", "저장소 클론")
                     .full_width()
                     .on_click(|_, window, cx| {
                         window.dispatch_action(git::Clone.boxed_clone(), cx);
@@ -4463,7 +4467,7 @@ impl Sidebar {
                                 this.child(
                                     IconButton::new("clear_filter", IconName::Close)
                                         .icon_size(IconSize::Small)
-                                        .tooltip(Tooltip::text("Clear Search"))
+                                        .tooltip(Tooltip::text("검색 지우기"))
                                         .on_click(cx.listener(|this, _, window, cx| {
                                             this.reset_filter_editor_text(window, cx);
                                             this.update_entries(cx);
@@ -4522,7 +4526,7 @@ impl Sidebar {
                                 h_flex()
                                     .gap_2()
                                     .justify_between()
-                                    .child(Label::new("Toggle Sidebar"))
+                                    .child(Label::new("사이드바 전환"))
                                     .child(KeyBinding::for_action(&ToggleWorkspaceSidebar, cx)),
                             )
                             .child(
@@ -4532,7 +4536,7 @@ impl Sidebar {
                                     .border_t_1()
                                     .border_color(cx.theme().colors().border_variant)
                                     .justify_between()
-                                    .child(Label::new("Focus Sidebar"))
+                                    .child(Label::new("사이드바로 포커스"))
                                     .child(KeyBinding::for_action(&FocusWorkspaceSidebar, cx)),
                             )
                             .into_any_element()
@@ -4564,9 +4568,9 @@ impl Sidebar {
                     .toggle_state(is_archive)
                     .tooltip(move |_, cx| {
                         let label = if is_archive {
-                            "Hide Thread History"
+                            "스레드 기록 숨기기"
                         } else {
-                            "Show Thread History"
+                            "스레드 기록 보기"
                         };
                         Tooltip::for_action(label, &ToggleThreadHistory, cx)
                     })
@@ -4644,12 +4648,12 @@ impl Sidebar {
         });
         render_import_onboarding_banner(
             "acp",
-            "Looking for threads from external agents?",
-            "Import threads from agents like Claude Agent, Codex, and more, whether started in Zed or another client.",
+            "외부 에이전트의 스레드를 찾고 있나요?",
+            "Stcode나 다른 클라이언트에서 시작한 Claude Agent, Codex 등의 스레드를 가져옵니다.",
             if verbose_labels {
-                "Import Threads from External Agents"
+                "외부 에이전트 스레드 가져오기"
             } else {
-                "Import Threads"
+                "스레드 가져오기"
             },
             |_, _window, cx| AcpThreadImportOnboarding::dismiss(cx),
             on_import,
@@ -4673,10 +4677,7 @@ impl Sidebar {
             .collect::<Vec<_>>()
             .join(" and ");
 
-        let description = format!(
-            "Import threads from {} to continue where you left off.",
-            channel_names
-        );
+        let description = format!("{}에서 스레드를 가져와 이어서 작업합니다.", channel_names);
 
         let on_import = cx.listener(|this, _, _window, cx| {
             CrossChannelImportOnboarding::dismiss(cx);
@@ -4688,12 +4689,12 @@ impl Sidebar {
         });
         render_import_onboarding_banner(
             "channel",
-            "Threads found from other channels",
+            "다른 채널의 스레드 발견",
             description,
             if verbose_labels {
-                "Import Threads from Other Channels"
+                "다른 채널 스레드 가져오기"
             } else {
-                "Import Threads"
+                "스레드 가져오기"
             },
             |_, _window, cx| CrossChannelImportOnboarding::dismiss(cx),
             on_import,

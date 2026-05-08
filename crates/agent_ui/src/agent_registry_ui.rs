@@ -95,7 +95,7 @@ impl AgentRegistryPage {
             let registry_store = AgentRegistryStore::global(cx);
             let query_editor = cx.new(|cx| {
                 let mut input = Editor::single_line(window, cx);
-                input.set_placeholder_text("Search agents...", window, cx);
+                input.set_placeholder_text("에이전트 검색...", window, cx);
                 input
             });
             cx.subscribe(&query_editor, Self::on_query_change).detach();
@@ -294,30 +294,30 @@ impl AgentRegistryPage {
         let registry_store = self.registry_store.read(cx);
 
         let message = if registry_store.is_fetching() {
-            "Loading registry..."
+            "레지스트리 불러오는 중..."
         } else if registry_store.fetch_error().is_some() {
-            "Failed to load the agent registry. Please check your connection and try again."
+            "에이전트 레지스트리를 불러오지 못했습니다. 연결을 확인한 뒤 다시 시도하세요."
         } else {
             match self.filter {
                 RegistryFilter::All => {
                     if has_search {
-                        "No agents match your search."
+                        "검색과 일치하는 에이전트 없음."
                     } else {
-                        "No agents available."
+                        "사용 가능한 에이전트 없음."
                     }
                 }
                 RegistryFilter::Installed => {
                     if has_search {
-                        "No installed agents match your search."
+                        "검색과 일치하는 설치된 에이전트 없음."
                     } else {
-                        "No installed agents."
+                        "설치된 에이전트 없음."
                     }
                 }
                 RegistryFilter::NotInstalled => {
                     if has_search {
-                        "No uninstalled agents match your search."
+                        "검색과 일치하는 미설치 에이전트 없음."
                     } else {
-                        "No uninstalled agents."
+                        "미설치 에이전트 없음."
                     }
                 }
             }

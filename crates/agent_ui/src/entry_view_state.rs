@@ -89,7 +89,7 @@ impl EntryViewState {
                             self.prompt_store.clone(),
                             self.session_capabilities.clone(),
                             self.agent_id.clone(),
-                            "Edit message － @ to include context",
+                            "메시지 편집 － @로 컨텍스트 추가",
                             editor::EditorMode::AutoHeight {
                                 min_lines: 1,
                                 max_lines: None,

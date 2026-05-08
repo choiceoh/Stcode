@@ -208,10 +208,10 @@ struct StcodeSmartRunThreadStatus {
 impl StcodeSmartRunKind {
     fn title(self) -> &'static str {
         match self {
-            Self::Start => "AI Smart Start",
-            Self::Panel => "AI Smart Panel",
-            Self::Parallel => "AI Smart Parallel",
-            Self::Merge => "AI Smart Merge",
+            Self::Start => "AI 스마트 시작",
+            Self::Panel => "AI 스마트 패널",
+            Self::Parallel => "AI 스마트 병렬",
+            Self::Merge => "AI 스마트 머지",
         }
     }
 
@@ -226,10 +226,10 @@ impl StcodeSmartRunKind {
 
     fn checkpoint_label(self) -> &'static str {
         match self {
-            Self::Start => "Handoff",
-            Self::Panel => "Next action",
-            Self::Parallel => "Lane safe",
-            Self::Merge => "Merge-ready",
+            Self::Start => "인계",
+            Self::Panel => "다음 작업",
+            Self::Parallel => "라인 안전",
+            Self::Merge => "머지 준비",
         }
     }
 }
@@ -241,27 +241,30 @@ impl StcodeSmartRunState {
     ) -> StcodeSmartRunSnapshot {
         let phase = stcode_smart_run_phase(thread_status);
         let status = match phase {
-            StcodeSmartRunPhase::Pending => "Submitted",
-            StcodeSmartRunPhase::Active => "Working",
-            StcodeSmartRunPhase::Complete => "Ready",
-            StcodeSmartRunPhase::Blocked => "Blocked",
+            StcodeSmartRunPhase::Pending => "제출됨",
+            StcodeSmartRunPhase::Active => "작업 중",
+            StcodeSmartRunPhase::Complete => "준비됨",
+            StcodeSmartRunPhase::Blocked => "막힘",
         };
         let detail = match phase {
             StcodeSmartRunPhase::Pending => {
-                format!("Prompt submitted. {}", self.context_summary)
+                format!("프롬프트가 제출됨. {}", self.context_summary)
             }
             StcodeSmartRunPhase::Active => {
                 format!(
-                    "Agent is running this smart workflow. {}",
+                    "에이전트가 이 스마트 작업 흐름을 실행 중. {}",
                     self.context_summary
                 )
             }
             StcodeSmartRunPhase::Complete => {
-                format!("Agent reached an idle checkpoint. {}", self.context_summary)
+                format!(
+                    "에이전트가 대기 체크포인트에 도달함. {}",
+                    self.context_summary
+                )
             }
             StcodeSmartRunPhase::Blocked => {
                 format!(
-                    "Agent needs attention before it can continue. {}",
+                    "계속하기 전에 에이전트 확인이 필요함. {}",
                     self.context_summary
                 )
             }
@@ -321,31 +324,31 @@ fn stcode_smart_run_steps(
 
     vec![
         StcodeSmartRunStep {
-            label: "Snapshot",
-            status: "Done",
+            label: "스냅샷",
+            status: "완료",
             phase: StcodeSmartRunPhase::Complete,
         },
         StcodeSmartRunStep {
-            label: "Prompt",
-            status: "Sent",
+            label: "프롬프트",
+            status: "전송됨",
             phase: StcodeSmartRunPhase::Complete,
         },
         StcodeSmartRunStep {
-            label: "Agent",
+            label: "에이전트",
             status: match agent_phase {
-                StcodeSmartRunPhase::Active => "Running",
-                StcodeSmartRunPhase::Complete => "Done",
-                StcodeSmartRunPhase::Blocked => "Blocked",
-                StcodeSmartRunPhase::Pending => "Waiting",
+                StcodeSmartRunPhase::Active => "실행 중",
+                StcodeSmartRunPhase::Complete => "완료",
+                StcodeSmartRunPhase::Blocked => "막힘",
+                StcodeSmartRunPhase::Pending => "대기 중",
             },
             phase: agent_phase,
         },
         StcodeSmartRunStep {
             label: kind.checkpoint_label(),
             status: match checkpoint_phase {
-                StcodeSmartRunPhase::Complete => "Ready",
-                StcodeSmartRunPhase::Blocked => "Blocked",
-                _ => "Waiting",
+                StcodeSmartRunPhase::Complete => "준비됨",
+                StcodeSmartRunPhase::Blocked => "막힘",
+                _ => "대기 중",
             },
             phase: checkpoint_phase,
         },
@@ -366,40 +369,40 @@ fn stcode_smart_merge_run_steps(phase: StcodeSmartRunPhase) -> Vec<StcodeSmartRu
 
     vec![
         StcodeSmartRunStep {
-            label: "Snapshot",
-            status: "Done",
+            label: "스냅샷",
+            status: "완료",
             phase: StcodeSmartRunPhase::Complete,
         },
         StcodeSmartRunStep {
-            label: "Merge runbook",
-            status: "Sent",
+            label: "머지 절차",
+            status: "전송됨",
             phase: StcodeSmartRunPhase::Complete,
         },
         StcodeSmartRunStep {
-            label: "Agent",
+            label: "에이전트",
             status: match agent_phase {
-                StcodeSmartRunPhase::Active => "Running",
-                StcodeSmartRunPhase::Complete => "Done",
-                StcodeSmartRunPhase::Blocked => "Blocked",
-                StcodeSmartRunPhase::Pending => "Waiting",
+                StcodeSmartRunPhase::Active => "실행 중",
+                StcodeSmartRunPhase::Complete => "완료",
+                StcodeSmartRunPhase::Blocked => "막힘",
+                StcodeSmartRunPhase::Pending => "대기 중",
             },
             phase: agent_phase,
         },
         StcodeSmartRunStep {
-            label: "Checks + PR",
+            label: "체크 + PR",
             status: match downstream_phase {
-                StcodeSmartRunPhase::Complete => "Done",
-                StcodeSmartRunPhase::Blocked => "Blocked",
-                _ => "Waiting",
+                StcodeSmartRunPhase::Complete => "완료",
+                StcodeSmartRunPhase::Blocked => "막힘",
+                _ => "대기 중",
             },
             phase: downstream_phase,
         },
         StcodeSmartRunStep {
-            label: "Merge",
+            label: "머지",
             status: match downstream_phase {
-                StcodeSmartRunPhase::Complete => "Done",
-                StcodeSmartRunPhase::Blocked => "Blocked",
-                _ => "Waiting",
+                StcodeSmartRunPhase::Complete => "완료",
+                StcodeSmartRunPhase::Blocked => "막힘",
+                _ => "대기 중",
             },
             phase: downstream_phase,
         },
@@ -3726,7 +3729,7 @@ impl AgentPanel {
                                     IconButton::new("retry-thread-title", IconName::XCircle)
                                         .icon_color(Color::Error)
                                         .icon_size(IconSize::Small)
-                                        .tooltip(Tooltip::text("Title generation failed. Retry"))
+                                        .tooltip(Tooltip::text("제목 생성 실패. 다시 시도"))
                                         .on_click({
                                             let conversation_view = conversation_view.clone();
                                             move |_event, _window, cx| {
@@ -3749,10 +3752,8 @@ impl AgentPanel {
                         .into_any_element()
                 }
             }
-            VisibleSurface::Configuration(_) => {
-                Label::new("Settings").truncate().into_any_element()
-            }
-            VisibleSurface::Uninitialized => Label::new("Agent").truncate().into_any_element(),
+            VisibleSurface::Configuration(_) => Label::new("설정").truncate().into_any_element(),
+            VisibleSurface::Uninitialized => Label::new("에이전트").truncate().into_any_element(),
         };
 
         h_flex()
@@ -3814,7 +3815,7 @@ impl AgentPanel {
                     let focus_handle = focus_handle.clone();
                     move |_window, cx| {
                         Tooltip::for_action_in(
-                            "Toggle Agent Menu",
+                            "에이전트 메뉴 열기",
                             &ToggleOptionsMenu,
                             &focus_handle,
                             cx,
@@ -3830,11 +3831,11 @@ impl AgentPanel {
                         menu = menu.context(focus_handle.clone());
 
                         if can_regenerate_thread_title {
-                            menu = menu.header("Current Thread");
+                            menu = menu.header("현재 스레드");
 
                             if let Some(conversation_view) = conversation_view.as_ref() {
                                 menu = menu
-                                    .entry("Regenerate Thread Title", None, {
+                                    .entry("스레드 제목 다시 생성", None, {
                                         let conversation_view = conversation_view.clone();
                                         move |_, cx| {
                                             Self::handle_regenerate_thread_title(
@@ -3848,9 +3849,9 @@ impl AgentPanel {
                         }
 
                         menu = menu
-                            .header("MCP Servers")
+                            .header("MCP 서버")
                             .action(
-                                "View Server Extensions",
+                                "서버 확장 보기",
                                 Box::new(zed_actions::Extensions {
                                     category_filter: Some(
                                         zed_actions::ExtensionCategoryFilter::ContextServers,
@@ -3858,16 +3859,16 @@ impl AgentPanel {
                                     id: None,
                                 }),
                             )
-                            .action("Add Custom Server…", Box::new(AddContextServer))
+                            .action("사용자 지정 서버 추가…", Box::new(AddContextServer))
                             .separator()
-                            .action("Rules", Box::new(OpenRulesLibrary::default()))
-                            .action("Profiles", Box::new(ManageProfiles::default()))
-                            .action("Settings", Box::new(OpenSettings))
+                            .action("규칙", Box::new(OpenRulesLibrary::default()))
+                            .action("프로필", Box::new(ManageProfiles::default()))
+                            .action("설정", Box::new(OpenSettings))
                             .separator()
-                            .action("Toggle Threads Sidebar", Box::new(ToggleWorkspaceSidebar));
+                            .action("스레드 사이드바 전환", Box::new(ToggleWorkspaceSidebar));
 
                         if show_reauthenticate {
-                            menu = menu.action("Reauthenticate", Box::new(ReauthenticateAgent))
+                            menu = menu.action("다시 인증", Box::new(ReauthenticateAgent))
                         }
 
                         menu
@@ -3886,7 +3887,7 @@ impl AgentPanel {
             }))
             .tooltip({
                 move |_window, cx| {
-                    Tooltip::for_action_in("Go Back", &workspace::GoBack, &focus_handle, cx)
+                    Tooltip::for_action_in("뒤로", &workspace::GoBack, &focus_handle, cx)
                 }
             })
     }
@@ -3963,7 +3964,7 @@ impl AgentPanel {
                             if !thread.is_empty() {
                                 let session_id = thread.id().clone();
                                 this.item(
-                                    ContextMenuEntry::new("New From Summary")
+                                    ContextMenuEntry::new("요약에서 새 스레드")
                                         .icon(IconName::ThreadFromSummary)
                                         .icon_color(Color::Muted)
                                         .handler(move |window, cx| {
@@ -4040,7 +4041,7 @@ impl AgentPanel {
                                 .collect::<Vec<_>>();
 
                             if !agent_items.is_empty() {
-                                menu = menu.separator().header("External Agents");
+                                menu = menu.separator().header("외부 에이전트");
                             }
                             for item in &agent_items {
                                 let mut entry = ContextMenuEntry::new(item.display_name.clone());
@@ -4105,7 +4106,7 @@ impl AgentPanel {
                         })
                         .separator()
                         .item(
-                            ContextMenuEntry::new("Add More Agents")
+                            ContextMenuEntry::new("에이전트 추가")
                                 .icon(IconName::Plus)
                                 .icon_color(Color::Muted)
                                 .handler({
@@ -4147,7 +4148,7 @@ impl AgentPanel {
                 Tooltip::with_meta(
                     selected_agent_label_for_tooltip.clone(),
                     None,
-                    "Selected Agent",
+                    "선택된 에이전트",
                     cx,
                 )
             });
@@ -4174,14 +4175,14 @@ impl AgentPanel {
         let full_screen_button = if is_full_screen {
             IconButton::new("disable-full-screen", IconName::Minimize)
                 .icon_size(IconSize::Small)
-                .tooltip(move |_, cx| Tooltip::for_action("Disable Full Screen", &ToggleZoom, cx))
+                .tooltip(move |_, cx| Tooltip::for_action("전체 화면 끄기", &ToggleZoom, cx))
                 .on_click(cx.listener(move |this, _, window, cx| {
                     this.toggle_zoom(&ToggleZoom, window, cx);
                 }))
         } else {
             IconButton::new("enable-full-screen", IconName::Maximize)
                 .icon_size(IconSize::Small)
-                .tooltip(move |_, cx| Tooltip::for_action("Enable Full Screen", &ToggleZoom, cx))
+                .tooltip(move |_, cx| Tooltip::for_action("전체 화면 켜기", &ToggleZoom, cx))
                 .on_click(cx.listener(move |this, _, window, cx| {
                     this.toggle_zoom(&ToggleZoom, window, cx);
                 }))
@@ -4232,7 +4233,7 @@ impl AgentPanel {
                 .trigger_with_tooltip(agent_selector_button, {
                     move |_window, cx| {
                         Tooltip::for_action_in(
-                            "New Thread…",
+                            "새 스레드…",
                             &ToggleNewThreadMenu,
                             &focus_handle,
                             cx,
@@ -4280,7 +4281,7 @@ impl AgentPanel {
                     {
                         move |_window, cx| {
                             Tooltip::for_action_in(
-                                "New Thread\u{2026}",
+                                "새 스레드\u{2026}",
                                 &ToggleNewThreadMenu,
                                 &focus_handle,
                                 cx,
@@ -5611,20 +5612,18 @@ mod tests {
             had_error: false,
         }));
 
-        assert_eq!(snapshot.title, "AI Smart Merge");
+        assert_eq!(snapshot.title, "AI 스마트 머지");
         assert_eq!(snapshot.phase, StcodeSmartRunPhase::Complete);
         assert!(
             snapshot
                 .steps
                 .iter()
-                .any(|step| step.label == "Merge" && step.phase == StcodeSmartRunPhase::Complete)
+                .any(|step| step.label == "머지" && step.phase == StcodeSmartRunPhase::Complete)
         );
         assert!(
-            snapshot
-                .steps
-                .iter()
-                .any(|step| step.label == "Checks + PR"
-                    && step.phase == StcodeSmartRunPhase::Complete)
+            snapshot.steps.iter().any(
+                |step| step.label == "체크 + PR" && step.phase == StcodeSmartRunPhase::Complete
+            )
         );
     }
 

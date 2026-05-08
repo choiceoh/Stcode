@@ -51,11 +51,11 @@ impl LlmCompatibleProvider {
     fn name(&self) -> &'static str {
         match self {
             LlmCompatibleProvider::OpenAi => "OpenAI",
-            LlmCompatibleProvider::Ollama => "Ollama Local",
-            LlmCompatibleProvider::LmStudio => "LM Studio Local",
-            LlmCompatibleProvider::Vllm => "vLLM Local",
-            LlmCompatibleProvider::Sglang => "SGLang Local",
-            LlmCompatibleProvider::LocalOpenAiCompatible => "Local Model",
+            LlmCompatibleProvider::Ollama => "Ollama 로컬",
+            LlmCompatibleProvider::LmStudio => "LM Studio 로컬",
+            LlmCompatibleProvider::Vllm => "vLLM 로컬",
+            LlmCompatibleProvider::Sglang => "SGLang 로컬",
+            LlmCompatibleProvider::LocalOpenAiCompatible => "로컬 모델",
         }
     }
 
@@ -87,12 +87,12 @@ impl LlmCompatibleProvider {
 
     fn api_key_label(&self) -> &'static str {
         match self {
-            LlmCompatibleProvider::OpenAi => "API Key",
+            LlmCompatibleProvider::OpenAi => "API 키",
             LlmCompatibleProvider::Ollama
             | LlmCompatibleProvider::LmStudio
             | LlmCompatibleProvider::Vllm
             | LlmCompatibleProvider::Sglang
-            | LlmCompatibleProvider::LocalOpenAiCompatible => "API Key (optional)",
+            | LlmCompatibleProvider::LocalOpenAiCompatible => "API 키 (선택 사항)",
         }
     }
 
@@ -154,22 +154,20 @@ impl LlmCompatibleProvider {
     fn description(&self) -> &'static str {
         match self {
             LlmCompatibleProvider::OpenAi => {
-                "This provider will use an OpenAI compatible cloud API."
+                "OpenAI 호환 클라우드 API를 사용하는 프로바이더입니다."
             }
             LlmCompatibleProvider::Ollama => {
-                "Add an Ollama model running locally through its OpenAI-compatible API."
+                "OpenAI 호환 API로 로컬에서 실행 중인 Ollama 모델을 추가합니다."
             }
             LlmCompatibleProvider::LmStudio => {
-                "Add an LM Studio model running locally through its OpenAI-compatible API."
+                "OpenAI 호환 API로 로컬에서 실행 중인 LM Studio 모델을 추가합니다."
             }
-            LlmCompatibleProvider::Vllm => {
-                "Add a vLLM-served model through its OpenAI-compatible API."
-            }
+            LlmCompatibleProvider::Vllm => "OpenAI 호환 API로 vLLM이 제공하는 모델을 추가합니다.",
             LlmCompatibleProvider::Sglang => {
-                "Add an SGLang-served model through its OpenAI-compatible API."
+                "OpenAI 호환 API로 SGLang이 제공하는 모델을 추가합니다."
             }
             LlmCompatibleProvider::LocalOpenAiCompatible => {
-                "Add a local model server that exposes an OpenAI-compatible API."
+                "OpenAI 호환 API를 제공하는 로컬 모델 서버를 추가합니다."
             }
         }
     }
@@ -186,7 +184,7 @@ struct AddLlmProviderInput {
 impl AddLlmProviderInput {
     fn new(provider: LlmCompatibleProvider, window: &mut Window, cx: &mut App) -> Self {
         let provider_name =
-            single_line_input("Provider Name", provider.name(), None, 1, window, cx);
+            single_line_input("프로바이더 이름", provider.name(), None, 1, window, cx);
         let api_url = single_line_input("API URL", provider.api_url(), None, 2, window, cx);
         let api_key_label = provider.api_key_label();
         let api_key_placeholder = provider.api_key_placeholder();
@@ -251,7 +249,7 @@ impl ModelInput {
         let base_tab_index = (3 + (model_index * 4)) as isize;
 
         let model_name = single_line_input(
-            "Model Name",
+            "모델 이름",
             provider.model_placeholder(),
             None,
             base_tab_index + 1,
@@ -259,7 +257,7 @@ impl ModelInput {
             cx,
         );
         let max_completion_tokens = single_line_input(
-            "Max Completion Tokens",
+            "최대 Completion 토큰",
             provider.max_completion_tokens(),
             Some(provider.max_completion_tokens()),
             base_tab_index + 2,
@@ -267,7 +265,7 @@ impl ModelInput {
             cx,
         );
         let max_output_tokens = single_line_input(
-            "Max Output Tokens",
+            "최대 출력 토큰",
             provider.max_output_tokens(),
             Some(provider.max_output_tokens()),
             base_tab_index + 3,
@@ -275,7 +273,7 @@ impl ModelInput {
             cx,
         );
         let max_tokens = single_line_input(
-            "Max Tokens",
+            "최대 토큰",
             provider.max_tokens(),
             Some(provider.max_tokens()),
             base_tab_index + 4,
@@ -310,7 +308,7 @@ impl ModelInput {
     fn parse(&self, cx: &App) -> Result<AvailableModel, SharedString> {
         let name = self.name.read(cx).text(cx);
         if name.is_empty() {
-            return Err(SharedString::from("Model Name cannot be empty"));
+            return Err(SharedString::from("모델 이름은 비워둘 수 없음"));
         }
         Ok(AvailableModel {
             name,
@@ -320,21 +318,21 @@ impl ModelInput {
                     .read(cx)
                     .text(cx)
                     .parse::<u64>()
-                    .map_err(|_| SharedString::from("Max Completion Tokens must be a number"))?,
+                    .map_err(|_| SharedString::from("최대 Completion 토큰은 숫자여야 함"))?,
             ),
             max_output_tokens: Some(
                 self.max_output_tokens
                     .read(cx)
                     .text(cx)
                     .parse::<u64>()
-                    .map_err(|_| SharedString::from("Max Output Tokens must be a number"))?,
+                    .map_err(|_| SharedString::from("최대 출력 토큰은 숫자여야 함"))?,
             ),
             max_tokens: self
                 .max_tokens
                 .read(cx)
                 .text(cx)
                 .parse::<u64>()
-                .map_err(|_| SharedString::from("Max Tokens must be a number"))?,
+                .map_err(|_| SharedString::from("최대 토큰은 숫자여야 함"))?,
             reasoning_effort: None,
             capabilities: ModelCapabilities {
                 tools: self.capabilities.supports_tools.selected(),
@@ -354,7 +352,7 @@ fn save_provider_to_settings(
 ) -> Task<Result<(), SharedString>> {
     let provider_name: Arc<str> = input.provider_name.read(cx).text(cx).into();
     if provider_name.is_empty() {
-        return Task::ready(Err("Provider Name cannot be empty".into()));
+        return Task::ready(Err("프로바이더 이름은 비워둘 수 없음".into()));
     }
 
     if LanguageModelRegistry::read_global(cx)
@@ -365,14 +363,12 @@ fn save_provider_to_settings(
                 || provider.name().0.as_ref() == provider_name.as_ref()
         })
     {
-        return Task::ready(Err(
-            "Provider Name is already taken by another provider".into()
-        ));
+        return Task::ready(Err("이미 다른 프로바이더가 사용하는 이름임".into()));
     }
 
     let api_url = input.api_url.read(cx).text(cx);
     if api_url.is_empty() {
-        return Task::ready(Err("API URL cannot be empty".into()));
+        return Task::ready(Err("API URL은 비워둘 수 없음".into()));
     }
 
     let api_key = input.api_key.read(cx).text(cx);
@@ -386,7 +382,7 @@ fn save_provider_to_settings(
         api_key
     };
     if api_key.is_empty() {
-        return Task::ready(Err("API Key cannot be empty".into()));
+        return Task::ready(Err("API 키는 비워둘 수 없음".into()));
     }
 
     let mut models = Vec::new();
@@ -395,7 +391,7 @@ fn save_provider_to_settings(
         match model.parse(cx) {
             Ok(model) => {
                 if !model_names.insert(model.name.clone()) {
-                    return Task::ready(Err("Model Names must be unique".into()));
+                    return Task::ready(Err("모델 이름은 서로 달라야 함".into()));
                 }
                 models.push(model)
             }
@@ -407,7 +403,7 @@ fn save_provider_to_settings(
     let task = cx.write_credentials(&api_url, "Bearer", api_key.as_bytes());
     cx.spawn(async move |cx| {
         task.await
-            .map_err(|_| SharedString::from("Failed to write API key to keychain"))?;
+            .map_err(|_| SharedString::from("API 키를 키체인에 저장하지 못함"))?;
         cx.update(|cx| {
             update_settings_file(fs, cx, |settings, _cx| {
                 settings
@@ -484,9 +480,9 @@ impl AddLlmProviderModal {
             .child(
                 h_flex()
                     .justify_between()
-                    .child(Label::new("Models").size(LabelSize::Small))
+                    .child(Label::new("모델").size(LabelSize::Small))
                     .child(
-                        Button::new("add-model", "Add Model")
+                        Button::new("add-model", "모델 추가")
                             .start_icon(
                                 Icon::new(IconName::Plus)
                                     .size(IconSize::XSmall)
@@ -533,7 +529,7 @@ impl AddLlmProviderModal {
                     .gap_1()
                     .child(
                         Checkbox::new(("supports-tools", ix), model.capabilities.supports_tools)
-                            .label("Supports tools")
+                            .label("도구 지원")
                             .on_click(cx.listener(move |this, checked, _window, cx| {
                                 this.input.models[ix].capabilities.supports_tools = *checked;
                                 cx.notify();
@@ -541,7 +537,7 @@ impl AddLlmProviderModal {
                     )
                     .child(
                         Checkbox::new(("supports-images", ix), model.capabilities.supports_images)
-                            .label("Supports images")
+                            .label("이미지 지원")
                             .on_click(cx.listener(move |this, checked, _window, cx| {
                                 this.input.models[ix].capabilities.supports_images = *checked;
                                 cx.notify();
@@ -552,7 +548,7 @@ impl AddLlmProviderModal {
                             ("supports-parallel-tool-calls", ix),
                             model.capabilities.supports_parallel_tool_calls,
                         )
-                        .label("Supports parallel_tool_calls")
+                        .label("parallel_tool_calls 지원")
                         .on_click(cx.listener(
                             move |this, checked, _window, cx| {
                                 this.input.models[ix]
@@ -567,7 +563,7 @@ impl AddLlmProviderModal {
                             ("supports-prompt-cache-key", ix),
                             model.capabilities.supports_prompt_cache_key,
                         )
-                        .label("Supports prompt_cache_key")
+                        .label("prompt_cache_key 지원")
                         .on_click(cx.listener(
                             move |this, checked, _window, cx| {
                                 this.input.models[ix].capabilities.supports_prompt_cache_key =
@@ -581,7 +577,7 @@ impl AddLlmProviderModal {
                             ("supports-chat-completions", ix),
                             model.capabilities.supports_chat_completions,
                         )
-                        .label("Supports /chat/completions")
+                        .label("/chat/completions 지원")
                         .on_click(cx.listener(
                             move |this, checked, _window, cx| {
                                 this.input.models[ix].capabilities.supports_chat_completions =
@@ -593,7 +589,7 @@ impl AddLlmProviderModal {
             )
             .when(has_more_than_one_model, |this| {
                 this.child(
-                    Button::new(("remove-model", ix), "Remove Model")
+                    Button::new(("remove-model", ix), "모델 제거")
                         .start_icon(
                             Icon::new(IconName::Trash)
                                 .size(IconSize::XSmall)
@@ -663,7 +659,7 @@ impl Render for AddLlmProviderModal {
                 Modal::new("configure-context-server", None)
                     .header(
                         ModalHeader::new()
-                            .headline("Add LLM Provider")
+                            .headline("LLM 프로바이더 추가")
                             .description(self.provider.description()),
                     )
                     .when_some(self.last_error.clone(), |this, error| {
@@ -702,7 +698,7 @@ impl Render for AddLlmProviderModal {
                             h_flex()
                                 .gap_1()
                                 .child(
-                                    Button::new("cancel", "Cancel")
+                                    Button::new("cancel", "취소")
                                         .key_binding(
                                             KeyBinding::for_action_in(
                                                 &menu::Cancel,
@@ -716,7 +712,7 @@ impl Render for AddLlmProviderModal {
                                         })),
                                 )
                                 .child(
-                                    Button::new("save-server", "Save Provider")
+                                    Button::new("save-server", "프로바이더 저장")
                                         .key_binding(
                                             KeyBinding::for_action_in(
                                                 &menu::Confirm,
@@ -755,17 +751,17 @@ mod tests {
 
         assert_eq!(
             save_provider_validation_errors("", "someurl", "somekey", vec![], cx,).await,
-            Some("Provider Name cannot be empty".into())
+            Some("프로바이더 이름은 비워둘 수 없음".into())
         );
 
         assert_eq!(
             save_provider_validation_errors("someprovider", "", "somekey", vec![], cx,).await,
-            Some("API URL cannot be empty".into())
+            Some("API URL은 비워둘 수 없음".into())
         );
 
         assert_eq!(
             save_provider_validation_errors("someprovider", "someurl", "", vec![], cx,).await,
-            Some("API Key cannot be empty".into())
+            Some("API 키는 비워둘 수 없음".into())
         );
 
         assert_eq!(
@@ -777,7 +773,7 @@ mod tests {
                 cx,
             )
             .await,
-            Some("Model Name cannot be empty".into())
+            Some("모델 이름은 비워둘 수 없음".into())
         );
 
         assert_eq!(
@@ -789,7 +785,7 @@ mod tests {
                 cx,
             )
             .await,
-            Some("Max Tokens must be a number".into())
+            Some("최대 토큰은 숫자여야 함".into())
         );
 
         assert_eq!(
@@ -801,7 +797,7 @@ mod tests {
                 cx,
             )
             .await,
-            Some("Max Completion Tokens must be a number".into())
+            Some("최대 Completion 토큰은 숫자여야 함".into())
         );
 
         assert_eq!(
@@ -813,7 +809,7 @@ mod tests {
                 cx,
             )
             .await,
-            Some("Max Output Tokens must be a number".into())
+            Some("최대 출력 토큰은 숫자여야 함".into())
         );
 
         assert_eq!(
@@ -828,7 +824,7 @@ mod tests {
                 cx,
             )
             .await,
-            Some("Model Names must be unique".into())
+            Some("모델 이름은 서로 달라야 함".into())
         );
     }
 
@@ -857,7 +853,7 @@ mod tests {
                 cx,
             )
             .await,
-            Some("Provider Name is already taken by another provider".into())
+            Some("이미 다른 프로바이더가 사용하는 이름임".into())
         );
     }
 

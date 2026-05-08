@@ -131,7 +131,7 @@ impl<T: 'static> Render for PromptEditor<T> {
             .icon_color(Color::Muted)
             .when(!menu_visible, |this| {
                 this.tooltip(move |_window, cx| {
-                    Tooltip::with_meta("Add Context", None, "Or type @ to include context", cx)
+                    Tooltip::with_meta("컨텍스트 추가", None, "@를 입력해 컨텍스트 추가", cx)
                 })
             })
             .on_click(cx.listener(move |this, _, window, cx| {
@@ -403,10 +403,10 @@ impl<T: 'static> PromptEditor<T> {
 
         let agent_panel_keybinding =
             ui::text_for_action(&zed_actions::assistant::ToggleFocus, window, cx)
-                .map(|keybinding| format!("{keybinding} to chat"))
+                .map(|keybinding| format!("{keybinding}로 채팅"))
                 .unwrap_or_default();
 
-        format!("{action}… ({agent_panel_keybinding} ― ↓↑ for history — @ to include context)")
+        format!("{action}… ({agent_panel_keybinding} ― ↓↑ 기록 — @로 컨텍스트 추가)")
     }
 
     pub fn prompt(&self, cx: &App) -> String {
@@ -1576,22 +1576,22 @@ impl GenerationMode {
     }
     fn tooltip_interrupt(self) -> &'static str {
         match self {
-            GenerationMode::Generate => "Interrupt Generation",
-            GenerationMode::Transform => "Interrupt Transform",
+            GenerationMode::Generate => "생성 중단",
+            GenerationMode::Transform => "변환 중단",
         }
     }
 
     fn tooltip_restart(self) -> &'static str {
         match self {
-            GenerationMode::Generate => "Restart Generation",
-            GenerationMode::Transform => "Restart Transform",
+            GenerationMode::Generate => "생성 다시 시작",
+            GenerationMode::Transform => "변환 다시 시작",
         }
     }
 
     fn tooltip_accept(self) -> &'static str {
         match self {
-            GenerationMode::Generate => "Accept Generation",
-            GenerationMode::Transform => "Accept Transform",
+            GenerationMode::Generate => "생성 적용",
+            GenerationMode::Transform => "변환 적용",
         }
     }
 }

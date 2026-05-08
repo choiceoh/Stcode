@@ -166,7 +166,7 @@ impl Render for ConfigureContextServerToolsModal {
                 Modal::new("configure-context-server-tools", None::<ScrollHandle>)
                     .header(
                         ModalHeader::new()
-                            .headline(format!("Tools from {}", self.context_server_id.0))
+                            .headline(format!("{} 도구", self.context_server_id.0))
                             .show_dismiss_button(true),
                     )
                     .child(self.render_modal_content(window, cx)),

@@ -427,14 +427,14 @@ impl PickerDelegate for ProfilePickerDelegate {
     type ListItem = AnyElement;
 
     fn placeholder_text(&self, _: &mut Window, _: &mut App) -> Arc<str> {
-        "Search profiles…".into()
+        "프로필 검색…".into()
     }
 
     fn no_matches_text(&self, _window: &mut Window, _cx: &mut App) -> Option<SharedString> {
         let text = if self.candidates.is_empty() {
-            "No profiles.".into()
+            "프로필 없음.".into()
         } else {
-            "No profiles match your search.".into()
+            "검색과 일치하는 프로필 없음.".into()
         };
         Some(text)
     }

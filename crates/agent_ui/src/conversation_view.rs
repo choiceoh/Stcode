@@ -1278,16 +1278,16 @@ impl ConversationView {
                 .active_view()
                 .and_then(|v| v.read(cx).thread.read(cx).title())
                 .unwrap_or_else(|| DEFAULT_THREAD_TITLE.into()),
-            ServerState::Loading { .. } => "Loading…".into(),
+            ServerState::Loading { .. } => "불러오는 중…".into(),
             ServerState::LoadError { error, .. } => match error {
                 LoadError::Unsupported { .. } => {
-                    format!("Upgrade {}", self.agent.agent_id()).into()
+                    format!("{} 업그레이드 필요", self.agent.agent_id()).into()
                 }
                 LoadError::FailedToInstall(_) => {
-                    format!("Failed to Install {}", self.agent.agent_id()).into()
+                    format!("{} 설치 실패", self.agent.agent_id()).into()
                 }
-                LoadError::Exited { .. } => format!("{} Exited", self.agent.agent_id()).into(),
-                LoadError::Other(_) => format!("Error Loading {}", self.agent.agent_id()).into(),
+                LoadError::Exited { .. } => format!("{} 종료됨", self.agent.agent_id()).into(),
+                LoadError::Other(_) => format!("{} 불러오기 오류", self.agent.agent_id()).into(),
             },
         }
     }
@@ -2012,7 +2012,7 @@ impl ConversationView {
         if pending_auth_method.is_some() {
             return Callout::new()
                 .icon(IconName::Info)
-                .title(format!("Authenticating to {}…", agent_display_name))
+                .title(format!("{agent_display_name} 인증 중…"))
                 .actions_slot(
                     Icon::new(IconName::ArrowCircle)
                         .size(IconSize::Small)
@@ -2025,7 +2025,7 @@ impl ConversationView {
 
         Callout::new()
             .icon(IconName::Info)
-            .title(format!("Authenticate to {}", agent_display_name))
+            .title(format!("{agent_display_name} 인증"))
             .when(auth_methods.len() == 1, |this| {
                 this.actions_slot(auth_buttons())
             })
@@ -2035,7 +2035,7 @@ impl ConversationView {
                     .map(|this| {
                         if show_fallback_description {
                             this.child(
-                                Label::new("Choose one of the following authentication options:")
+                                Label::new("인증 방법을 선택하세요:")
                                     .size(LabelSize::Small)
                                     .color(Color::Muted),
                             )
@@ -2093,17 +2093,17 @@ impl ConversationView {
                 return self.render_unsupported(path, current_version, minimum_version, window, cx);
             }
             LoadError::FailedToInstall(msg) => (
-                "Failed to Install",
+                "설치 실패",
                 msg.into(),
                 Some(self.create_copy_button(msg.to_string()).into_any_element()),
             ),
             LoadError::Exited { status } => (
-                "Failed to Launch",
-                format!("Server exited with status {status}").into(),
+                "실행 실패",
+                format!("서버가 상태 {status}로 종료됨").into(),
                 None,
             ),
             LoadError::Other(msg) => (
-                "Failed to Launch",
+                "실행 실패",
                 msg.into(),
                 Some(self.create_copy_button(msg.to_string()).into_any_element()),
             ),
@@ -2127,17 +2127,11 @@ impl ConversationView {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let (heading_label, description_label) = (
-            format!("Upgrade {} to work with Zed", self.agent.agent_id()),
+            format!("{} 업그레이드 필요", self.agent.agent_id()),
             if version.is_empty() {
-                format!(
-                    "Currently using {}, which does not report a valid --version",
-                    path,
-                )
+                format!("{}가 유효한 --version을 보고하지 않음", path,)
             } else {
-                format!(
-                    "Currently using {}, which is only version {} (need at least {minimum_version})",
-                    path, version
-                )
+                format!("{} 버전이 {}임. 최소 {minimum_version} 필요", path, version)
             },
         );
 
@@ -2681,7 +2675,7 @@ impl ConversationView {
     fn create_copy_button(&self, message: impl Into<String>) -> impl IntoElement {
         let message = message.into();
 
-        CopyButton::new("copy-error-message", message).tooltip_label("Copy Error Message")
+        CopyButton::new("copy-error-message", message).tooltip_label("오류 메시지 복사")
     }
 
     pub(crate) fn reauthenticate(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -2710,14 +2704,11 @@ fn loading_contents_spinner(size: IconSize) -> AnyElement {
 
 fn placeholder_text(agent_name: &str, has_commands: bool) -> String {
     if agent_name == agent::ZED_AGENT_ID.as_ref() || agent_name == STCODE_AGENT_LABEL {
-        format!("Message the {} — @ to include context", agent_name)
+        format!("{agent_name}에게 메시지 — @로 컨텍스트 추가")
     } else if has_commands {
-        format!(
-            "Message {} — @ to include context, / for commands",
-            agent_name
-        )
+        format!("{agent_name}에게 메시지 — @로 컨텍스트 추가, /로 명령")
     } else {
-        format!("Message {} — @ to include context", agent_name)
+        format!("{agent_name}에게 메시지 — @로 컨텍스트 추가")
     }
 }
 
@@ -2786,13 +2777,15 @@ impl Render for ConversationView {
                     .items_center()
                     .justify_center()
                     .child(
-                        Label::new("Loading…").color(Color::Muted).with_animation(
-                            "loading-agent-label",
-                            Animation::new(Duration::from_secs(2))
-                                .repeat()
-                                .with_easing(pulsating_between(0.3, 0.7)),
-                            |label, delta| label.alpha(delta),
-                        ),
+                        Label::new("불러오는 중…")
+                            .color(Color::Muted)
+                            .with_animation(
+                                "loading-agent-label",
+                                Animation::new(Duration::from_secs(2))
+                                    .repeat()
+                                    .with_easing(pulsating_between(0.3, 0.7)),
+                                |label, delta| label.alpha(delta),
+                            ),
                     )
                     .into_any(),
                 ServerState::LoadError { error: e, .. } => v_flex()
@@ -2890,7 +2883,7 @@ pub(crate) mod tests {
     fn test_stcode_agent_placeholder_uses_native_agent_wording() {
         assert_eq!(
             placeholder_text("Stcode Agent", false),
-            "Message the Stcode Agent — @ to include context"
+            "Stcode Agent에게 메시지 — @로 컨텍스트 추가"
         );
     }
 
@@ -3229,7 +3222,7 @@ pub(crate) mod tests {
 
         assert_eq!(
             placeholder,
-            Some("Message Test — @ to include context, / for commands".to_string())
+            Some("Test에게 메시지 — @로 컨텍스트 추가, /로 명령".to_string())
         );
 
         message_editor.update_in(cx, |editor, window, cx| {

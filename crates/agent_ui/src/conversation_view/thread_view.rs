@@ -2280,18 +2280,18 @@ impl ThreadView {
 
         let retry_message = if state.max_attempts == 1 {
             if next_attempt_in_secs == 1 {
-                "Retrying. Next attempt in 1 second.".to_string()
+                "다시 시도 중. 다음 시도까지 1초.".to_string()
             } else {
-                format!("Retrying. Next attempt in {next_attempt_in_secs} seconds.")
+                format!("다시 시도 중. 다음 시도까지 {next_attempt_in_secs}초.")
             }
         } else if next_attempt_in_secs == 1 {
             format!(
-                "Retrying. Next attempt in 1 second (Attempt {} of {}).",
+                "다시 시도 중. 다음 시도까지 1초 ({} / {}번째 시도).",
                 state.attempt, state.max_attempts,
             )
         } else {
             format!(
-                "Retrying. Next attempt in {next_attempt_in_secs} seconds (Attempt {} of {}).",
+                "다시 시도 중. 다음 시도까지 {next_attempt_in_secs}초 ({} / {}번째 시도).",
                 state.attempt, state.max_attempts,
             )
         };
@@ -2808,9 +2808,9 @@ impl ThreadView {
     ) -> impl IntoElement {
         let queue_count = self.local_queued_messages.len();
         let title: SharedString = if queue_count == 1 {
-            "1 Queued Message".into()
+            "대기 메시지 1개".into()
         } else {
-            format!("{} Queued Messages", queue_count).into()
+            format!("대기 메시지 {queue_count}개").into()
         };
 
         h_flex()
@@ -2833,7 +2833,7 @@ impl ThreadView {
                     })),
             )
             .child(
-                Button::new("clear_queue", "Clear All")
+                Button::new("clear_queue", "모두 지우기")
                     .label_size(LabelSize::Small)
                     .key_binding(
                         KeyBinding::for_action(&ClearMessageQueue, cx)
@@ -2872,7 +2872,7 @@ impl ThreadView {
                 .gap_1()
                 .truncate()
                 .child(
-                    Label::new("Current:")
+                    Label::new("현재:")
                         .size(LabelSize::Small)
                         .color(Color::Muted),
                 )
@@ -2900,7 +2900,7 @@ impl ThreadView {
                             )))
                             .child(
                                 div().pr_0p5().bg(self.activity_bar_bg(cx)).child(
-                                    Label::new(format!("{} left", stats.pending))
+                                    Label::new(format!("{}개 남음", stats.pending))
                                         .size(LabelSize::Small)
                                         .color(Color::Muted),
                                 ),
@@ -2909,9 +2909,9 @@ impl ThreadView {
                 })
         } else {
             let status_label = if stats.pending == 0 {
-                "All Done".to_string()
+                "모두 완료".to_string()
             } else if stats.completed == 0 {
-                format!("{} Tasks", plan.entries.len())
+                format!("작업 {}개", plan.entries.len())
             } else {
                 format!("{}/{}", stats.completed, plan.entries.len())
             };
@@ -2921,7 +2921,7 @@ impl ThreadView {
                 .gap_1()
                 .justify_between()
                 .child(
-                    Label::new("Plan")
+                    Label::new("계획")
                         .size(LabelSize::Small)
                         .color(Color::Muted),
                 )
@@ -3369,9 +3369,9 @@ impl ThreadView {
 
         let editor_expanded = self.editor_expanded;
         let (expand_icon, expand_tooltip) = if editor_expanded {
-            (IconName::Minimize, "Minimize Message Editor")
+            (IconName::Minimize, "메시지 입력창 줄이기")
         } else {
-            (IconName::Maximize, "Expand Message Editor")
+            (IconName::Maximize, "메시지 입력창 키우기")
         };
 
         let max_content_width = AgentSettings::get_global(cx).max_content_width;
@@ -3498,9 +3498,9 @@ impl ThreadView {
                     .map(|(index, editor)| {
                         let is_next = index == 0;
                         let (icon_color, tooltip_text) = if is_next {
-                            (Color::Accent, "Next in Queue")
+                            (Color::Accent, "다음 대기 메시지")
                         } else {
-                            (Color::Muted, "In Queue")
+                            (Color::Muted, "대기열")
                         };
 
                         let editor_focused = editor.focus_handle(cx).is_focused(_window);
@@ -3537,9 +3537,9 @@ impl ThreadView {
                                             .icon_size(IconSize::Small)
                                             .tooltip(|_window, cx| {
                                                 Tooltip::with_meta(
-                                                    "Edit Queued Message",
+                                                    "대기 메시지 편집",
                                                     None,
-                                                    "Type anything to edit",
+                                                    "수정할 내용을 입력하세요",
                                                     cx,
                                                 )
                                             })
@@ -3550,7 +3550,7 @@ impl ThreadView {
                                             })),
                                     )
                                     .child(
-                                        Button::new(("send_now_focused", index), "Send Now")
+                                        Button::new(("send_now_focused", index), "지금 보내기")
                                             .label_size(LabelSize::Small)
                                             .style(ButtonStyle::Outlined)
                                             .key_binding(
@@ -3581,14 +3581,14 @@ impl ThreadView {
                                                 move |_window, cx| {
                                                     if is_next {
                                                         Tooltip::for_action_in(
-                                                            "Remove Message from Queue",
+                                                            "대기열에서 메시지 제거",
                                                             &RemoveFirstQueuedMessage,
                                                             &focus_handle,
                                                             cx,
                                                         )
                                                     } else {
                                                         Tooltip::simple(
-                                                            "Remove Message from Queue",
+                                                            "대기열에서 메시지 제거",
                                                             cx,
                                                         )
                                                     }
@@ -3607,13 +3607,13 @@ impl ThreadView {
                                                 move |_window, cx| {
                                                     if is_next {
                                                         Tooltip::for_action_in(
-                                                            "Edit",
+                                                            "편집",
                                                             &EditFirstQueuedMessage,
                                                             &focus_handle,
                                                             cx,
                                                         )
                                                     } else {
-                                                        Tooltip::simple("Edit", cx)
+                                                        Tooltip::simple("편집", cx)
                                                     }
                                                 }
                                             })
@@ -3624,7 +3624,7 @@ impl ThreadView {
                                             })),
                                     )
                                     .child(
-                                        Button::new(("send_now", index), "Send Now")
+                                        Button::new(("send_now", index), "지금 보내기")
                                             .label_size(LabelSize::Small)
                                             .when(is_next, |this| this.style(ButtonStyle::Outlined))
                                             .when(is_next && message_editor.is_empty(cx), |this| {
@@ -4143,7 +4143,7 @@ impl ThreadView {
             div()
                 .id("loading-message-content")
                 .px_1()
-                .tooltip(Tooltip::text("Loading Added Context…"))
+                .tooltip(Tooltip::text("추가 컨텍스트 불러오는 중…"))
                 .child(loading_contents_spinner(IconSize::default()))
                 .into_any_element()
         } else if is_generating && is_editor_empty {
@@ -4193,7 +4193,7 @@ impl ThreadView {
                                         .justify_between()
                                         .border_t_1()
                                         .border_color(cx.theme().colors().border_variant)
-                                        .child(Label::new("Send Immediately"))
+                                        .child(Label::new("즉시 보내기"))
                                         .child(KeyBinding::for_action_in(
                                             &SendImmediately,
                                             &focus_handle,
@@ -4203,7 +4203,7 @@ impl ThreadView {
                                 .into_any_element()
                         })(_window, cx)
                     } else {
-                        Tooltip::for_action("Send Message", &Chat, cx)
+                        Tooltip::for_action("메시지 보내기", &Chat, cx)
                     }
                 })
                 .on_click(cx.listener(|this, _, window, cx| {
@@ -4786,7 +4786,7 @@ impl ThreadView {
                                                 if is_loading_contents {
                                                     div()
                                                         .id("loading-edited-message-content")
-                                                        .tooltip(Tooltip::text("Loading Added Context…"))
+                                                        .tooltip(Tooltip::text("추가 컨텍스트 불러오는 중…"))
                                                         .child(loading_contents_spinner(IconSize::XSmall))
                                                         .into_any_element()
                                                 } else {
@@ -5103,7 +5103,7 @@ impl ThreadView {
             .shape(ui::IconButtonShape::Square)
             .icon_size(IconSize::Small)
             .icon_color(Color::Ignored)
-            .tooltip(Tooltip::text("Open Thread as Markdown"))
+            .tooltip(Tooltip::text("스레드를 Markdown으로 열기"))
             .on_click(cx.listener(move |this, _, window, cx| {
                 if let Some(workspace) = this.workspace.upgrade() {
                     this.open_thread_as_markdown(workspace, window, cx)
@@ -5892,8 +5892,8 @@ impl ThreadView {
                         })
                     });
 
-                    let copy_this_agent_response =
-                        ContextMenuEntry::new("Copy This Agent Response").handler({
+                    let copy_this_agent_response = ContextMenuEntry::new("이 에이전트 응답 복사")
+                        .handler({
                             let entity = entity.clone();
                             move |_, cx| {
                                 entity.update(cx, |this, cx| {
@@ -5908,7 +5908,7 @@ impl ThreadView {
                         });
 
                     let scroll_item = if is_at_top {
-                        ContextMenuEntry::new("Scroll to Bottom").handler({
+                        ContextMenuEntry::new("맨 아래로 스크롤").handler({
                             let entity = entity.clone();
                             move |_, cx| {
                                 entity.update(cx, |this, cx| {
@@ -5917,7 +5917,7 @@ impl ThreadView {
                             }
                         })
                     } else {
-                        ContextMenuEntry::new("Scroll to Top").handler({
+                        ContextMenuEntry::new("맨 위로 스크롤").handler({
                             let entity = entity.clone();
                             move |_, cx| {
                                 entity.update(cx, |this, cx| {
@@ -5927,8 +5927,8 @@ impl ThreadView {
                         })
                     };
 
-                    let open_thread_as_markdown = ContextMenuEntry::new("Open Thread as Markdown")
-                        .handler({
+                    let open_thread_as_markdown =
+                        ContextMenuEntry::new("스레드를 Markdown으로 열기").handler({
                             let entity = entity.clone();
                             let workspace = workspace.clone();
                             move |window, cx| {
@@ -5944,14 +5944,14 @@ impl ThreadView {
 
                     menu.when_some(focus, |menu, focus| menu.context(focus))
                         .when_some(context_menu_link, |menu, url| {
-                            menu.entry("Copy Link", None, move |_, cx| {
+                            menu.entry("링크 복사", None, move |_, cx| {
                                 cx.write_to_clipboard(ClipboardItem::new_string(url.to_string()));
                             })
                             .separator()
                         })
                         .action_disabled_when(
                             !has_selection,
-                            "Copy Selection",
+                            "선택 복사",
                             Box::new(markdown::CopyAsMarkdown),
                         )
                         .item(copy_this_agent_response)
@@ -6065,7 +6065,7 @@ impl ThreadView {
                     // layout shift when it changes from being a preview label
                     // to the actual path where the command will run in
                     h_flex().h_6().child(
-                        Label::new("Run Command")
+                        Label::new("명령 실행")
                             .buffer_font(cx)
                             .size(LabelSize::XSmall)
                             .color(Color::Muted),
@@ -6084,7 +6084,7 @@ impl ThreadView {
             .child(
                 div().absolute().top_1().right_1().child(
                     CopyButton::new("copy-command", command_source.to_string())
-                        .tooltip_label("Copy Command")
+                        .tooltip_label("명령 복사")
                         .visible_on_hover(group),
                 ),
             )
@@ -6985,7 +6985,7 @@ impl ThreadView {
                 h_flex()
                     .gap_0p5()
                     .child(
-                        Button::new(("allow-btn", entry_ix), "Allow")
+                        Button::new(("allow-btn", entry_ix), "허용")
                             .start_icon(
                                 Icon::new(IconName::Check)
                                     .size(IconSize::XSmall)
@@ -7009,7 +7009,7 @@ impl ThreadView {
                             })),
                     )
                     .child(
-                        Button::new(("deny-btn", entry_ix), "Deny")
+                        Button::new(("deny-btn", entry_ix), "거부")
                             .start_icon(
                                 Icon::new(IconName::Close)
                                     .size(IconSize::XSmall)
@@ -8411,10 +8411,10 @@ impl ThreadView {
             }
             ThreadError::PaymentRequired => self.render_payment_required_error(cx),
             ThreadError::RateLimitExceeded { provider } => self.render_error_callout(
-                "Rate Limit Reached",
+                "사용량 제한 도달",
                 format!(
-                    "{provider}'s rate limit was reached. Zed will retry automatically. \
-                    You can also wait a moment and try again."
+                    "{provider} 사용량 제한에 도달했습니다. Stcode가 자동으로 다시 시도합니다. \
+                    잠시 후 직접 다시 시도할 수도 있습니다."
                 )
                 .into(),
                 true,
@@ -8422,10 +8422,10 @@ impl ThreadView {
                 cx,
             ),
             ThreadError::ServerOverloaded { provider } => self.render_error_callout(
-                "Provider Unavailable",
+                "프로바이더 사용 불가",
                 format!(
-                    "{provider}'s servers are temporarily unavailable. Zed will retry \
-                    automatically. If the problem persists, check the provider's status page."
+                    "{provider} 서버를 일시적으로 사용할 수 없습니다. Stcode가 자동으로 다시 시도합니다. \
+                    문제가 계속되면 프로바이더 상태 페이지를 확인하세요."
                 )
                 .into(),
                 true,
@@ -8434,10 +8434,10 @@ impl ThreadView {
             ),
             ThreadError::PromptTooLarge => self.render_prompt_too_large_error(cx),
             ThreadError::NoApiKey { provider } => self.render_error_callout(
-                "API Key Missing",
+                "API 키 없음",
                 format!(
-                    "No API key is configured for {provider}. \
-                    Add your key via the Agent Panel settings to continue."
+                    "{provider} API 키가 설정되지 않았습니다. \
+                    계속하려면 에이전트 패널 설정에서 키를 추가하세요."
                 )
                 .into(),
                 false,
@@ -8445,10 +8445,10 @@ impl ThreadView {
                 cx,
             ),
             ThreadError::StreamError { provider } => self.render_error_callout(
-                "Connection Interrupted",
+                "연결 끊김",
                 format!(
-                    "The connection to {provider}'s API was interrupted. Zed will retry \
-                    automatically. If the problem persists, check your network connection."
+                    "{provider} API 연결이 끊겼습니다. Stcode가 자동으로 다시 시도합니다. \
+                    문제가 계속되면 네트워크 연결을 확인하세요."
                 )
                 .into(),
                 true,
@@ -8456,10 +8456,10 @@ impl ThreadView {
                 cx,
             ),
             ThreadError::InvalidApiKey { provider } => self.render_error_callout(
-                "Invalid API Key",
+                "API 키가 올바르지 않음",
                 format!(
-                    "The API key for {provider} is invalid or has expired. \
-                    Update your key via the Agent Panel settings to continue."
+                    "{provider} API 키가 올바르지 않거나 만료되었습니다. \
+                    계속하려면 에이전트 패널 설정에서 키를 업데이트하세요."
                 )
                 .into(),
                 false,
@@ -8467,10 +8467,10 @@ impl ThreadView {
                 cx,
             ),
             ThreadError::PermissionDenied { provider } => self.render_error_callout(
-                "Permission Denied",
+                "권한 거부됨",
                 format!(
-                    "{provider}'s API rejected the request due to insufficient permissions. \
-                    Check that your API key has access to this model."
+                    "{provider} API가 권한 부족으로 요청을 거부했습니다. \
+                    API 키가 이 모델에 접근할 수 있는지 확인하세요."
                 )
                 .into(),
                 false,
@@ -8478,35 +8478,35 @@ impl ThreadView {
                 cx,
             ),
             ThreadError::RequestFailed => self.render_error_callout(
-                "Request Failed",
-                "The request could not be completed after multiple attempts. \
-                Try again in a moment."
+                "요청 실패",
+                "여러 번 시도했지만 요청을 완료하지 못했습니다. \
+                잠시 후 다시 시도하세요."
                     .into(),
                 true,
                 false,
                 cx,
             ),
             ThreadError::MaxOutputTokens => self.render_error_callout(
-                "Output Limit Reached",
-                "The model stopped because it reached its maximum output length. \
-                You can ask it to continue where it left off."
+                "출력 한도 도달",
+                "모델이 최대 출력 길이에 도달해 멈췄습니다. \
+                이어서 진행하라고 요청할 수 있습니다."
                     .into(),
                 false,
                 false,
                 cx,
             ),
             ThreadError::NoModelSelected => self.render_error_callout(
-                "No Model Selected",
-                "Select a model from the model picker below to get started.".into(),
+                "선택된 모델 없음",
+                "시작하려면 아래 모델 선택기에서 모델을 선택하세요.".into(),
                 false,
                 false,
                 cx,
             ),
             ThreadError::ApiError { provider } => self.render_error_callout(
-                "API Error",
+                "API 오류",
                 format!(
-                    "{provider}'s API returned an unexpected error. \
-                    If the problem persists, try switching models or restarting Zed."
+                    "{provider} API가 예상치 못한 오류를 반환했습니다. \
+                    문제가 계속되면 모델을 바꾸거나 Stcode를 다시 시작하세요."
                 )
                 .into(),
                 true,
@@ -8521,15 +8521,15 @@ impl ThreadView {
     fn render_refusal_error(&self, cx: &mut Context<'_, Self>) -> Callout {
         let model_or_agent_name = self.current_model_name(cx);
         let refusal_message = format!(
-            "{} refused to respond to this prompt. \
-            This can happen when a model believes the prompt violates its content policy \
-            or safety guidelines, so rephrasing it can sometimes address the issue.",
+            "{}이 이 프롬프트에 응답하지 않았습니다. \
+            모델이 프롬프트가 콘텐츠 정책이나 안전 지침을 위반한다고 판단하면 발생할 수 있습니다. \
+            표현을 바꾸면 해결될 때가 있습니다.",
             model_or_agent_name
         );
 
         Callout::new()
             .severity(Severity::Error)
-            .title("Request Refused")
+            .title("요청 거부됨")
             .icon(IconName::XCircle)
             .description(refusal_message.clone())
             .actions_slot(self.create_copy_button(&refusal_message))
@@ -8543,13 +8543,13 @@ impl ThreadView {
     ) -> Callout {
         if AppLaunchMode::is_stcode(cx) {
             let message = SharedString::from(format!(
-                "The selected agent needs credentials before it can continue. \
-                Configure a local or API-backed model provider, then rerun the task.\n\n{error}"
+                "선택한 에이전트가 계속 진행하려면 인증 정보가 필요합니다. \
+                로컬 또는 API 기반 모델 프로바이더를 설정한 뒤 작업을 다시 실행하세요.\n\n{error}"
             ));
 
             return Callout::new()
                 .severity(Severity::Error)
-                .title("Model Credentials Needed")
+                .title("모델 인증 정보 필요")
                 .icon(IconName::XCircle)
                 .description(message.clone())
                 .actions_slot(
@@ -8563,7 +8563,7 @@ impl ThreadView {
 
         Callout::new()
             .severity(Severity::Error)
-            .title("Authentication Required")
+            .title("인증 필요")
             .icon(IconName::XCircle)
             .description(error.clone())
             .actions_slot(
@@ -8578,14 +8578,13 @@ impl ThreadView {
     fn render_payment_required_error(&self, cx: &mut Context<Self>) -> Callout {
         if AppLaunchMode::is_stcode(cx) {
             let error_message = SharedString::from(
-                "The selected cloud model is out of quota. Switch to another configured model \
-                or use a local provider to keep the autonomous run moving.",
+                "선택한 클라우드 모델의 할당량이 부족합니다. 자율 실행을 계속하려면 다른 설정된 모델로 바꾸거나 로컬 프로바이더를 사용하세요.",
             );
 
             return Callout::new()
                 .severity(Severity::Error)
                 .icon(IconName::XCircle)
-                .title("Model Quota Blocked")
+                .title("모델 할당량 막힘")
                 .description(error_message.clone())
                 .actions_slot(
                     h_flex()
@@ -8603,13 +8602,13 @@ impl ThreadView {
             "Zed Pro"
         };
         let error_message = SharedString::from(format!(
-            "You reached your free usage limit. Upgrade to {pro_plan_name} for more prompts."
+            "무료 사용 한도에 도달했습니다. 더 많은 프롬프트를 쓰려면 {pro_plan_name}로 업그레이드하세요."
         ));
 
         Callout::new()
             .severity(Severity::Error)
             .icon(IconName::XCircle)
-            .title("Free Usage Exceeded")
+            .title("무료 사용량 초과")
             .description(error_message.clone())
             .actions_slot(
                 h_flex()
@@ -8650,13 +8649,13 @@ impl ThreadView {
     }
 
     fn render_prompt_too_large_error(&self, cx: &mut Context<Self>) -> Callout {
-        const MESSAGE: &str = "This conversation is too long for the model's context window. \
-            Start a new thread or remove some attached files to continue.";
+        const MESSAGE: &str = "이 대화가 모델의 컨텍스트 창에 비해 너무 깁니다. \
+            계속하려면 새 스레드를 시작하거나 첨부 파일 일부를 제거하세요.";
 
         Callout::new()
             .severity(Severity::Error)
             .icon(IconName::XCircle)
-            .title("Context Too Large")
+            .title("컨텍스트가 너무 큼")
             .description(MESSAGE)
             .actions_slot(
                 h_flex()
@@ -8668,7 +8667,7 @@ impl ThreadView {
     }
 
     fn retry_button(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        Button::new("retry", "Retry")
+        Button::new("retry", "재시도")
             .label_size(LabelSize::Small)
             .style(ButtonStyle::Filled)
             .on_click(cx.listener(|this, _, _, cx| {
@@ -8677,7 +8676,7 @@ impl ThreadView {
     }
 
     fn new_thread_button(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        Button::new("new_thread", "New Thread")
+        Button::new("new_thread", "새 스레드")
             .label_size(LabelSize::Small)
             .style(ButtonStyle::Filled)
             .on_click(cx.listener(|this, _, window, cx| {
@@ -8687,7 +8686,7 @@ impl ThreadView {
     }
 
     fn switch_model_button(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        Button::new("switch-model", "Switch Model")
+        Button::new("switch-model", "모델 변경")
             .label_size(LabelSize::Small)
             .style(ButtonStyle::Filled)
             .on_click(cx.listener({
@@ -8699,7 +8698,7 @@ impl ThreadView {
     }
 
     fn configure_models_button(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        Button::new("configure-models", "Configure Models")
+        Button::new("configure-models", "모델 설정")
             .label_size(LabelSize::Small)
             .style(ButtonStyle::Outlined)
             .on_click(cx.listener({
@@ -8711,7 +8710,7 @@ impl ThreadView {
     }
 
     fn upgrade_button(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        Button::new("upgrade", "Upgrade")
+        Button::new("upgrade", "업그레이드")
             .label_size(LabelSize::Small)
             .style(ButtonStyle::Tinted(ui::TintColor::Accent))
             .on_click(cx.listener({
@@ -8723,7 +8722,7 @@ impl ThreadView {
     }
 
     fn authenticate_button(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        Button::new("authenticate", "Authenticate")
+        Button::new("authenticate", "인증")
             .label_size(LabelSize::Small)
             .style(ButtonStyle::Filled)
             .on_click(cx.listener({
@@ -8802,7 +8801,7 @@ impl ThreadView {
                         this.child(
                             IconButton::new("retry", IconName::RotateCw)
                                 .icon_size(IconSize::Small)
-                                .tooltip(Tooltip::text("Retry Generation"))
+                                .tooltip(Tooltip::text("생성 재시도"))
                                 .on_click(cx.listener(|this, _, _window, cx| {
                                     this.retry_generation(cx);
                                 })),
@@ -8823,13 +8822,13 @@ impl ThreadView {
     fn create_copy_button(&self, message: impl Into<String>) -> impl IntoElement {
         let message = message.into();
 
-        CopyButton::new("copy-error-message", message).tooltip_label("Copy Error Message")
+        CopyButton::new("copy-error-message", message).tooltip_label("오류 메시지 복사")
     }
 
     fn dismiss_error_button(&self, cx: &mut Context<Self>) -> impl IntoElement {
         IconButton::new("dismiss", IconName::Close)
             .icon_size(IconSize::Small)
-            .tooltip(Tooltip::text("Dismiss"))
+            .tooltip(Tooltip::text("닫기"))
             .on_click(cx.listener({
                 move |this, _, _, cx| {
                     this.clear_thread_error(cx);
@@ -8839,13 +8838,13 @@ impl ThreadView {
     }
 
     fn render_resume_notice(_cx: &Context<Self>) -> AnyElement {
-        let description = "This agent does not support viewing previous messages. However, your session will still continue from where you last left off.";
+        let description = "이 에이전트는 이전 메시지 보기를 지원하지 않습니다. 그래도 세션은 마지막 지점부터 계속 이어집니다.";
 
         Callout::new()
             .border_position(ui::BorderPosition::Bottom)
             .severity(Severity::Info)
             .icon(IconName::Info)
-            .title("Resumed Session")
+            .title("세션 재개됨")
             .description(description)
             .into_any_element()
     }
@@ -8854,13 +8853,15 @@ impl ThreadView {
         Callout::new()
             .icon(IconName::Warning)
             .severity(Severity::Warning)
-            .title("Review before sending")
-            .description("This prompt was pre-filled by an external link. Read it carefully before you send it.")
+            .title("보내기 전에 검토")
+            .description(
+                "외부 링크가 이 프롬프트를 미리 채웠습니다. 보내기 전에 내용을 확인하세요.",
+            )
             .dismiss_action(
                 IconButton::new("dismiss-external-source-prompt-warning", IconName::Close)
                     .icon_size(IconSize::Small)
                     .icon_color(Color::Muted)
-                    .tooltip(Tooltip::text("Dismiss Warning"))
+                    .tooltip(Tooltip::text("경고 닫기"))
                     .on_click(cx.listener({
                         move |this, _, _, cx| {
                             this.show_external_source_prompt_warning = false;
@@ -8891,10 +8892,10 @@ impl ThreadView {
             .next()
             .and_then(|p| p.file_name())
             .map(|name| name.to_string_lossy().to_string())
-            .unwrap_or_else(|| "one folder".to_string());
+            .unwrap_or_else(|| "폴더 하나".to_string());
 
         let description = format!(
-            "This agent only operates on \"{}\". Other folders in this workspace are not accessible to it.",
+            "이 에이전트는 \"{}\"에서만 작동합니다. 이 작업공간의 다른 폴더에는 접근할 수 없습니다.",
             active_dir
         );
 
@@ -8902,13 +8903,13 @@ impl ThreadView {
             Callout::new()
                 .severity(Severity::Warning)
                 .icon(IconName::Warning)
-                .title("External Agents currently don't support multi-root workspaces")
+                .title("외부 에이전트는 아직 다중 루트 작업공간을 지원하지 않음")
                 .description(description)
                 .border_position(ui::BorderPosition::Bottom)
                 .dismiss_action(
                     IconButton::new("dismiss-multi-root-callout", IconName::Close)
                         .icon_size(IconSize::Small)
-                        .tooltip(Tooltip::text("Dismiss"))
+                        .tooltip(Tooltip::text("닫기"))
                         .on_click(cx.listener(|this, _, _, cx| {
                             this.multi_root_callout_dismissed = true;
                             cx.notify();
@@ -8921,14 +8922,14 @@ impl ThreadView {
         let server_view = self.server_view.clone();
         let has_version = !version.is_empty();
         let title = if has_version {
-            "New version available"
+            "새 버전 있음"
         } else {
-            "Agent update available"
+            "에이전트 업데이트 있음"
         };
         let button_label = if has_version {
-            format!("Update to v{}", version)
+            format!("v{}로 업데이트", version)
         } else {
-            "Reconnect".to_string()
+            "다시 연결".to_string()
         };
 
         v_flex().w_full().justify_end().child(
@@ -8977,16 +8978,16 @@ impl ThreadView {
             acp_thread::TokenUsageRatio::Warning => (
                 Severity::Warning,
                 IconName::Warning,
-                "Thread reaching the token limit soon",
+                "스레드가 곧 토큰 한도에 도달함",
             ),
             acp_thread::TokenUsageRatio::Exceeded => (
                 Severity::Error,
                 IconName::XCircle,
-                "Thread reached the token limit",
+                "스레드가 토큰 한도에 도달함",
             ),
         };
 
-        let description = "To continue, start a new thread from a summary.";
+        let description = "계속하려면 요약에서 새 스레드를 시작하세요.";
 
         Some(
             Callout::new()
@@ -8996,7 +8997,7 @@ impl ThreadView {
                 .description(description)
                 .actions_slot(
                     h_flex().gap_0p5().child(
-                        Button::new("start-new-thread", "Start New Thread")
+                        Button::new("start-new-thread", "새 스레드 시작")
                             .label_size(LabelSize::Small)
                             .on_click(cx.listener(|this, _, window, cx| {
                                 let session_id = this.thread.read(cx).session_id().clone();

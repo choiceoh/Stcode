@@ -359,15 +359,13 @@ impl AgentConfiguration {
                     .gap_1()
                     .when(is_expanded, |parent| match configuration_view {
                         Some(configuration_view) => parent.child(configuration_view),
-                        None => parent.child(Label::new(format!(
-                            "No configuration view for {provider_name}",
-                        ))),
+                        None => parent.child(Label::new(format!("{provider_name} 설정 화면 없음"))),
                     })
                     .when(is_expanded && provider.is_authenticated(cx), |parent| {
                         parent.child(
                             Button::new(
                                 SharedString::from(format!("new-thread-{provider_id}")),
-                                "Start New Thread",
+                                "새 스레드 시작",
                             )
                             .full_width()
                             .style(ButtonStyle::Outlined)
@@ -394,7 +392,7 @@ impl AgentConfiguration {
                             this.child(
                                 Button::new(
                                     SharedString::from(format!("delete-provider-{provider_id}")),
-                                    "Remove Provider",
+                                    "프로바이더 제거",
                                 )
                                 .full_width()
                                 .style(ButtonStyle::Outlined)
@@ -470,7 +468,7 @@ impl AgentConfiguration {
             IconButton::new("reset-subagent-model", IconName::Undo)
                 .icon_color(Color::Muted)
                 .icon_size(IconSize::Small)
-                .tooltip(Tooltip::text("Use Main Model"))
+                .tooltip(Tooltip::text("메인 모델 사용"))
                 .on_click({
                     let fs = self.fs.clone();
                     move |_event, _window, cx| {
@@ -489,8 +487,8 @@ impl AgentConfiguration {
             .border_b_1()
             .border_color(cx.theme().colors().border)
             .child(self.render_section_title(
-                "Agent Models",
-                "Choose the model used by the main agent and the default model used by spawned subagents.",
+                "에이전트 모델",
+                "메인 에이전트와 새로 생성되는 하위 에이전트의 기본 모델을 선택합니다.",
                 div().into_any_element(),
             ))
             .child(
@@ -501,8 +499,8 @@ impl AgentConfiguration {
                     .child(self.render_model_setting_row(
                         "main-agent-model",
                         IconName::Sparkle,
-                        "Main Model",
-                        "Used for the primary agent that plans, delegates, reviews, and responds.",
+                        "메인 모델",
+                        "계획, 위임, 검토, 응답을 맡는 기본 에이전트가 사용합니다.",
                         self.main_model_selector.clone(),
                         None,
                     ))
@@ -510,8 +508,8 @@ impl AgentConfiguration {
                     .child(self.render_model_setting_row(
                         "subagent-model",
                         IconName::UserGroup,
-                        "Subagent Model",
-                        "Used for newly spawned subagents. Leave unset to inherit the main model.",
+                        "하위 에이전트 모델",
+                        "새 하위 에이전트가 사용합니다. 비워두면 메인 모델을 그대로 씁니다.",
                         self.subagent_model_selector.clone(),
                         reset_subagent_model_button,
                     )),
@@ -568,7 +566,7 @@ impl AgentConfiguration {
 
         let popover_menu = PopoverMenu::new("add-provider-popover")
             .trigger(
-                Button::new("add-provider", "Add Provider")
+                Button::new("add-provider", "프로바이더 추가")
                     .style(ButtonStyle::Outlined)
                     .start_icon(
                         Icon::new(IconName::Plus)
@@ -582,7 +580,7 @@ impl AgentConfiguration {
                 move |window, cx| {
                     Some(ContextMenu::build(window, cx, |mut menu, _window, _cx| {
                         menu = menu
-                            .header("Local Models")
+                            .header("로컬 모델")
                             .entry("Ollama", None, {
                                 let workspace = workspace.clone();
                                 move |window, cx| {
@@ -643,7 +641,7 @@ impl AgentConfiguration {
                                         .log_err();
                                 }
                             })
-                            .entry("Custom Local API", None, {
+                            .entry("사용자 지정 로컬 API", None, {
                                 let workspace = workspace.clone();
                                 move |window, cx| {
                                     workspace
@@ -659,7 +657,7 @@ impl AgentConfiguration {
                                 }
                             })
                             .separator()
-                            .header("Compatible APIs")
+                            .header("호환 API")
                             .entry("OpenAI", None, {
                                 let workspace = workspace.clone();
                                 move |window, cx| {
@@ -690,8 +688,8 @@ impl AgentConfiguration {
             .min_w_0()
             .w_full()
             .child(self.render_section_title(
-                "LLM Providers",
-                "Add at least one provider to use AI-powered features with Zed's native agent.",
+                "LLM 프로바이더",
+                "Stcode 네이티브 에이전트의 AI 기능을 사용하려면 하나 이상의 프로바이더를 추가하세요.",
                 popover_menu.into_any_element(),
             ))
             .child(
@@ -724,11 +722,11 @@ impl AgentConfiguration {
                 .blend(cx.theme().colors().text_accent.opacity(0.2));
 
             let (plan_name, label_color, bg_color) = match plan {
-                Plan::ZedFree => ("Free", Color::Default, free_chip_bg),
-                Plan::ZedProTrial => ("Pro Trial", Color::Accent, pro_chip_bg),
+                Plan::ZedFree => ("무료", Color::Default, free_chip_bg),
+                Plan::ZedProTrial => ("Pro 체험", Color::Accent, pro_chip_bg),
                 Plan::ZedPro => ("Pro", Color::Accent, pro_chip_bg),
-                Plan::ZedBusiness => ("Business", Color::Accent, pro_chip_bg),
-                Plan::ZedStudent => ("Student", Color::Accent, pro_chip_bg),
+                Plan::ZedBusiness => ("비즈니스", Color::Accent, pro_chip_bg),
+                Plan::ZedStudent => ("학생", Color::Accent, pro_chip_bg),
             };
 
             Chip::new(plan_name.to_string())
@@ -745,7 +743,7 @@ impl AgentConfiguration {
 
         let add_server_popover = PopoverMenu::new("add-server-popover")
             .trigger(
-                Button::new("add-server", "Add Server")
+                Button::new("add-server", "서버 추가")
                     .style(ButtonStyle::Outlined)
                     .start_icon(
                         Icon::new(IconName::Plus)
@@ -757,12 +755,12 @@ impl AgentConfiguration {
             .menu({
                 move |window, cx| {
                     Some(ContextMenu::build(window, cx, |menu, _window, _cx| {
-                        menu.entry("Add Custom Server", None, {
+                        menu.entry("사용자 지정 서버 추가", None, {
                             |window, cx| {
                                 window.dispatch_action(crate::AddContextServer.boxed_clone(), cx)
                             }
                         })
-                        .entry("Install from Extensions", None, {
+                        .entry("확장에서 설치", None, {
                             |window, cx| {
                                 window.dispatch_action(
                                     zed_actions::Extensions {
@@ -790,8 +788,8 @@ impl AgentConfiguration {
             .border_b_1()
             .border_color(cx.theme().colors().border)
             .child(self.render_section_title(
-                "Model Context Protocol (MCP) Servers",
-                "All MCP servers connected directly or via a Zed extension.",
+                "Model Context Protocol (MCP) 서버",
+                "직접 연결했거나 Stcode 확장을 통해 연결한 모든 MCP 서버입니다.",
                 add_server_popover.into_any_element(),
             ))
             .child(
@@ -812,7 +810,7 @@ impl AgentConfiguration {
                                     .border_color(cx.theme().colors().border.opacity(0.6))
                                     .rounded_sm()
                                     .child(
-                                        Label::new("No MCP servers added yet.")
+                                        Label::new("아직 추가된 MCP 서버가 없음.")
                                             .color(Color::Muted)
                                             .size(LabelSize::Small),
                                     ),
@@ -920,7 +918,7 @@ impl AgentConfiguration {
                 IconButton::new("context-server-config-menu", IconName::Settings)
                     .icon_color(Color::Muted)
                     .icon_size(IconSize::Small),
-                Tooltip::text("Configure MCP Server"),
+                Tooltip::text("MCP 서버 설정"),
             )
             .anchor(Anchor::TopRight)
             .menu({
@@ -933,7 +931,7 @@ impl AgentConfiguration {
 
                 move |window, cx| {
                     Some(ContextMenu::build(window, cx, |menu, _window, _cx| {
-                        menu.entry("Configure Server", None, {
+                        menu.entry("서버 설정", None, {
                             let context_server_id = context_server_id.clone();
                             let language_registry = language_registry.clone();
                             let workspace = workspace.clone();
@@ -958,7 +956,7 @@ impl AgentConfiguration {
                                     .detach();
                                 }
                             }
-                        }).when(tool_count > 0, |this| this.entry("View Tools", None, {
+                        }).when(tool_count > 0, |this| this.entry("도구 보기", None, {
                             let context_server_id = context_server_id.clone();
                             let context_server_registry = context_server_registry.clone();
                             let workspace = workspace.clone();
@@ -977,7 +975,7 @@ impl AgentConfiguration {
                             }
                         }))
                         .when(should_show_logout_button, |this| {
-                            this.entry("Log Out", None, {
+                            this.entry("로그아웃", None, {
                                 let context_server_store = context_server_store.clone();
                                 let context_server_id = context_server_id.clone();
                                 move |_window, cx| {
@@ -988,7 +986,7 @@ impl AgentConfiguration {
                             })
                         })
                         .separator()
-                        .entry("Uninstall", None, {
+                        .entry("제거", None, {
                             let fs = fs.clone();
                             let context_server_id = context_server_id.clone();
                             let workspace = workspace.clone();
@@ -1066,7 +1064,7 @@ impl AgentConfiguration {
                     )
                     .when(should_show_logout_button, |this| {
                         this.child(
-                            Button::new("error-logout-server", "Log Out")
+                            Button::new("error-logout-server", "로그아웃")
                                 .style(ButtonStyle::Outlined)
                                 .label_size(LabelSize::Small)
                                 .on_click({
@@ -1097,13 +1095,13 @@ impl AgentConfiguration {
                                     .color(Color::Muted),
                             )
                             .child(
-                                Label::new("Authenticate to connect this server")
+                                Label::new("이 서버에 연결하려면 인증하세요")
                                     .color(Color::Muted)
                                     .size(LabelSize::Small),
                             ),
                     )
                     .child(
-                        Button::new("error-logout-server", "Authenticate")
+                        Button::new("error-logout-server", "인증")
                             .style(ButtonStyle::Outlined)
                             .label_size(LabelSize::Small)
                             .on_click({
@@ -1127,7 +1125,7 @@ impl AgentConfiguration {
                     .gap_2()
                     .child(div().size_3().flex_shrink_0())
                     .child(
-                        Label::new("Authenticating…")
+                        Label::new("인증 중…")
                             .color(Color::Muted)
                             .size(LabelSize::Small),
                     )
@@ -1223,7 +1221,7 @@ impl AgentConfiguration {
 
         let add_agent_popover = PopoverMenu::new("add-agent-server-popover")
             .trigger(
-                Button::new("add-agent", "Add Agent")
+                Button::new("add-agent", "에이전트 추가")
                     .style(ButtonStyle::Outlined)
                     .start_icon(
                         Icon::new(IconName::Plus)
@@ -1235,12 +1233,12 @@ impl AgentConfiguration {
             .menu({
                 move |window, cx| {
                     Some(ContextMenu::build(window, cx, |menu, _window, _cx| {
-                        menu.entry("Install from Registry", None, {
+                        menu.entry("레지스트리에서 설치", None, {
                             |window, cx| {
                                 window.dispatch_action(Box::new(zed_actions::AcpRegistry), cx)
                             }
                         })
-                        .entry("Add Custom Agent", None, {
+                        .entry("사용자 지정 에이전트 추가", None, {
                             move |window, cx| {
                                 if let Some(workspace) = Workspace::for_window(window, cx) {
                                     let workspace = workspace.downgrade();
@@ -1256,9 +1254,9 @@ impl AgentConfiguration {
                             }
                         })
                         .separator()
-                        .header("Learn More")
+                        .header("더 알아보기")
                         .item(
-                            ContextMenuEntry::new("ACP Docs")
+                            ContextMenuEntry::new("ACP 문서")
                                 .icon(IconName::ArrowUpRight)
                                 .icon_color(Color::Muted)
                                 .icon_position(IconPosition::End)
@@ -1289,8 +1287,8 @@ impl AgentConfiguration {
             .child(
                 v_flex()
                     .child(self.render_section_title(
-                        "External Agents",
-                        "All agents connected through the Agent Client Protocol.",
+                        "외부 에이전트",
+                        "Agent Client Protocol로 연결된 모든 에이전트입니다.",
                         add_agent_popover.into_any_element(),
                     ))
                     .child(
@@ -1369,7 +1367,7 @@ impl AgentConfiguration {
             .disabled(connection_status == AgentConnectionStatus::Connecting)
             .icon_color(Color::Muted)
             .icon_size(IconSize::Small)
-            .tooltip(Tooltip::text("Restart Agent Connection"))
+            .tooltip(Tooltip::text("에이전트 연결 재시작"))
             .on_click(cx.listener({
                 let agent = agent.clone();
                 move |this, _, _window, cx| {
@@ -1390,7 +1388,7 @@ impl AgentConfiguration {
                 )
                 .icon_color(Color::Muted)
                 .icon_size(IconSize::Small)
-                .tooltip(Tooltip::text("Uninstall Agent Extension"))
+                .tooltip(Tooltip::text("에이전트 확장 제거"))
                 .on_click(cx.listener(move |this, _, _window, cx| {
                     let agent_name = agent_server_name.clone();
 
@@ -1412,7 +1410,7 @@ impl AgentConfiguration {
                     )
                     .icon_color(Color::Muted)
                     .icon_size(IconSize::Small)
-                    .tooltip(Tooltip::text("Remove Registry Agent"))
+                    .tooltip(Tooltip::text("레지스트리 에이전트 제거"))
                     .on_click(cx.listener(move |_, _, _window, cx| {
                         let agent_name = agent_server_name.clone();
                         update_settings_file(fs.clone(), cx, move |settings, _| {
@@ -1440,7 +1438,7 @@ impl AgentConfiguration {
                     )
                     .icon_color(Color::Muted)
                     .icon_size(IconSize::Small)
-                    .tooltip(Tooltip::text("Remove Custom Agent"))
+                    .tooltip(Tooltip::text("사용자 지정 에이전트 제거"))
                     .on_click(cx.listener(move |_, _, _window, cx| {
                         let agent_name = agent_server_name.clone();
                         update_settings_file(fs.clone(), cx, move |settings, _| {
@@ -1541,7 +1539,7 @@ fn show_unable_to_uninstall_extension_with_context_server(
 
     let status_toast = StatusToast::new(
         format!(
-            "The {} extension provides more than just the MCP server. Proceed to uninstall anyway?",
+            "{} 확장은 MCP 서버 외의 기능도 제공합니다. 그래도 제거할까요?",
             id.0
         ),
         cx,
@@ -1554,7 +1552,7 @@ fn show_unable_to_uninstall_extension_with_context_server(
                     .color(Color::Warning),
             )
             .dismiss_button(true)
-            .action("Uninstall", move |_, _cx| {
+            .action("제거", move |_, _cx| {
                 if let Some((extension_id, _)) =
                     resolve_extension_for_context_server(&context_server_id, _cx)
                 {

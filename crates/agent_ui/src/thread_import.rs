@@ -276,7 +276,7 @@ impl ThreadImportModal {
 
     fn show_imported_threads_toast(&self, imported_count: usize, cx: &mut App) {
         let status_toast = if imported_count == 0 {
-            StatusToast::new("No threads found to import.", cx, |this, _cx| {
+            StatusToast::new("가져올 스레드 없음.", cx, |this, _cx| {
                 this.icon(
                     Icon::new(IconName::Info)
                         .size(IconSize::Small)
@@ -286,9 +286,9 @@ impl ThreadImportModal {
             })
         } else {
             let message = if imported_count == 1 {
-                "Imported 1 thread.".to_string()
+                "스레드 1개를 가져왔습니다.".to_string()
             } else {
-                format!("Imported {imported_count} threads.")
+                format!("스레드 {imported_count}개를 가져왔습니다.")
             };
             StatusToast::new(message, cx, |this, _cx| {
                 this.icon(
@@ -408,7 +408,7 @@ impl Render for ThreadImportModal {
                                 .when(has_agents, |this| this.children(agent_rows))
                                 .when(!has_agents, |this| {
                                     this.child(
-                                        Label::new("No ACP agents available.")
+                                        Label::new("사용 가능한 ACP 에이전트 없음.")
                                             .color(Color::Muted)
                                             .size(LabelSize::Small),
                                     )
@@ -426,7 +426,7 @@ impl Render for ThreadImportModal {
                                 )
                             })
                             .end_slot(
-                                Button::new("import-threads", "Import Threads")
+                                Button::new("import-threads", "스레드 가져오기")
                                     .loading(self.is_importing)
                                     .disabled(disabled_import_thread)
                                     .key_binding(

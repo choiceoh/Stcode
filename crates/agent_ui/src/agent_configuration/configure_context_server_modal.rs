@@ -676,16 +676,15 @@ impl EventEmitter<DismissEvent> for ConfigureContextServerModal {}
 impl ConfigureContextServerModal {
     fn render_modal_header(&self) -> ModalHeader {
         let text: SharedString = match &self.source {
-            ConfigurationSource::New { .. } => "Add MCP Server".into(),
-            ConfigurationSource::Existing { .. } => "Configure MCP Server".into(),
-            ConfigurationSource::Extension { id, .. } => format!("Configure {}", id.0).into(),
+            ConfigurationSource::New { .. } => "MCP 서버 추가".into(),
+            ConfigurationSource::Existing { .. } => "MCP 서버 설정".into(),
+            ConfigurationSource::Extension { id, .. } => format!("{} 설정", id.0).into(),
         };
         ModalHeader::new().headline(text)
     }
 
     fn render_modal_description(&self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
-        const MODAL_DESCRIPTION: &str =
-            "Check the server docs for required arguments and environment variables.";
+        const MODAL_DESCRIPTION: &str = "필수 인수와 환경 변수는 서버 문서를 확인하세요.";
 
         if let ConfigurationSource::Extension {
             installation_instructions: Some(installation_instructions),
@@ -739,7 +738,7 @@ impl ConfigureContextServerModal {
                 .border_b_1()
                 .border_color(cx.theme().colors().border.opacity(0.5))
                 .child(
-                    tab("Local", !is_http).on_click(cx.listener(|this, _, window, cx| {
+                    tab("로컬", !is_http).on_click(cx.listener(|this, _, window, cx| {
                         if let ConfigurationSource::New { editor, is_http } = &mut this.source {
                             if *is_http {
                                 *is_http = false;
@@ -752,7 +751,7 @@ impl ConfigureContextServerModal {
                     })),
                 )
                 .child(
-                    tab("Remote", is_http).on_click(cx.listener(|this, _, window, cx| {
+                    tab("원격", is_http).on_click(cx.listener(|this, _, window, cx| {
                         if let ConfigurationSource::New { editor, is_http } = &mut this.source {
                             if !*is_http {
                                 *is_http = true;
@@ -826,7 +825,7 @@ impl ConfigureContextServerModal {
                 } = &self.source
                 {
                     Some(
-                        Button::new("open-repository", "Open Repository")
+                        Button::new("open-repository", "저장소 열기")
                             .end_icon(
                                 Icon::new(IconName::ArrowUpRight)
                                     .size(IconSize::Small)
@@ -836,7 +835,7 @@ impl ConfigureContextServerModal {
                                 let repository_url = repository_url.clone();
                                 move |_window, cx| {
                                     Tooltip::with_meta(
-                                        "Open Repository",
+                                        "저장소 열기",
                                         None,
                                         repository_url.clone(),
                                         cx,
@@ -859,9 +858,9 @@ impl ConfigureContextServerModal {
                         Button::new(
                             "cancel",
                             if self.source.has_configuration_options() {
-                                "Cancel"
+                                "취소"
                             } else {
-                                "Dismiss"
+                                "닫기"
                             },
                         )
                         .key_binding(
@@ -876,9 +875,9 @@ impl ConfigureContextServerModal {
                         Button::new(
                             "add-server",
                             if self.source.is_new() {
-                                "Add Server"
+                                "서버 추가"
                             } else {
-                                "Configure Server"
+                                "서버 설정"
                             },
                         )
                         .disabled(is_busy)
@@ -925,13 +924,13 @@ impl ConfigureContextServerModal {
                             .color(Color::Muted),
                     )
                     .child(
-                        Label::new("Authenticate to connect this server")
+                        Label::new("이 서버에 연결하려면 인증하세요")
                             .size(LabelSize::Small)
                             .color(Color::Muted),
                     ),
             )
             .child(
-                Button::new("authenticate-server", "Authenticate")
+                Button::new("authenticate-server", "인증")
                     .style(ButtonStyle::Outlined)
                     .label_size(LabelSize::Small)
                     .on_click({
@@ -996,14 +995,12 @@ impl Render for ConfigureContextServerModal {
                                         .child(self.render_modal_content(cx))
                                         .child(match &self.state {
                                             State::Idle => div(),
-                                            State::Waiting => {
-                                                self.render_loading("Connecting Server…")
-                                            }
+                                            State::Waiting => self.render_loading("서버 연결 중…"),
                                             State::AuthRequired { server_id } => {
                                                 self.render_auth_required(&server_id.clone(), cx)
                                             }
                                             State::Authenticating { .. } => {
-                                                self.render_loading("Authenticating…")
+                                                self.render_loading("인증 중…")
                                             }
                                             State::Error(error) => {
                                                 Self::render_modal_error(error.clone())
