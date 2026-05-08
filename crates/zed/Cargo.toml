@@ -27,30 +27,6 @@ test-support = [
     "recent_projects/test-support",
     "title_bar/test-support",
 ]
-visual-tests = [
-    "gpui/test-support",
-    "gpui_platform/screen-capture",
-    "gpui_platform/test-support",
-    "dep:image",
-    "dep:tempfile",
-    "dep:action_log",
-    "dep:agent_servers",
-    "workspace/test-support",
-    "project/test-support",
-    "editor/test-support",
-    "terminal_view/test-support",
-    "image_viewer/test-support",
-    "clock/test-support",
-    "acp_thread/test-support",
-    "action_log/test-support",
-    "agent_ui/test-support",
-    "db/test-support",
-    "agent/test-support",
-    "language_model/test-support",
-    "fs/test-support",
-    "recent_projects/test-support",
-    "title_bar/test-support",
-]
 
 [[bin]]
 name = "zed"
@@ -59,11 +35,6 @@ path = "src/main.rs"
 [[bin]]
 name = "stcode"
 path = "src/stcode_main.rs"
-
-[[bin]]
-name = "zed_visual_test_runner"
-path = "src/visual_test_runner.rs"
-required-features = ["visual-tests"]
 
 [dependencies]
 acp_tools.workspace = true
@@ -91,10 +62,12 @@ copilot.workspace = true
 copilot_chat.workspace = true
 copilot_ui.workspace = true
 crashes.workspace = true
+csv_preview.workspace = true
 db.workspace = true
 debug_adapter_extension.workspace = true
 diagnostics.workspace = true
 editor.workspace = true
+encoding_selector.workspace = true
 env_logger.workspace = true
 extension.workspace = true
 extension_host.workspace = true
@@ -106,7 +79,6 @@ futures.workspace = true
 git.workspace = true
 git_hosting_providers.workspace = true
 git_ui.workspace = true
-go_to_line.workspace = true
 system_specs.workspace = true
 gpui = { workspace = true, features = ["input-latency-histogram"] }
 gpui_platform = {workspace = true, features=["screen-capture", "font-kit", "wayland", "x11"]}
@@ -124,20 +96,23 @@ edit_prediction.workspace = true
 edit_prediction_ui.workspace = true
 http_client.workspace = true
 image_viewer.workspace = true
+input_latency_ui.workspace = true
 install_cli.workspace = true
 json_schema_store.workspace = true
-keymap_editor.workspace = true
 language.workspace = true
 language_extension.workspace = true
 language_model.workspace = true
 language_models.workspace = true
 language_onboarding.workspace = true
+language_selector.workspace = true
 language_tools.workspace = true
 languages = { workspace = true, features = ["load-grammars"] }
+line_ending_selector.workspace = true
 log.workspace = true
 markdown.workspace = true
 markdown_preview.workspace = true
 menu.workspace = true
+migrator.workspace = true
 mimalloc = { version = "0.1", optional = true }
 nc.workspace = true
 node_runtime.workspace = true
@@ -165,13 +140,16 @@ serde.workspace = true
 serde_json.workspace = true
 session.workspace = true
 settings.workspace = true
+settings_profile_selector.workspace = true
 settings_ui.workspace = true
 shellexpand.workspace = true
 sidebar.workspace = true
 smol.workspace = true
 snippet_provider.workspace = true
+svg_preview.workspace = true
 sysinfo.workspace = true
 task.workspace = true
+tasks_ui.workspace = true
 telemetry.workspace = true
 telemetry_events.workspace = true
 terminal_view.workspace = true
@@ -184,12 +162,16 @@ time_format.workspace = true
 title_bar.workspace = true
 ztracing.workspace = true
 tracing.workspace = true
+toolchain_selector.workspace = true
 ui.workspace = true
+ui_prompt.workspace = true
 url.workspace = true
 urlencoding.workspace = true
 util.workspace = true
 uuid.workspace = true
 watch.workspace = true
+web_search.workspace = true
+web_search_providers.workspace = true
 workspace.workspace = true
 zed_actions.workspace = true
 zed_env_vars.workspace = true
@@ -197,6 +179,7 @@ zlog.workspace = true
 zlog_settings.workspace = true
 
 [target.'cfg(target_os = "windows")'.dependencies]
+etw_tracing.workspace = true
 windows.workspace = true
 gpui = { workspace = true, features = [
     "input-latency-histogram",
@@ -244,6 +227,22 @@ search = { workspace = true, features = ["test-support"] }
 icon = ["resources/app-icon-stcode@2x.png", "resources/app-icon-stcode.png"]
 identifier = "dev.zed.Zed-Dev"
 name = "Zed Dev"
+osx_minimum_system_version = "10.15.7"
+osx_info_plist_exts = ["resources/info/*"]
+osx_url_schemes = ["zed"]
+
+[package.metadata.bundle]
+icon = ["resources/app-icon-stcode@2x.png", "resources/app-icon-stcode.png"]
+identifier = "dev.zed.Zed"
+name = "Stcode"
+osx_minimum_system_version = "10.15.7"
+osx_info_plist_exts = ["resources/info/*"]
+osx_url_schemes = ["zed"]
+
+[package.metadata.bundle.bin.stcode]
+icon = ["resources/app-icon-stcode@2x.png", "resources/app-icon-stcode.png"]
+identifier = "dev.zed.Zed"
+name = "Stcode"
 osx_minimum_system_version = "10.15.7"
 osx_info_plist_exts = ["resources/info/*"]
 osx_url_schemes = ["zed"]

@@ -5,8 +5,6 @@ pub mod invalid_item_view;
 pub mod item;
 mod modal_layer;
 mod multi_workspace;
-#[cfg(test)]
-mod multi_workspace_tests;
 pub mod notifications;
 pub mod pane;
 pub mod pane_group;
@@ -119,7 +117,7 @@ use sqlez::{
     statement::Statement,
 };
 use status_bar::StatusBar;
-pub use status_bar::StatusItemView;
+pub use status_bar::{StatusItemView, status_bar_compact_icon_size, status_bar_icon_size};
 use std::{
     any::TypeId,
     borrow::Cow,

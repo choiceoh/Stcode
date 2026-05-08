@@ -25,6 +25,39 @@ use super::*;
 const STCODE_STARTUP_RULE_FILES: [&str; 2] = ["AGENTS.md", "CLAUDE.md"];
 const STCODE_STARTUP_RULE_MAX_BYTES: usize = 128 * 1024;
 const MAX_STCODE_STARTUP_SNAPSHOT_FILES: usize = 8;
+const STCODE_MESSAGE_EDITOR_MIN_LINES: usize = 5;
+const STCODE_MESSAGE_EDITOR_MAX_LINES: usize = 14;
+
+fn message_editor_auto_height_mode(cx: &App) -> editor::EditorMode {
+    let agent_settings = AgentSettings::get_global(cx);
+    let (min_lines, max_lines) = message_editor_auto_height_lines(
+        agent_settings.message_editor_min_lines,
+        agent_settings.set_message_editor_max_lines(),
+        AppLaunchMode::is_stcode(cx),
+    );
+    editor::EditorMode::AutoHeight {
+        min_lines,
+        max_lines: Some(max_lines),
+    }
+}
+
+fn message_editor_auto_height_lines(
+    configured_min_lines: usize,
+    configured_max_lines: usize,
+    is_stcode: bool,
+) -> (usize, usize) {
+    let min_lines = if is_stcode {
+        configured_min_lines.max(STCODE_MESSAGE_EDITOR_MIN_LINES)
+    } else {
+        configured_min_lines
+    };
+    let max_lines = if is_stcode {
+        configured_max_lines.max(STCODE_MESSAGE_EDITOR_MAX_LINES)
+    } else {
+        configured_max_lines
+    };
+    (min_lines, max_lines.max(min_lines))
+}
 
 #[derive(Default)]
 struct ThreadFeedbackState {
@@ -400,10 +433,7 @@ impl ThreadView {
                 session_capabilities.clone(),
                 agent_id.clone(),
                 &placeholder,
-                editor::EditorMode::AutoHeight {
-                    min_lines: AgentSettings::get_global(cx).message_editor_min_lines,
-                    max_lines: Some(AgentSettings::get_global(cx).set_message_editor_max_lines()),
-                },
+                message_editor_auto_height_mode(cx),
                 window,
                 cx,
             );
@@ -1321,13 +1351,19 @@ impl ThreadView {
         let (error_kind, acp_error_code, message): (&str, Option<SharedString>, SharedString) =
             match error {
                 ThreadError::PaymentRequired => {
-                    let message = if AppLaunchMode::is_stcode(cx) {
-                        "The selected agent provider reported a usage limit. Configure another provider or check that provider account.".into()
+                    let pro_plan_name = if AppLaunchMode::is_stcode(cx) {
+                        "Stcode Pro"
                     } else {
-                        "You reached your free usage limit. Upgrade to Zed Pro for more prompts."
-                            .into()
+                        "Zed Pro"
                     };
-                    ("payment_required", None, message)
+                    (
+                        "payment_required",
+                        None,
+                        format!(
+                            "You reached your free usage limit. Upgrade to {pro_plan_name} for more prompts."
+                        )
+                        .into(),
+                    )
                 }
                 ThreadError::Refusal => {
                     let model_or_agent_name = self.current_model_name(cx);
@@ -1709,14 +1745,7 @@ impl ThreadView {
                     cx,
                 )
             } else {
-                let agent_settings = AgentSettings::get_global(cx);
-                editor.set_mode(
-                    EditorMode::AutoHeight {
-                        min_lines: agent_settings.message_editor_min_lines,
-                        max_lines: Some(agent_settings.set_message_editor_max_lines()),
-                    },
-                    cx,
-                )
+                editor.set_mode(message_editor_auto_height_mode(cx), cx)
             }
         });
         cx.notify();
@@ -4361,19 +4390,23 @@ impl ThreadView {
 
     fn render_follow_toggle(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let following = self.is_following(cx);
+        let is_native_agent = self.agent_id.as_ref() == agent::ZED_AGENT_ID.as_ref();
+        let agent_label = if is_native_agent && AppLaunchMode::is_stcode(cx) {
+            "Stcode Agent"
+        } else {
+            self.agent_id.as_ref()
+        };
 
         let tooltip_label = if following {
-            if self.agent_id.as_ref() == agent::ZED_AGENT_ID.as_ref() {
-                format!("Stop Following the {}", self.agent_id)
+            if is_native_agent {
+                format!("Stop Following the {agent_label}")
             } else {
-                format!("Stop Following {}", self.agent_id)
+                format!("Stop Following {agent_label}")
             }
+        } else if is_native_agent {
+            format!("Follow the {agent_label}")
         } else {
-            if self.agent_id.as_ref() == agent::ZED_AGENT_ID.as_ref() {
-                format!("Follow the {}", self.agent_id)
-            } else {
-                format!("Follow {}", self.agent_id)
-            }
+            format!("Follow {agent_label}")
         };
 
         IconButton::new("follow-agent", IconName::Crosshair)
@@ -5468,10 +5501,7 @@ impl ThreadView {
                 sizing_behavior: SizingBehavior::Default,
             }
         } else {
-            EditorMode::AutoHeight {
-                min_lines: AgentSettings::get_global(cx).message_editor_min_lines,
-                max_lines: Some(AgentSettings::get_global(cx).set_message_editor_max_lines()),
-            }
+            message_editor_auto_height_mode(cx)
         };
         self.message_editor.update(cx, |editor, cx| {
             editor.set_mode(mode, cx);
@@ -8511,6 +8541,26 @@ impl ThreadView {
         error: SharedString,
         cx: &mut Context<Self>,
     ) -> Callout {
+        if AppLaunchMode::is_stcode(cx) {
+            let message = SharedString::from(format!(
+                "The selected agent needs credentials before it can continue. \
+                Configure a local or API-backed model provider, then rerun the task.\n\n{error}"
+            ));
+
+            return Callout::new()
+                .severity(Severity::Error)
+                .title("Model Credentials Needed")
+                .icon(IconName::XCircle)
+                .description(message.clone())
+                .actions_slot(
+                    h_flex()
+                        .gap_0p5()
+                        .child(self.configure_models_button(cx))
+                        .child(self.create_copy_button(message)),
+                )
+                .dismiss_action(self.dismiss_error_button(cx));
+        }
+
         Callout::new()
             .severity(Severity::Error)
             .title("Authentication Required")
@@ -8526,34 +8576,45 @@ impl ThreadView {
     }
 
     fn render_payment_required_error(&self, cx: &mut Context<Self>) -> Callout {
-        let is_stcode = AppLaunchMode::is_stcode(cx);
-        let error_message = if is_stcode {
-            SharedString::from(
-                "The selected agent provider reported a usage limit. Configure another provider or check that provider account.",
-            )
+        if AppLaunchMode::is_stcode(cx) {
+            let error_message = SharedString::from(
+                "The selected cloud model is out of quota. Switch to another configured model \
+                or use a local provider to keep the autonomous run moving.",
+            );
+
+            return Callout::new()
+                .severity(Severity::Error)
+                .icon(IconName::XCircle)
+                .title("Model Quota Blocked")
+                .description(error_message.clone())
+                .actions_slot(
+                    h_flex()
+                        .gap_0p5()
+                        .child(self.switch_model_button(cx))
+                        .child(self.configure_models_button(cx))
+                        .child(self.create_copy_button(error_message)),
+                )
+                .dismiss_action(self.dismiss_error_button(cx));
+        }
+
+        let pro_plan_name = if AppLaunchMode::is_stcode(cx) {
+            "Stcode Pro"
         } else {
-            SharedString::from(
-                "You reached your free usage limit. Upgrade to Zed Pro for more prompts.",
-            )
+            "Zed Pro"
         };
+        let error_message = SharedString::from(format!(
+            "You reached your free usage limit. Upgrade to {pro_plan_name} for more prompts."
+        ));
 
         Callout::new()
             .severity(Severity::Error)
             .icon(IconName::XCircle)
-            .title(if is_stcode {
-                "Provider Usage Limit"
-            } else {
-                "Free Usage Exceeded"
-            })
+            .title("Free Usage Exceeded")
             .description(error_message.clone())
             .actions_slot(
                 h_flex()
                     .gap_0p5()
-                    .child(if is_stcode {
-                        self.configure_providers_button(cx).into_any_element()
-                    } else {
-                        self.upgrade_button(cx).into_any_element()
-                    })
+                    .child(self.upgrade_button(cx))
                     .child(self.create_copy_button(error_message)),
             )
             .dismiss_action(self.dismiss_error_button(cx))
@@ -8625,6 +8686,30 @@ impl ThreadView {
             }))
     }
 
+    fn switch_model_button(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        Button::new("switch-model", "Switch Model")
+            .label_size(LabelSize::Small)
+            .style(ButtonStyle::Filled)
+            .on_click(cx.listener({
+                move |this, _, window, cx| {
+                    this.clear_thread_error(cx);
+                    window.dispatch_action(ToggleModelSelector.boxed_clone(), cx);
+                }
+            }))
+    }
+
+    fn configure_models_button(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        Button::new("configure-models", "Configure Models")
+            .label_size(LabelSize::Small)
+            .style(ButtonStyle::Outlined)
+            .on_click(cx.listener({
+                move |this, _, window, cx| {
+                    this.clear_thread_error(cx);
+                    window.dispatch_action(OpenSettings.boxed_clone(), cx);
+                }
+            }))
+    }
+
     fn upgrade_button(&self, cx: &mut Context<Self>) -> impl IntoElement {
         Button::new("upgrade", "Upgrade")
             .label_size(LabelSize::Small)
@@ -8633,18 +8718,6 @@ impl ThreadView {
                 move |this, _, _, cx| {
                     this.clear_thread_error(cx);
                     cx.open_url(&zed_urls::upgrade_to_zed_pro_url(cx));
-                }
-            }))
-    }
-
-    fn configure_providers_button(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        Button::new("configure_providers", "Configure Providers")
-            .label_size(LabelSize::Small)
-            .style(ButtonStyle::Filled)
-            .on_click(cx.listener({
-                move |this, _, window, cx| {
-                    this.clear_thread_error(cx);
-                    window.dispatch_action(zed_actions::agent::OpenSettings.boxed_clone(), cx);
                 }
             }))
     }
@@ -9409,6 +9482,13 @@ mod tests {
             uri: uri.to_string(),
             text: text.to_string(),
         }
+    }
+
+    #[test]
+    fn test_stcode_message_editor_uses_console_sized_lines() {
+        assert_eq!(message_editor_auto_height_lines(2, 4, true), (5, 14));
+        assert_eq!(message_editor_auto_height_lines(8, 16, true), (8, 16));
+        assert_eq!(message_editor_auto_height_lines(2, 4, false), (2, 4));
     }
 
     #[test]

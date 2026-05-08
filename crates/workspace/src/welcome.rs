@@ -20,7 +20,7 @@ use settings::Settings;
 use ui::{ButtonLike, Divider, DividerColor, KeyBinding, Vector, VectorName, prelude::*};
 use util::ResultExt;
 use zed_actions::{
-    Extensions, OpenKeymap, OpenOnboarding, OpenSettings, agent::OpenSettings as OpenAgentSettings,
+    Extensions, OpenOnboarding, OpenSettings, agent::OpenSettings as OpenAgentSettings,
     assistant::ToggleFocus, command_palette,
 };
 
@@ -233,7 +233,7 @@ impl WelcomeMode {
     }
 }
 
-fn zed_content() -> (Section<4>, Section<3>) {
+fn zed_content() -> (Section<4>, Section<2>) {
     (
         Section {
             title: "Get Started",
@@ -274,12 +274,6 @@ fn zed_content() -> (Section<4>, Section<3>) {
                     visibility_guard: SectionVisibility::Always,
                 },
                 SectionEntry {
-                    icon: IconName::Keyboard,
-                    title: "Customize Keymaps",
-                    action: &OpenKeymap,
-                    visibility_guard: SectionVisibility::Always,
-                },
-                SectionEntry {
                     icon: IconName::Blocks,
                     title: "Explore Extensions",
                     action: &Extensions {
@@ -293,7 +287,7 @@ fn zed_content() -> (Section<4>, Section<3>) {
     )
 }
 
-fn stcode_content() -> (Section<4>, Section<3>) {
+fn stcode_content() -> (Section<4>, Section<2>) {
     (
         Section {
             title: "Start Work",
@@ -331,12 +325,6 @@ fn stcode_content() -> (Section<4>, Section<3>) {
                     icon: IconName::Settings,
                     title: "Open App Settings",
                     action: &OpenSettings,
-                    visibility_guard: SectionVisibility::Always,
-                },
-                SectionEntry {
-                    icon: IconName::Keyboard,
-                    title: "Customize Keymaps",
-                    action: &OpenKeymap,
                     visibility_guard: SectionVisibility::Always,
                 },
                 SectionEntry {

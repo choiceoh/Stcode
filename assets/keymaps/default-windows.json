@@ -32,6 +32,12 @@
       "ctrl-0": ["zed::ResetBufferFontSize", { "persist": false }],
       "ctrl-alt-,": "zed::OpenSettingsFile",
       "ctrl-q": "zed::Quit",
+      "f4": "debugger::Start",
+      "shift-f5": "debugger::Stop",
+      "ctrl-shift-f5": "debugger::RerunSession",
+      "f6": "debugger::Pause",
+      "f10": "debugger::StepOver",
+      "shift-f11": "debugger::StepOut",
       "f11": "zed::ToggleFullScreen",
       "ctrl-shift-i": "edit_prediction::ToggleMenu",
       "shift-alt-l": "lsp_tool::ToggleMenu",
@@ -172,6 +178,14 @@
     "use_key_equivalents": true,
     "bindings": {
       "ctrl-c": "markdown::Copy",
+    },
+  },
+  {
+    "context": "Editor && jupyter",
+    "use_key_equivalents": true,
+    "bindings": {
+      "ctrl-shift-enter": "repl::Run",
+      "ctrl-alt-enter": "repl::RunInPlace",
     },
   },
   {
@@ -595,7 +609,6 @@
     "use_key_equivalents": true,
     "bindings": {
       "ctrl-shift-o": "outline::Toggle",
-      "ctrl-g": "go_to_line::Toggle",
     },
   },
   {
@@ -642,9 +655,9 @@
       "ctrl-shift-f": "pane::DeploySearch",
       "ctrl-shift-h": ["pane::DeploySearch", { "replace_enabled": true }],
       "ctrl-shift-t": "pane::ReopenClosedItem",
-      "ctrl-k ctrl-s": "zed::OpenKeymap",
       "ctrl-k ctrl-t": "theme_selector::Toggle",
       "ctrl-k ctrl-shift-t": "theme::ToggleMode",
+      "ctrl-alt-super-p": "settings_profile_selector::Toggle",
       "ctrl-t": "project_symbols::Toggle",
       "ctrl-p": "file_finder::Toggle",
       "ctrl-e": "file_finder::Toggle",
@@ -654,8 +667,11 @@
       "ctrl-shift-e": "project_panel::ToggleFocus",
       "ctrl-shift-b": "outline_panel::ToggleFocus",
       "ctrl-shift-g": "git_panel::ToggleFocus",
+      "ctrl-shift-d": "debug_panel::ToggleFocus",
       "ctrl-shift-/": "agent::ToggleFocus",
       "ctrl-k s": "workspace::SaveAll",
+      "ctrl-k n": "encoding_selector::Toggle",
+      "ctrl-k m": "language_selector::Toggle",
       "ctrl-m ctrl-m": "toolchain::AddToolchain",
       "escape": "workspace::Unfollow",
       "ctrl-k ctrl-left": "workspace::ActivatePaneLeft",
@@ -667,8 +683,33 @@
       "ctrl-k shift-up": "workspace::SwapPaneUp",
       "ctrl-k shift-down": "workspace::SwapPaneDown",
       "ctrl-shift-x": "zed::Extensions",
+      // All task parameters are captured and unchanged between reruns by default.
+      // Use the `"reevaluate_context"` parameter to control this.
+      "ctrl-shift-r": ["task::Rerun", { "reevaluate_context": false }],
+      "alt-t": "task::Rerun",
+      "shift-alt-t": "task::Spawn",
+      "shift-alt-r": ["task::Spawn", { "reveal_target": "center" }],
+      // also possible to spawn tasks by name:
+      // "foo-bar": ["task::Spawn", { "task_name": "MyTask", "reveal_target": "dock" }]
+      // or by tag:
+      // "foo-bar": ["task::Spawn", { "task_tag": "MyTag" }],
+      "f5": "debugger::Rerun",
       "ctrl-f4": "workspace::CloseActiveDock",
       "ctrl-w": "workspace::CloseActiveDock",
+    },
+  },
+  {
+    "context": "Workspace && debugger_running",
+    "use_key_equivalents": true,
+    "bindings": {
+      "f5": "zed::NoAction",
+    },
+  },
+  {
+    "context": "Workspace && debugger_stopped",
+    "use_key_equivalents": true,
+    "bindings": {
+      "f5": "debugger::Continue",
     },
   },
   {
@@ -825,6 +866,13 @@
       "ctrl-shift-alt-f": "workspace::FollowNextCollaborator",
       // Only available in debug builds: opens an element inspector for development.
       "shift-alt-i": "dev::ToggleInspector",
+    },
+  },
+  {
+    "context": "!Terminal",
+    "use_key_equivalents": true,
+    "bindings": {
+      "ctrl-shift-c": "collab_panel::ToggleFocus",
     },
   },
   {
@@ -1018,6 +1066,71 @@
     },
   },
   {
+    "context": "DebugPanel",
+    "use_key_equivalents": true,
+    "bindings": {
+      "ctrl-t": "debugger::ToggleThreadPicker",
+      "ctrl-i": "debugger::ToggleSessionPicker",
+      "shift-alt-escape": "debugger::ToggleExpandItem",
+    },
+  },
+  {
+    "context": "VariableList",
+    "use_key_equivalents": true,
+    "bindings": {
+      "left": "variable_list::CollapseSelectedEntry",
+      "right": "variable_list::ExpandSelectedEntry",
+      "enter": "variable_list::EditVariable",
+      "ctrl-c": "variable_list::CopyVariableValue",
+      "ctrl-alt-c": "variable_list::CopyVariableName",
+      "delete": "variable_list::RemoveWatch",
+      "backspace": "variable_list::RemoveWatch",
+      "alt-enter": "variable_list::AddWatch",
+    },
+  },
+  {
+    "context": "BreakpointList",
+    "use_key_equivalents": true,
+    "bindings": {
+      "space": "debugger::ToggleEnableBreakpoint",
+      "backspace": "debugger::UnsetBreakpoint",
+      "left": "debugger::PreviousBreakpointProperty",
+      "right": "debugger::NextBreakpointProperty",
+    },
+  },
+  {
+    "context": "CollabPanel && not_editing",
+    "use_key_equivalents": true,
+    "bindings": {
+      "ctrl-backspace": "collab_panel::Remove",
+      "space": "menu::Confirm",
+    },
+  },
+  {
+    "context": "CollabPanel",
+    "use_key_equivalents": true,
+    "bindings": {
+      "alt-up": "collab_panel::MoveChannelUp",
+      "alt-down": "collab_panel::MoveChannelDown",
+      "alt-enter": "collab_panel::OpenSelectedChannelNotes",
+      "shift-enter": "collab_panel::ToggleSelectedChannelFavorite",
+    },
+  },
+  {
+    "context": "(CollabPanel && editing) > Editor",
+    "use_key_equivalents": true,
+    "bindings": {
+      "space": "collab_panel::InsertSpace",
+    },
+  },
+  {
+    "context": "ChannelModal",
+    "use_key_equivalents": true,
+    "bindings": {
+      "tab": "channel_modal::ToggleMode",
+    },
+  },
+  {
     "context": "Picker > Editor",
     "use_key_equivalents": true,
     "bindings": {
@@ -1027,7 +1140,22 @@
       "tab": "picker::ConfirmCompletion",
       "alt-enter": ["picker::ConfirmInput", { "secondary": false }],
     },
-  }{
+  },
+  {
+    "context": "ChannelModal > Picker > Editor",
+    "use_key_equivalents": true,
+    "bindings": {
+      "tab": "channel_modal::ToggleMode",
+    },
+  },
+  {
+    "context": "ToolchainSelector",
+    "use_key_equivalents": true,
+    "bindings": {
+      "ctrl-shift-a": "toolchain::AddToolchain",
+    },
+  },
+  {
     "context": "FileFinder || (FileFinder > Picker > Editor)",
     "use_key_equivalents": true,
     "bindings": {
@@ -1055,6 +1183,15 @@
       "ctrl-shift-a": "workspace::AddFolderToProject",
       "shift-backspace": "recent_projects::RemoveSelected",
       "ctrl-shift-enter": "recent_projects::AddToWorkspace",
+    },
+  },
+  {
+    "context": "TabSwitcher",
+    "use_key_equivalents": true,
+    "bindings": {
+      "ctrl-shift-tab": "menu::SelectPrevious",
+      "ctrl-up": "menu::SelectPrevious",
+      "ctrl-down": "menu::SelectNext",
     },
   },
   {
@@ -1162,6 +1299,7 @@
     "use_key_equivalents": true,
     "bindings": {
       "enter": "menu::Confirm",
+      "alt-enter": "console::WatchExpression",
     },
   },
   {
@@ -1186,22 +1324,6 @@
       "ctrl-end": "markdown::ScrollToBottom",
       "find": "buffer_search::Deploy",
       "ctrl-f": "buffer_search::Deploy",
-    },
-  },
-  {
-    "context": "KeymapEditor",
-    "use_key_equivalents": true,
-    "bindings": {
-      "ctrl-f": "search::FocusSearch",
-      "alt-f": "keymap_editor::ToggleKeystrokeSearch",
-      "alt-c": "keymap_editor::ToggleConflictFilter",
-      "enter": "keymap_editor::EditBinding",
-      "alt-enter": "keymap_editor::CreateBinding",
-      "ctrl-k": "keymap_editor::OpenCreateKeybindingModal",
-      "ctrl-c": "keymap_editor::CopyAction",
-      "ctrl-shift-c": "keymap_editor::CopyContext",
-      "ctrl-t": "keymap_editor::ShowMatchingKeybinds",
-      "ctrl-e": "zed::OpenKeymapFile",
     },
   },
   {
@@ -1345,6 +1467,15 @@
     },
   },
   {
+    "context": "RunModal",
+    "bindings": {
+      "alt-1": "new_process_modal::ActivateTaskTab",
+      "alt-2": "new_process_modal::ActivateDebugTab",
+      "alt-3": "new_process_modal::ActivateAttachTab",
+      "alt-4": "new_process_modal::ActivateLaunchTab",
+    },
+  },
+  {
     "context": "GitPicker",
     "bindings": {
       "alt-1": "git_picker::ActivateBranchesTab",
@@ -1356,6 +1487,44 @@
     "use_key_equivalents": true,
     "bindings": {
       "ctrl-shift-backspace": "worktree_picker::DeleteWorktree",
+    },
+  },
+  {
+    "context": "NotebookEditor",
+    "bindings": {
+      "shift-enter": "notebook::RunAndAdvance",
+      "ctrl-enter": "notebook::Run",
+      "ctrl-shift-enter": "notebook::RunAll",
+      "alt-up": "notebook::MoveCellUp",
+      "alt-down": "notebook::MoveCellDown",
+      "ctrl-m": "notebook::AddCodeBlock",
+      "ctrl-shift-m": "notebook::AddMarkdownBlock",
+      "ctrl-shift-r": "notebook::RestartKernel",
+      "ctrl-c": "notebook::InterruptKernel",
+    },
+  },
+  {
+    "context": "NotebookEditor && notebook_mode == command",
+    "bindings": {
+      "enter": "notebook::EnterEditMode",
+      "down": "menu::SelectNext",
+      "up": "menu::SelectPrevious",
+    },
+  },
+  {
+    "context": "NotebookEditor > Editor",
+    "bindings": {
+      "enter": "editor::Newline",
+      "shift-enter": "notebook::RunAndAdvance",
+      "ctrl-enter": "notebook::Run",
+      "ctrl-shift-enter": "notebook::RunAll",
+      "alt-up": "notebook::MoveCellUp",
+      "alt-down": "notebook::MoveCellDown",
+      "ctrl-m": "notebook::AddCodeBlock",
+      "ctrl-shift-m": "notebook::AddMarkdownBlock",
+      "ctrl-shift-r": "notebook::RestartKernel",
+      "ctrl-c": "notebook::InterruptKernel",
+      "escape": "notebook::EnterCommandMode",
     },
   },
 ]

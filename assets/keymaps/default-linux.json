@@ -611,7 +611,6 @@
     "context": "Editor && mode == full",
     "bindings": {
       "ctrl-shift-o": "outline::Toggle",
-      "ctrl-g": "go_to_line::Toggle",
     },
   },
   {
@@ -667,9 +666,9 @@
       "ctrl-shift-f": "pane::DeploySearch",
       "ctrl-shift-h": ["pane::DeploySearch", { "replace_enabled": true }],
       "ctrl-shift-t": "pane::ReopenClosedItem",
-      "ctrl-k ctrl-s": "zed::OpenKeymap",
       "ctrl-k ctrl-t": "theme_selector::Toggle",
       "ctrl-k ctrl-shift-t": "theme::ToggleMode",
+      "ctrl-alt-super-p": "settings_profile_selector::Toggle",
       "ctrl-t": "project_symbols::Toggle",
       "ctrl-p": "file_finder::Toggle",
       "ctrl-e": "file_finder::Toggle",
@@ -683,6 +682,8 @@
       "ctrl-?": "agent::ToggleFocus",
       "alt-save": "workspace::SaveAll",
       "ctrl-alt-s": "workspace::SaveAll",
+      "ctrl-k n": "encoding_selector::Toggle",
+      "ctrl-k m": "language_selector::Toggle",
       "ctrl-k ctrl-m": "toolchain::AddToolchain",
       "escape": "workspace::Unfollow",
       "ctrl-k ctrl-left": "workspace::ActivatePaneLeft",
@@ -694,6 +695,17 @@
       "ctrl-k shift-up": "workspace::SwapPaneUp",
       "ctrl-k shift-down": "workspace::SwapPaneDown",
       "ctrl-shift-x": "zed::Extensions",
+      // All task parameters are captured and unchanged between reruns by default.
+      // Use the `"reevaluate_context"` parameter to control this.
+      "ctrl-shift-r": ["task::Rerun", { "reevaluate_context": false }],
+      "ctrl-alt-r": "task::Rerun",
+      "alt-t": "task::Rerun",
+      "alt-shift-t": "task::Spawn",
+      "alt-shift-r": ["task::Spawn", { "reveal_target": "center" }],
+      // also possible to spawn tasks by name:
+      // "foo-bar": ["task::Spawn", { "task_name": "MyTask", "reveal_target": "dock" }]
+      // or by tag:
+      // "foo-bar": ["task::Spawn", { "task_tag": "MyTag" }],
       "f5": "debugger::Rerun",
       "ctrl-f4": "workspace::CloseActiveDock",
       "ctrl-w": "workspace::CloseActiveDock",
@@ -1128,7 +1140,15 @@
     "bindings": {
       "tab": "channel_modal::ToggleMode",
     },
-  }{
+  },
+  {
+    "context": "ToolchainSelector",
+    "use_key_equivalents": true,
+    "bindings": {
+      "ctrl-shift-a": "toolchain::AddToolchain",
+    },
+  },
+  {
     "context": "FileFinder || (FileFinder > Picker > Editor)",
     "bindings": {
       "ctrl-p": "file_finder::Toggle",
@@ -1153,6 +1173,14 @@
       "ctrl-shift-a": "workspace::AddFolderToProject",
       "shift-backspace": "recent_projects::RemoveSelected",
       "ctrl-shift-enter": "recent_projects::AddToWorkspace",
+    },
+  },
+  {
+    "context": "TabSwitcher",
+    "bindings": {
+      "ctrl-shift-tab": "menu::SelectPrevious",
+      "ctrl-up": "menu::SelectPrevious",
+      "ctrl-down": "menu::SelectNext",
     },
   },
   {
@@ -1273,23 +1301,6 @@
       "ctrl-end": "markdown::ScrollToBottom",
       "find": "buffer_search::Deploy",
       "ctrl-f": "buffer_search::Deploy",
-    },
-  },
-  {
-    "context": "KeymapEditor",
-    "use_key_equivalents": true,
-    "bindings": {
-      "ctrl-f": "search::FocusSearch",
-      "alt-find": "keymap_editor::ToggleKeystrokeSearch",
-      "alt-ctrl-f": "keymap_editor::ToggleKeystrokeSearch",
-      "alt-c": "keymap_editor::ToggleConflictFilter",
-      "enter": "keymap_editor::EditBinding",
-      "alt-enter": "keymap_editor::CreateBinding",
-      "ctrl-k": "keymap_editor::OpenCreateKeybindingModal",
-      "ctrl-c": "keymap_editor::CopyAction",
-      "ctrl-shift-c": "keymap_editor::CopyContext",
-      "ctrl-t": "keymap_editor::ShowMatchingKeybinds",
-      "ctrl-e": "zed::OpenKeymapFile",
     },
   },
   {
@@ -1417,6 +1428,44 @@
     "bindings": {
       "alt-left": "dev::EditPredictionContextGoBack",
       "alt-right": "dev::EditPredictionContextGoForward",
+    },
+  },
+  {
+    "context": "NotebookEditor",
+    "bindings": {
+      "shift-enter": "notebook::RunAndAdvance",
+      "ctrl-enter": "notebook::Run",
+      "ctrl-shift-enter": "notebook::RunAll",
+      "alt-up": "notebook::MoveCellUp",
+      "alt-down": "notebook::MoveCellDown",
+      "ctrl-m": "notebook::AddCodeBlock",
+      "ctrl-shift-m": "notebook::AddMarkdownBlock",
+      "ctrl-shift-r": "notebook::RestartKernel",
+      "ctrl-c": "notebook::InterruptKernel",
+    },
+  },
+  {
+    "context": "NotebookEditor && notebook_mode == command",
+    "bindings": {
+      "enter": "notebook::EnterEditMode",
+      "down": "menu::SelectNext",
+      "up": "menu::SelectPrevious",
+    },
+  },
+  {
+    "context": "NotebookEditor > Editor",
+    "bindings": {
+      "enter": "editor::Newline",
+      "shift-enter": "notebook::RunAndAdvance",
+      "ctrl-enter": "notebook::Run",
+      "ctrl-shift-enter": "notebook::RunAll",
+      "alt-up": "notebook::MoveCellUp",
+      "alt-down": "notebook::MoveCellDown",
+      "ctrl-m": "notebook::AddCodeBlock",
+      "ctrl-shift-m": "notebook::AddMarkdownBlock",
+      "ctrl-shift-r": "notebook::RestartKernel",
+      "ctrl-c": "notebook::InterruptKernel",
+      "escape": "notebook::EnterCommandMode",
     },
   },
   {

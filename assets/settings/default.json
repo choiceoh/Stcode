@@ -209,6 +209,11 @@
   // Whether to use the system provided dialogs for Open and Save As.
   // When set to false, Zed will use the built-in keyboard-first pickers.
   "use_system_path_prompts": true,
+  // Whether to use the system provided dialogs for prompts, such as confirmation
+  // prompts.
+  // When set to false, Zed will use its built-in prompts. Note that on Linux,
+  // this option is ignored and Zed will always use the built-in prompts.
+  "use_system_prompts": true,
   // Whether the cursor blinks in the editor.
   "cursor_blink": true,
   // Cursor shape for the default editor.
@@ -437,6 +442,13 @@
   "whitespace_map": {
     "space": "•",
     "tab": "→",
+  },
+  // Settings related to calls in Zed
+  "calls": {
+    // Join calls with the microphone live by default
+    "mute_on_join": false,
+    // Share your project when you are the first to join a channel
+    "share_on_join": false,
   },
   // Toolbar related settings
   "toolbar": {
@@ -1160,12 +1172,12 @@
     "play_sound_when_agent_done": "never",
     // Whether to have edit cards in the agent panel expanded, showing a preview of the full diff.
     //
-    // Default: false
-    "expand_edit_card": false,
+    // Default: true
+    "expand_edit_card": true,
     // Whether to have terminal cards in the agent panel expanded, showing the whole command output.
     //
-    // Default: false
-    "expand_terminal_card": false,
+    // Default: true
+    "expand_terminal_card": true,
     // How thinking blocks should be displayed by default in the agent panel.
     //
     // Default: auto
@@ -1666,6 +1678,16 @@
       "prompt_format": "infer",
       "max_output_tokens": 64,
     },
+  },
+  // Settings specific to journaling
+  "journal": {
+    // The path of the directory where journal entries are stored
+    "path": "~",
+    // What format to display the hours in
+    // May take 2 values:
+    // 1. hour12
+    // 2. hour24
+    "hour_format": "hour12",
   },
   // Status bar-related settings.
   "status_bar": {
@@ -2426,6 +2448,21 @@
     //    "python": "conda-base"
     //    "typescript": "deno"
     // }
+  },
+  // REPL settings.
+  "repl": {
+    // Maximum number of columns to keep in REPL's scrollback buffer.
+    // Clamped with [20, 512] range.
+    "max_columns": 128,
+    // Maximum number of lines to keep in REPL's scrollback buffer.
+    // Clamped with [4, 256] range.
+    "max_lines": 32,
+    // Maximum number of lines of output to display before scrolling.
+    // Set to 0 to disable output height limits.
+    "output_max_height_lines": 0,
+    // Maximum number of columns of output to display before scaling images.
+    // Set to 0 to disable output width limits.
+    "output_max_width_columns": 0,
   },
   // The server to connect to. If the environment variable
   // ZED_SERVER_URL is set, it will override this setting.

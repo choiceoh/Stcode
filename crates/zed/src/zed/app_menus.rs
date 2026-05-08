@@ -188,7 +188,6 @@ fn zed_app_menu(app_name: &'static str) -> Menu {
                 MenuItem::action("Open Project Settings File", super::OpenProjectSettingsFile),
                 MenuItem::action("Open Default Settings", super::OpenDefaultSettings),
                 MenuItem::separator(),
-                MenuItem::action("Open Keymap", zed_actions::OpenKeymap),
                 MenuItem::action("Open Keymap File", zed_actions::OpenKeymapFile),
                 MenuItem::action("Open Default Key Bindings", zed_actions::OpenDefaultKeymap),
                 MenuItem::separator(),
@@ -240,7 +239,6 @@ fn stcode_app_menu(app_name: &'static str) -> Menu {
                 MenuItem::separator(),
                 MenuItem::action("Open Default Settings", super::OpenDefaultSettings),
                 MenuItem::separator(),
-                MenuItem::action("Open Keymap", zed_actions::OpenKeymap),
                 MenuItem::action("Open Default Key Bindings", zed_actions::OpenDefaultKeymap),
                 MenuItem::separator(),
                 MenuItem::action(
@@ -496,7 +494,6 @@ fn zed_go_menu() -> Menu {
                 "Go to Symbol in Editor...",
                 zed_actions::outline::ToggleOutline,
             ),
-            MenuItem::action("Go to Line/Column...", editor::actions::ToggleGoToLine),
             MenuItem::separator(),
             MenuItem::action("Go to Definition", editor::actions::GoToDefinition),
             MenuItem::action("Go to Declaration", editor::actions::GoToDeclaration),

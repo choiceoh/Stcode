@@ -27,7 +27,7 @@ use ui::{
     prelude::*,
 };
 use util::truncate_and_trailoff;
-use workspace::{StatusItemView, Workspace, item::ItemHandle};
+use workspace::{StatusItemView, Workspace, item::ItemHandle, status_bar_icon_size};
 
 const GIT_OPERATION_DELAY: Duration = Duration::from_millis(0);
 
@@ -678,7 +678,7 @@ impl ActivityIndicator {
             };
 
             return Some(Content {
-                icon: Some(Icon::new(icon).size(IconSize::Small).map(|this| {
+                icon: Some(Icon::new(icon).size(status_bar_icon_size(cx)).map(|this| {
                     if rotate {
                         this.with_rotate_animation(3).into_any_element()
                     } else {

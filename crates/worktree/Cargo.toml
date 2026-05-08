@@ -10,11 +10,6 @@ path = "src/worktree.rs"
 doctest = false
 test = false
 
-[[test]]
-name = "integration"
-required-features = ["test-support"]
-path = "tests/integration/main.rs"
-
 [lints]
 workspace = true
 

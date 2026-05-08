@@ -1,7 +1,10 @@
 use crate::focus_follows_mouse::FocusFollowsMouse as _;
 use crate::persistence::model::DockData;
 use crate::{DraggedDock, Event, FocusFollowsMouse, ModalLayer, Pane, WorkspaceSettings};
-use crate::{Workspace, status_bar::StatusItemView};
+use crate::{
+    Workspace,
+    status_bar::{StatusItemView, status_bar_icon_size},
+};
 use anyhow::Context as _;
 use client::proto;
 use db::kvp::KeyValueStore;
@@ -1183,6 +1186,7 @@ impl PanelButtons {
 
 impl Render for PanelButtons {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let status_bar_icon_size = status_bar_icon_size(cx);
         let dock = self.dock.read(cx);
         let active_index = dock.active_panel_index;
         let is_open = dock.is_open;
@@ -1321,7 +1325,7 @@ impl Render for PanelButtons {
                             // Include active state in element ID to invalidate the cached
                             // tooltip when panel state changes (e.g., via keyboard shortcut)
                             let button = IconButton::new((name, is_active_button as u64), icon)
-                                .icon_size(IconSize::Small)
+                                .icon_size(status_bar_icon_size)
                                 .toggle_state(is_active_button)
                                 .on_click({
                                     let action = action.boxed_clone();

@@ -18,7 +18,9 @@ use settings::Settings;
 use std::{ops::Range, sync::Arc};
 use ui::{ButtonLike, Divider, Tooltip, prelude::*};
 use util::{ResultExt as _, debug_panic, maybe};
-use workspace::{StatusItemView, Workspace, item::ItemHandle};
+use workspace::{
+    StatusItemView, Workspace, item::ItemHandle, status_bar_compact_icon_size, status_bar_icon_size,
+};
 use zed_actions::agent::{
     ConflictContent, ResolveConflictedFilesWithAgent, ResolveConflictsWithAgent,
 };
@@ -623,6 +625,8 @@ impl Render for MergeConflictIndicator {
 
         let border_color = cx.theme().colors().text_accent.opacity(0.2);
 
+        let icon_size = status_bar_icon_size(cx);
+
         h_flex()
             .h(rems_from_px(22.))
             .rounded_sm()
@@ -636,7 +640,7 @@ impl Render for MergeConflictIndicator {
                             .gap_1()
                             .child(
                                 Icon::new(IconName::GitMergeConflict)
-                                    .size(IconSize::Small)
+                                    .size(icon_size)
                                     .color(Color::Muted),
                             )
                             .child(Label::new(message).size(LabelSize::Small)),
@@ -656,7 +660,7 @@ impl Render for MergeConflictIndicator {
             .child(
                 div().border_l_1().border_color(border_color).child(
                     IconButton::new("dismiss-merge-conflicts", IconName::Close)
-                        .icon_size(IconSize::XSmall)
+                        .icon_size(status_bar_compact_icon_size(cx))
                         .on_click(cx.listener(Self::dismiss)),
                 ),
             )

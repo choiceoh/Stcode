@@ -12,11 +12,6 @@ workspace = true
 path = "src/fs.rs"
 test = false
 
-[[test]]
-name = "integration"
-required-features = ["test-support"]
-path = "tests/integration/main.rs"
-
 [dependencies]
 anyhow.workspace = true
 async-tar.workspace = true

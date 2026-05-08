@@ -61,7 +61,10 @@ use util::ResultExt;
 use uuid::Uuid;
 use workspace::{
     AppState, MultiWorkspace, SerializedWorkspaceLocation, SessionWorkspace, Toast,
-    WorkspaceSettings, WorkspaceStore, notifications::NotificationId, restore_multiworkspace,
+    WorkspaceSettings, WorkspaceStore,
+    dock::{Panel as _, PanelSizeState},
+    notifications::NotificationId,
+    restore_multiworkspace,
 };
 
 #[cfg(feature = "mimalloc")]
@@ -69,6 +72,9 @@ use workspace::{
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 pub(crate) use workspace::AppLaunchMode as LaunchMode;
+
+const STCODE_AGENT_PANEL_CONSOLE_WIDTH: gpui::Pixels = gpui::px(1120.);
+const STCODE_AGENT_PANEL_CONSOLE_FLEX: f32 = 2.4;
 
 fn files_not_created_on_launch(errors: HashMap<io::ErrorKind, Vec<&Path>>) {
     let message = "Zed failed to launch";
@@ -212,6 +218,17 @@ fn apply_stcode_layout_to_workspace(
         // workspace layout, which would let a Stcode run rewrite Zed's restored panel state.
         workspace.open_panel::<AgentPanel>(window, cx);
         if let Some(panel) = workspace.panel::<AgentPanel>(cx) {
+            let dock = workspace.dock_at_position(panel.read(cx).position(window, cx));
+            dock.update(cx, |dock, cx| {
+                dock.set_panel_size_state(
+                    &panel,
+                    PanelSizeState {
+                        size: Some(STCODE_AGENT_PANEL_CONSOLE_WIDTH),
+                        flex: Some(STCODE_AGENT_PANEL_CONSOLE_FLEX),
+                    },
+                    cx,
+                );
+            });
             panel.read(cx).focus_handle(cx).focus(window, cx);
         }
     });
@@ -235,6 +252,30 @@ pub(crate) fn run(launch_mode: LaunchMode) {
     // `zed --crash-handler` Makes zed operate in minidump crash handler mode
     if let Some(socket) = &args.crash_handler {
         crashes::crash_server(socket.as_path());
+        return;
+    }
+
+    #[cfg(target_os = "windows")]
+    if args.record_etw_trace {
+        let zed_pid = args
+            .etw_zed_pid
+            .and_then(|pid| if pid >= 0 { Some(pid as u32) } else { None });
+        let Some(output_path) = args.etw_output else {
+            eprintln!("--etw-output is required for --record-etw-trace");
+            process::exit(1);
+        };
+
+        let Some(etw_socket) = args.etw_socket else {
+            eprintln!("--etw-socket is required for --record-etw-trace");
+            process::exit(1);
+        };
+
+        if let Err(error) =
+            etw_tracing::record_etw_trace(zed_pid, &output_path, etw_socket.as_str())
+        {
+            eprintln!("ETW trace recording failed: {error:#}");
+            process::exit(1);
+        }
         return;
     }
 
@@ -674,6 +715,8 @@ pub(crate) fn run(launch_mode: LaunchMode) {
         zed::telemetry_log::init(cx);
         zed::remote_debug::init(cx);
         edit_prediction_ui::init(cx);
+        web_search::init(cx);
+        web_search_providers::init(app_state.client.clone(), app_state.user_store.clone(), cx);
         snippet_provider::init(cx);
         edit_prediction_registry::init(app_state.client.clone(), app_state.user_store.clone(), cx);
         let prompt_builder = PromptBuilder::load(app_state.fs.clone(), stdout_is_a_pty(), cx);
@@ -701,13 +744,14 @@ pub(crate) fn run(launch_mode: LaunchMode) {
 
         audio::init(cx);
         workspace::init(app_state.clone(), cx);
+        ui_prompt::init(cx);
 
-        go_to_line::init(cx);
         file_finder::init(cx);
         outline::init(cx);
         project_symbols::init(cx);
         project_panel::init(cx);
         outline_panel::init(cx);
+        tasks_ui::init(cx);
         search::init(cx);
         cx.set_global(workspace::PaneSearchBarCallbacks {
             setup_search_bar: |languages, toolbar, window, cx| {
@@ -719,17 +763,25 @@ pub(crate) fn run(launch_mode: LaunchMode) {
             wrap_div_with_search_actions: search::buffer_search::register_pane_search_actions,
         });
         terminal_view::init(cx);
+        encoding_selector::init(cx);
+        language_selector::init(cx);
+        line_ending_selector::init(cx);
+        toolchain_selector::init(cx);
         theme_selector::init(cx);
+        settings_profile_selector::init(cx);
         language_tools::init(cx);
         notifications::init(app_state.client.clone(), app_state.user_store.clone(), cx);
         git_ui::init(cx);
         markdown_preview::init(cx);
+        csv_preview::init(cx);
+        svg_preview::init(cx);
         onboarding::init(cx);
         settings_ui::init(cx);
-        keymap_editor::init(cx);
         extensions_ui::init(cx);
         edit_prediction::init(cx);
         json_schema_store::init(cx);
+        #[cfg(target_os = "windows")]
+        etw_tracing::init(cx);
 
         cx.observe_global::<SettingsStore>({
             let http = app_state.client.http_client();
@@ -1599,6 +1651,26 @@ struct Args {
     /// Output current environment variables as JSON to stdout
     #[arg(long, hide = true)]
     printenv: bool,
+
+    /// Record an ETW trace. Must be run as administrator.
+    #[cfg(target_os = "windows")]
+    #[arg(long, hide = true)]
+    record_etw_trace: bool,
+
+    /// The PID of the Zed process to trace for heap analysis.
+    #[cfg(target_os = "windows")]
+    #[arg(long, hide = true, allow_hyphen_values = true)]
+    etw_zed_pid: Option<i64>,
+
+    /// Output path for the ETW trace file.
+    #[cfg(target_os = "windows")]
+    #[arg(long, hide = true)]
+    etw_output: Option<PathBuf>,
+
+    /// Unix socket path for IPC with the parent Zed process.
+    #[cfg(target_os = "windows")]
+    #[arg(long, hide = true)]
+    etw_socket: Option<String>,
 }
 
 #[derive(Clone, Debug)]

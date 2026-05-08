@@ -67,9 +67,10 @@ use util::{ResultExt, size::format_file_size, time::duration_alt_display};
 use util::{debug_panic, defer};
 use workspace::PathList;
 use workspace::{
-    CollaboratorId, MultiWorkspace, NewTerminal, Toast, Workspace, notifications::NotificationId,
+    AppLaunchMode, CollaboratorId, MultiWorkspace, NewTerminal, Toast, Workspace,
+    notifications::NotificationId,
 };
-use zed_actions::agent::{Chat, ToggleModelSelector};
+use zed_actions::agent::{Chat, OpenSettings, ToggleModelSelector};
 use zed_actions::assistant::OpenRulesLibrary;
 
 use super::config_options::ConfigOptionsView;
@@ -1091,11 +1092,8 @@ impl ConversationView {
                 })
             });
 
-        let agent_display_name = self
-            .agent_server_store
-            .read(cx)
-            .agent_display_name(&agent_id.clone())
-            .unwrap_or_else(|| agent_id.0.clone());
+        let agent_display_name =
+            agent_display_name_for_app(&self.agent_server_store.read(cx), &agent_id, cx);
 
         let agent_icon = self.agent.logo();
         let agent_icon_from_external_svg = self
@@ -1575,11 +1573,11 @@ impl ConversationView {
                 if let Some(thread_view) = self.thread_view(&session_id) {
                     let has_commands = !available_commands.is_empty();
 
-                    let agent_display_name = self
-                        .agent_server_store
-                        .read(cx)
-                        .agent_display_name(&self.agent.agent_id())
-                        .unwrap_or_else(|| self.agent.agent_id().0.to_string().into());
+                    let agent_display_name = agent_display_name_for_app(
+                        &self.agent_server_store.read(cx),
+                        &self.agent.agent_id(),
+                        cx,
+                    );
 
                     let new_placeholder =
                         placeholder_text(agent_display_name.as_ref(), has_commands);
@@ -1958,11 +1956,11 @@ impl ConversationView {
     ) -> impl IntoElement {
         let auth_methods = connection.auth_methods();
 
-        let agent_display_name = self
-            .agent_server_store
-            .read(cx)
-            .agent_display_name(&self.agent.agent_id())
-            .unwrap_or_else(|| self.agent.agent_id().0);
+        let agent_display_name = agent_display_name_for_app(
+            &self.agent_server_store.read(cx),
+            &self.agent.agent_id(),
+            cx,
+        );
 
         let show_fallback_description = auth_methods.len() > 1
             && configuration_view.is_none()
@@ -2711,7 +2709,7 @@ fn loading_contents_spinner(size: IconSize) -> AnyElement {
 }
 
 fn placeholder_text(agent_name: &str, has_commands: bool) -> String {
-    if agent_name == agent::ZED_AGENT_ID.as_ref() {
+    if agent_name == agent::ZED_AGENT_ID.as_ref() || agent_name == STCODE_AGENT_LABEL {
         format!("Message the {} — @ to include context", agent_name)
     } else if has_commands {
         format!(
@@ -2720,6 +2718,22 @@ fn placeholder_text(agent_name: &str, has_commands: bool) -> String {
         )
     } else {
         format!("Message {} — @ to include context", agent_name)
+    }
+}
+
+const STCODE_AGENT_LABEL: &str = "Stcode Agent";
+
+fn agent_display_name_for_app(
+    agent_server_store: &AgentServerStore,
+    agent_id: &AgentId,
+    cx: &App,
+) -> SharedString {
+    if agent_id.as_ref() == agent::ZED_AGENT_ID.as_ref() && AppLaunchMode::is_stcode(cx) {
+        STCODE_AGENT_LABEL.into()
+    } else {
+        agent_server_store
+            .agent_display_name(agent_id)
+            .unwrap_or_else(|| agent_id.0.clone())
     }
 }
 
@@ -2871,6 +2885,14 @@ pub(crate) mod tests {
     use crate::thread_metadata_store::ThreadMetadataStore;
 
     use super::*;
+
+    #[test]
+    fn test_stcode_agent_placeholder_uses_native_agent_wording() {
+        assert_eq!(
+            placeholder_text("Stcode Agent", false),
+            "Message the Stcode Agent — @ to include context"
+        );
+    }
 
     #[gpui::test]
     async fn test_drop(cx: &mut TestAppContext) {

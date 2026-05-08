@@ -12,8 +12,12 @@ use release_channel::{AppCommitSha, ReleaseChannel};
 use semver::Version;
 use serde::{Deserialize, Serialize};
 use settings::{RegisterSetting, Settings, SettingsStore};
+use sha2::{Digest, Sha256};
 use smol::fs::File;
-use smol::{fs, io::AsyncReadExt};
+use smol::{
+    fs,
+    io::{AsyncReadExt, AsyncWriteExt},
+};
 use std::mem;
 use std::{
     env::{
@@ -27,9 +31,11 @@ use std::{
     time::{Duration, SystemTime},
 };
 use util::command::new_command;
-use workspace::Workspace;
+use workspace::{AppLaunchMode, Workspace};
 
 const SHOULD_SHOW_UPDATE_NOTIFICATION_KEY: &str = "auto-updater-should-show-updated-notification";
+const DEFAULT_STCODE_UPDATE_REPOSITORY: &str = "choiceoh/Stcode";
+const STCODE_UPDATE_REPOSITORY_ENV: &str = "STCODE_UPDATE_REPO";
 
 #[derive(Debug)]
 struct MissingDependencyError(String);
@@ -170,6 +176,10 @@ pub struct AutoUpdater {
 pub struct ReleaseAsset {
     pub version: String,
     pub url: String,
+    #[serde(default)]
+    pub digest: Option<String>,
+    #[serde(default)]
+    pub checksum_url: Option<String>,
 }
 
 struct MacOsUnmounter<'a> {
@@ -302,6 +312,13 @@ pub fn check(_: &Check, window: &mut Window, cx: &mut App) {
 }
 
 pub fn release_notes_url(cx: &mut App) -> Option<String> {
+    if AppLaunchMode::is_stcode(cx) {
+        return Some(format!(
+            "https://github.com/{}/releases",
+            stcode_update_repository()
+        ));
+    }
+
     let release_channel = ReleaseChannel::try_global(cx)?;
     let url = match release_channel {
         ReleaseChannel::Stable | ReleaseChannel::Preview => {
@@ -589,6 +606,11 @@ impl AutoUpdater {
         cx: &mut AsyncApp,
     ) -> Result<ReleaseAsset> {
         let client = this.read_with(cx, |this, _| this.client.clone());
+        let is_stcode_app_update = asset == "zed" && cx.update(|cx| AppLaunchMode::is_stcode(cx));
+
+        if is_stcode_app_update {
+            return Self::get_stcode_release_asset(client, release_channel, os, arch).await;
+        }
 
         let (system_id, metrics_id, is_staff) = if client.telemetry().metrics_enabled() {
             (
@@ -640,6 +662,31 @@ impl AutoUpdater {
                 String::from_utf8_lossy(&body),
             )
         })
+    }
+
+    async fn get_stcode_release_asset(
+        client: Arc<Client>,
+        release_channel: ReleaseChannel,
+        os: &str,
+        arch: &str,
+    ) -> Result<ReleaseAsset> {
+        let repository = stcode_update_repository();
+        let include_prerelease = matches!(
+            release_channel,
+            ReleaseChannel::Nightly | ReleaseChannel::Preview
+        );
+        let http_client = client.http_client();
+        let github_http_client: Arc<dyn HttpClient> = http_client.clone();
+        let release = http_client::github::latest_github_release(
+            &repository,
+            true,
+            include_prerelease,
+            github_http_client,
+        )
+        .await
+        .with_context(|| format!("failed to fetch Stcode GitHub release from {repository}"))?;
+
+        stcode_release_asset_from_github_release(&release, os, arch)
     }
 
     async fn update(this: Entity<Self>, cx: &mut AsyncApp) -> Result<()> {
@@ -695,7 +742,7 @@ impl AutoUpdater {
         let installer_dir = InstallerDir::new()
             .await
             .context("Failed to create installer dir")?;
-        let target_path = Self::target_path(&installer_dir).await?;
+        let target_path = Self::target_path(&installer_dir, &fetched_release_data).await?;
         download_release(&target_path, fetched_release_data, client)
             .await
             .with_context(|| format!("Failed to download update to {}", target_path.display()))?;
@@ -796,11 +843,18 @@ impl AutoUpdater {
         Ok(())
     }
 
-    async fn target_path(installer_dir: &InstallerDir) -> Result<PathBuf> {
+    async fn target_path(installer_dir: &InstallerDir, release: &ReleaseAsset) -> Result<PathBuf> {
         let filename = match OS {
-            "macos" => anyhow::Ok("Zed.dmg"),
-            "linux" => Ok("zed.tar.gz"),
-            "windows" => Ok("Zed.exe"),
+            "macos" => {
+                if stcode_macos_release_asset_is_app_zip_name(release_asset_file_name(&release.url))
+                {
+                    anyhow::Ok("update.app.zip")
+                } else {
+                    anyhow::Ok("update.dmg")
+                }
+            }
+            "linux" => Ok("update.tar.gz"),
+            "windows" => Ok("update.exe"),
             unsupported_os => anyhow::bail!("not supported: {unsupported_os}"),
         }?;
 
@@ -865,6 +919,191 @@ impl AutoUpdater {
             Ok(kvp.read_kvp(SHOULD_SHOW_UPDATE_NOTIFICATION_KEY)?.is_some())
         })
     }
+}
+
+fn stcode_update_repository() -> String {
+    env::var(STCODE_UPDATE_REPOSITORY_ENV)
+        .ok()
+        .filter(|repository| !repository.trim().is_empty())
+        .unwrap_or_else(|| DEFAULT_STCODE_UPDATE_REPOSITORY.to_string())
+}
+
+fn stcode_release_asset_from_github_release(
+    release: &http_client::github::GithubRelease,
+    os: &str,
+    arch: &str,
+) -> Result<ReleaseAsset> {
+    let version = stcode_semver_from_release_tag(&release.tag_name).with_context(|| {
+        format!(
+            "Stcode release tag {} is not a semantic version",
+            release.tag_name
+        )
+    })?;
+    let asset = release
+        .assets
+        .iter()
+        .filter_map(|asset| {
+            stcode_update_asset_score(&asset.name, os, arch).map(|score| (score, asset))
+        })
+        .max_by_key(|(score, asset)| (*score, asset.name.as_str()))
+        .map(|(_, asset)| asset)
+        .with_context(|| {
+            format!(
+                "Stcode release {} does not contain a supported {os}-{arch} app asset",
+                release.tag_name
+            )
+        })?;
+    let checksum_asset = stcode_checksum_asset_for(release, &asset.name);
+
+    Ok(ReleaseAsset {
+        version,
+        url: asset.browser_download_url.clone(),
+        digest: asset.digest.as_deref().and_then(extract_sha_256),
+        checksum_url: checksum_asset.map(|asset| asset.browser_download_url.clone()),
+    })
+}
+
+fn stcode_checksum_asset_for<'a>(
+    release: &'a http_client::github::GithubRelease,
+    asset_name: &str,
+) -> Option<&'a http_client::github::GithubReleaseAsset> {
+    let checksum_name = format!("{}.sha256", asset_name.to_ascii_lowercase());
+    release
+        .assets
+        .iter()
+        .find(|asset| asset.name.to_ascii_lowercase() == checksum_name)
+}
+
+fn stcode_semver_from_release_tag(tag_name: &str) -> Option<String> {
+    let tag_name = tag_name.trim();
+    for candidate in [
+        tag_name,
+        tag_name.strip_prefix('v').unwrap_or(tag_name),
+        tag_name.strip_prefix("stcode-v").unwrap_or(tag_name),
+        tag_name.strip_prefix("Stcode-v").unwrap_or(tag_name),
+    ] {
+        if candidate.parse::<Version>().is_ok() {
+            return Some(candidate.to_string());
+        }
+    }
+
+    None
+}
+
+fn stcode_update_asset_score(name: &str, os: &str, arch: &str) -> Option<u16> {
+    let name = name.to_ascii_lowercase();
+    if name.ends_with(".sha256")
+        || name.ends_with(".sig")
+        || name.ends_with(".asc")
+        || name.contains("checksum")
+    {
+        return None;
+    }
+
+    if !stcode_update_asset_extension_matches(&name, os) {
+        return None;
+    }
+
+    if stcode_update_asset_has_other_arch(&name, arch) {
+        return None;
+    }
+
+    let mut score = 1;
+    if name.contains("stcode") {
+        score += 8;
+    }
+    if stcode_update_asset_platform_matches(&name, os) {
+        score += 4;
+    }
+    if stcode_update_asset_arch_matches(&name, arch) {
+        score += 4;
+    }
+    if name.contains("universal") {
+        score += 2;
+    }
+    if name.ends_with(".dmg") {
+        score += 2;
+    }
+
+    Some(score)
+}
+
+fn stcode_update_asset_extension_matches(name: &str, os: &str) -> bool {
+    match os {
+        "macos" => name.ends_with(".dmg") || stcode_macos_release_asset_is_app_zip_name(name),
+        "linux" => name.ends_with(".tar.gz") || name.ends_with(".tgz"),
+        "windows" => name.ends_with(".exe"),
+        _ => false,
+    }
+}
+
+fn stcode_macos_release_asset_is_app_zip_name(name: &str) -> bool {
+    name.to_ascii_lowercase().ends_with(".app.zip")
+}
+
+fn release_asset_file_name(url: &str) -> &str {
+    url.split(['?', '#'])
+        .next()
+        .unwrap_or(url)
+        .rsplit('/')
+        .next()
+        .unwrap_or(url)
+}
+
+fn stcode_update_asset_platform_matches(name: &str, os: &str) -> bool {
+    match os {
+        "macos" => {
+            name.contains("macos")
+                || name.contains("darwin")
+                || name.contains("apple")
+                || name.contains("mac")
+        }
+        "linux" => name.contains("linux"),
+        "windows" => name.contains("windows") || name.contains("win32") || name.contains("win64"),
+        _ => false,
+    }
+}
+
+fn stcode_update_asset_arch_matches(name: &str, arch: &str) -> bool {
+    if name.contains("universal") {
+        return true;
+    }
+
+    match arch {
+        "aarch64" => name.contains("aarch64") || name.contains("arm64") || name.contains("apple"),
+        "x86_64" => {
+            name.contains("x86_64")
+                || name.contains("x64")
+                || name.contains("amd64")
+                || name.contains("intel")
+        }
+        _ => false,
+    }
+}
+
+fn stcode_update_asset_has_other_arch(name: &str, arch: &str) -> bool {
+    if name.contains("universal") {
+        return false;
+    }
+
+    match arch {
+        "aarch64" => {
+            name.contains("x86_64")
+                || name.contains("x64")
+                || name.contains("amd64")
+                || name.contains("intel")
+        }
+        "x86_64" => name.contains("aarch64") || name.contains("arm64"),
+        _ => false,
+    }
+}
+
+fn extract_sha_256(text: &str) -> Option<String> {
+    text.split(|character: char| !character.is_ascii_hexdigit())
+        .find(|token| {
+            token.len() == 64 && token.chars().all(|character| character.is_ascii_hexdigit())
+        })
+        .map(|token| token.to_ascii_lowercase())
 }
 
 async fn download_remote_server_binary(
@@ -949,6 +1188,7 @@ async fn download_release(
     release: ReleaseAsset,
     client: Arc<HttpClientWithUrl>,
 ) -> Result<()> {
+    let expected_sha_256 = release_expected_sha_256(&release, client.clone()).await?;
     let mut target_file = File::create(&target_path).await?;
 
     let mut response = client.get(&release.url, Default::default(), true).await?;
@@ -957,10 +1197,79 @@ async fn download_release(
         "failed to download update: {:?}",
         response.status()
     );
-    smol::io::copy(response.body_mut(), &mut target_file).await?;
+    let actual_sha_256 = copy_with_sha_256(response.body_mut(), &mut target_file).await?;
+    if let Some(expected_sha_256) = expected_sha_256 {
+        if actual_sha_256 != expected_sha_256 {
+            if let Err(error) = fs::remove_file(target_path).await {
+                log::warn!(
+                    "failed to remove update with SHA-256 mismatch. path:{:?}, error:{:#}",
+                    target_path,
+                    error
+                );
+            }
+
+            anyhow::bail!(
+                "downloaded update SHA-256 mismatch for {}. Expected: {}, Got: {}",
+                release.url,
+                expected_sha_256,
+                actual_sha_256
+            );
+        }
+    }
     log::info!("downloaded update. path:{:?}", target_path);
 
     Ok(())
+}
+
+async fn release_expected_sha_256(
+    release: &ReleaseAsset,
+    client: Arc<HttpClientWithUrl>,
+) -> Result<Option<String>> {
+    if let Some(digest) = release.digest.as_deref().and_then(extract_sha_256) {
+        return Ok(Some(digest));
+    }
+
+    let Some(checksum_url) = release.checksum_url.as_deref() else {
+        return Ok(None);
+    };
+
+    let mut response = client.get(checksum_url, Default::default(), true).await?;
+    anyhow::ensure!(
+        response.status().is_success(),
+        "failed to download update checksum: {:?}",
+        response.status()
+    );
+
+    let mut checksum_body = String::new();
+    response
+        .body_mut()
+        .read_to_string(&mut checksum_body)
+        .await?;
+    extract_sha_256(&checksum_body)
+        .with_context(|| format!("checksum file {checksum_url} did not contain a SHA-256 digest"))
+        .map(Some)
+}
+
+async fn copy_with_sha_256(
+    reader: &mut (impl smol::io::AsyncRead + Unpin),
+    writer: &mut (impl smol::io::AsyncWrite + Unpin),
+) -> Result<String> {
+    let mut hasher = Sha256::new();
+    let mut buffer = [0; 32 * 1024];
+
+    loop {
+        let bytes_read = reader.read(&mut buffer).await?;
+        if bytes_read == 0 {
+            break;
+        }
+
+        let chunk = &buffer[..bytes_read];
+        hasher.update(chunk);
+        writer.write_all(chunk).await?;
+    }
+    writer.flush().await?;
+
+    Ok(format!("{:x}", hasher.finalize()))
 }
 
 async fn install_release_linux(
@@ -1034,7 +1343,7 @@ async fn install_release_linux(
 
 async fn install_release_macos(
     temp_dir: &InstallerDir,
-    downloaded_dmg: &Path,
+    downloaded_package: &Path,
     cx: &AsyncApp,
 ) -> Result<Option<PathBuf>> {
     let running_app_path = cx.update(|cx| cx.app_path())?;
@@ -1042,13 +1351,43 @@ async fn install_release_macos(
         .file_name()
         .with_context(|| format!("invalid running app path {running_app_path:?}"))?;
 
-    let mount_path = temp_dir.path().join("Zed");
-    let mut mounted_app_path: OsString = mount_path.join(running_app_filename).into();
+    if stcode_macos_release_asset_is_app_zip_name(
+        downloaded_package
+            .file_name()
+            .and_then(|filename| filename.to_str())
+            .unwrap_or_default(),
+    ) {
+        let extracted_path = temp_dir.path().join("app-zip");
+        fs::create_dir_all(&extracted_path)
+            .await
+            .context("failed to create directory into which to extract update")?;
 
-    mounted_app_path.push("/");
+        let mut cmd = new_command("ditto");
+        cmd.args(["-x", "-k"])
+            .arg(downloaded_package)
+            .arg(&extracted_path);
+        let output = cmd
+            .output()
+            .await
+            .with_context(|| "failed to extract: {cmd}")?;
+
+        anyhow::ensure!(
+            output.status.success(),
+            "failed to extract {:?} to {:?}: {:?}",
+            downloaded_package,
+            extracted_path,
+            String::from_utf8_lossy(&output.stderr)
+        );
+
+        let extracted_app_path =
+            find_extracted_app_bundle(&extracted_path, running_app_filename).await?;
+        copy_macos_app_bundle(&extracted_app_path, &running_app_path).await?;
+        return Ok(None);
+    }
+
     let mut cmd = new_command("hdiutil");
     cmd.args(["attach", "-nobrowse"])
-        .arg(&downloaded_dmg)
+        .arg(&downloaded_package)
         .arg("-mountroot")
         .arg(temp_dir.path());
     let output = cmd
@@ -1062,16 +1401,28 @@ async fn install_release_macos(
         String::from_utf8_lossy(&output.stderr)
     );
 
-    // Create an MacOsUnmounter that will be dropped (and thus unmount the disk) when this function exits
+    let (mount_path, mounted_app_path) =
+        find_mounted_app_bundle(temp_dir.path(), running_app_filename).await?;
+
+    // Create a MacOsUnmounter that will be dropped (and thus unmount the disk) when this function exits.
     let _unmounter = MacOsUnmounter {
         mount_path: mount_path.clone(),
         background_executor: cx.background_executor(),
     };
 
+    copy_macos_app_bundle(&mounted_app_path, &running_app_path).await?;
+
+    Ok(None)
+}
+
+async fn copy_macos_app_bundle(
+    source_app_path: impl AsRef<OsStr>,
+    running_app_path: &Path,
+) -> Result<()> {
     let mut cmd = new_command("rsync");
     cmd.args(["-av", "--delete", "--exclude", "Icon?"])
-        .arg(&mounted_app_path)
-        .arg(&running_app_path);
+        .arg(source_app_path.as_ref())
+        .arg(running_app_path);
     let output = cmd
         .output()
         .await
@@ -1083,7 +1434,59 @@ async fn install_release_macos(
         String::from_utf8_lossy(&output.stderr)
     );
 
-    Ok(None)
+    Ok(())
+}
+
+async fn find_extracted_app_bundle(
+    extract_root: &Path,
+    running_app_filename: &OsStr,
+) -> Result<OsString> {
+    let direct_app_path = extract_root.join(running_app_filename);
+    if fs::metadata(&direct_app_path).await.is_ok() {
+        let mut direct_app_path: OsString = direct_app_path.into();
+        direct_app_path.push("/");
+        return Ok(direct_app_path);
+    }
+
+    let mut entries = fs::read_dir(extract_root).await?;
+    while let Some(entry) = entries.next().await {
+        let entry = entry?;
+        let nested_app_path = entry.path().join(running_app_filename);
+        if fs::metadata(&nested_app_path).await.is_ok() {
+            let mut nested_app_path: OsString = nested_app_path.into();
+            nested_app_path.push("/");
+            return Ok(nested_app_path);
+        }
+    }
+
+    anyhow::bail!(
+        "extracted update did not contain {:?} under {:?}",
+        running_app_filename,
+        extract_root
+    );
+}
+
+async fn find_mounted_app_bundle(
+    mount_root: &Path,
+    running_app_filename: &OsStr,
+) -> Result<(PathBuf, OsString)> {
+    let mut entries = fs::read_dir(mount_root).await?;
+    while let Some(entry) = entries.next().await {
+        let entry = entry?;
+        let mount_path = entry.path();
+        let mounted_app_path = mount_path.join(running_app_filename);
+        if fs::metadata(&mounted_app_path).await.is_ok() {
+            let mut mounted_app_path: OsString = mounted_app_path.into();
+            mounted_app_path.push("/");
+            return Ok((mount_path, mounted_app_path));
+        }
+    }
+
+    anyhow::bail!(
+        "mounted update did not contain {:?} under {:?}",
+        running_app_filename,
+        mount_root
+    );
 }
 
 async fn cleanup_windows() -> Result<()> {
@@ -1198,6 +1601,7 @@ mod tests {
         let (dmg_tx, dmg_rx) = oneshot::channel::<String>();
 
         cx.update(|cx| {
+            cx.set_global(db::AppDatabase::test_new());
             settings::init(cx);
 
             let current_version = semver::Version::new(0, 100, 0);
@@ -1382,6 +1786,275 @@ mod tests {
             newer_version.unwrap(),
             Some(VersionCheckType::Semantic(fetched_version))
         );
+    }
+
+    #[test]
+    fn test_stcode_github_release_selects_matching_macos_asset() {
+        let release = http_client::github::GithubRelease {
+            tag_name: "v1.2.3".to_string(),
+            pre_release: false,
+            tarball_url: "https://example.com/source.tar.gz".to_string(),
+            zipball_url: "https://example.com/source.zip".to_string(),
+            assets: vec![
+                http_client::github::GithubReleaseAsset {
+                    name: "Stcode-x86_64.dmg".to_string(),
+                    browser_download_url: "https://example.com/intel.dmg".to_string(),
+                    digest: None,
+                },
+                http_client::github::GithubReleaseAsset {
+                    name: "Stcode-aarch64.dmg".to_string(),
+                    browser_download_url: "https://example.com/apple.dmg".to_string(),
+                    digest: None,
+                },
+            ],
+        };
+
+        let asset = stcode_release_asset_from_github_release(&release, "macos", "aarch64").unwrap();
+
+        assert_eq!(asset.version, "1.2.3");
+        assert_eq!(asset.url, "https://example.com/apple.dmg");
+    }
+
+    #[test]
+    fn test_stcode_github_release_accepts_macos_app_zip_asset() {
+        let release = http_client::github::GithubRelease {
+            tag_name: "v0.1.0".to_string(),
+            pre_release: false,
+            tarball_url: "https://example.com/source.tar.gz".to_string(),
+            zipball_url: "https://example.com/source.zip".to_string(),
+            assets: vec![http_client::github::GithubReleaseAsset {
+                name: "Stcode-v0.1.0.app.zip".to_string(),
+                browser_download_url: "https://example.com/Stcode-v0.1.0.app.zip".to_string(),
+                digest: None,
+            }],
+        };
+
+        let asset = stcode_release_asset_from_github_release(&release, "macos", "aarch64").unwrap();
+
+        assert_eq!(asset.version, "0.1.0");
+        assert_eq!(asset.url, "https://example.com/Stcode-v0.1.0.app.zip");
+    }
+
+    #[test]
+    fn test_stcode_github_release_prefers_dmg_over_app_zip_asset() {
+        let release = http_client::github::GithubRelease {
+            tag_name: "v1.2.3".to_string(),
+            pre_release: false,
+            tarball_url: "https://example.com/source.tar.gz".to_string(),
+            zipball_url: "https://example.com/source.zip".to_string(),
+            assets: vec![
+                http_client::github::GithubReleaseAsset {
+                    name: "Stcode-v1.2.3.app.zip".to_string(),
+                    browser_download_url: "https://example.com/app.zip".to_string(),
+                    digest: None,
+                },
+                http_client::github::GithubReleaseAsset {
+                    name: "Stcode-1.2.3-aarch64.dmg".to_string(),
+                    browser_download_url: "https://example.com/app.dmg".to_string(),
+                    digest: None,
+                },
+            ],
+        };
+
+        let asset = stcode_release_asset_from_github_release(&release, "macos", "aarch64").unwrap();
+
+        assert_eq!(asset.version, "1.2.3");
+        assert_eq!(asset.url, "https://example.com/app.dmg");
+    }
+
+    #[test]
+    fn test_stcode_github_release_accepts_universal_macos_asset() {
+        let release = http_client::github::GithubRelease {
+            tag_name: "stcode-v1.2.3".to_string(),
+            pre_release: false,
+            tarball_url: "https://example.com/source.tar.gz".to_string(),
+            zipball_url: "https://example.com/source.zip".to_string(),
+            assets: vec![http_client::github::GithubReleaseAsset {
+                name: "Stcode-universal.dmg".to_string(),
+                browser_download_url: "https://example.com/universal.dmg".to_string(),
+                digest: None,
+            }],
+        };
+
+        let asset = stcode_release_asset_from_github_release(&release, "macos", "x86_64").unwrap();
+
+        assert_eq!(asset.version, "1.2.3");
+        assert_eq!(asset.url, "https://example.com/universal.dmg");
+    }
+
+    #[test]
+    fn test_stcode_github_release_attaches_checksum_asset() {
+        let release = http_client::github::GithubRelease {
+            tag_name: "v1.2.3".to_string(),
+            pre_release: false,
+            tarball_url: "https://example.com/source.tar.gz".to_string(),
+            zipball_url: "https://example.com/source.zip".to_string(),
+            assets: vec![
+                http_client::github::GithubReleaseAsset {
+                    name: "Stcode-aarch64.dmg".to_string(),
+                    browser_download_url: "https://example.com/app.dmg".to_string(),
+                    digest: Some(
+                        "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+                            .to_string(),
+                    ),
+                },
+                http_client::github::GithubReleaseAsset {
+                    name: "Stcode-aarch64.dmg.sha256".to_string(),
+                    browser_download_url: "https://example.com/app.dmg.sha256".to_string(),
+                    digest: None,
+                },
+            ],
+        };
+
+        let asset = stcode_release_asset_from_github_release(&release, "macos", "aarch64").unwrap();
+
+        assert_eq!(
+            asset.digest.as_deref(),
+            Some("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
+        );
+        assert_eq!(
+            asset.checksum_url.as_deref(),
+            Some("https://example.com/app.dmg.sha256")
+        );
+    }
+
+    #[test]
+    fn test_stcode_github_release_accepts_latest_alias_asset() {
+        let release = http_client::github::GithubRelease {
+            tag_name: "v1.2.3".to_string(),
+            pre_release: false,
+            tarball_url: "https://example.com/source.tar.gz".to_string(),
+            zipball_url: "https://example.com/source.zip".to_string(),
+            assets: vec![
+                http_client::github::GithubReleaseAsset {
+                    name: "Stcode-1.2.3-aarch64.dmg".to_string(),
+                    browser_download_url: "https://example.com/versioned.dmg".to_string(),
+                    digest: None,
+                },
+                http_client::github::GithubReleaseAsset {
+                    name: "Stcode-latest-aarch64.dmg".to_string(),
+                    browser_download_url: "https://example.com/latest.dmg".to_string(),
+                    digest: None,
+                },
+                http_client::github::GithubReleaseAsset {
+                    name: "Stcode-latest-aarch64.dmg.sha256".to_string(),
+                    browser_download_url: "https://example.com/latest.dmg.sha256".to_string(),
+                    digest: None,
+                },
+            ],
+        };
+
+        let asset = stcode_release_asset_from_github_release(&release, "macos", "aarch64").unwrap();
+
+        assert_eq!(asset.version, "1.2.3");
+        assert_eq!(asset.url, "https://example.com/latest.dmg");
+        assert_eq!(
+            asset.checksum_url.as_deref(),
+            Some("https://example.com/latest.dmg.sha256")
+        );
+    }
+
+    #[test]
+    fn test_stcode_github_release_rejects_checksum_assets() {
+        let release = http_client::github::GithubRelease {
+            tag_name: "v1.2.3".to_string(),
+            pre_release: false,
+            tarball_url: "https://example.com/source.tar.gz".to_string(),
+            zipball_url: "https://example.com/source.zip".to_string(),
+            assets: vec![http_client::github::GithubReleaseAsset {
+                name: "Stcode-aarch64.dmg.sha256".to_string(),
+                browser_download_url: "https://example.com/checksum".to_string(),
+                digest: None,
+            }],
+        };
+
+        assert!(stcode_release_asset_from_github_release(&release, "macos", "aarch64").is_err());
+    }
+
+    #[gpui::test]
+    async fn test_download_release_validates_checksum(cx: &mut TestAppContext) {
+        cx.background_executor.allow_parking();
+        let expected_sha_256 = format!("{:x}", Sha256::digest(b"<fake-zed-update>"));
+        let expected_sha_256_for_handler = expected_sha_256.clone();
+        let fake_client_http = FakeHttpClient::create(move |req| {
+            let expected_sha_256 = expected_sha_256_for_handler.clone();
+            async move {
+                if req.uri().path() == "/new-download" {
+                    return Ok(Response::builder()
+                        .status(200)
+                        .body("<fake-zed-update>".into())
+                        .unwrap());
+                } else if req.uri().path() == "/new-download.sha256" {
+                    return Ok(Response::builder()
+                        .status(200)
+                        .body(format!("{expected_sha_256}  Stcode.dmg").into())
+                        .unwrap());
+                }
+
+                Ok(Response::builder().status(404).body("".into()).unwrap())
+            }
+        });
+        let tmp_dir = tempdir().unwrap();
+        let target_path = tmp_dir.path().join("Stcode.dmg");
+
+        download_release(
+            &target_path,
+            ReleaseAsset {
+                version: "1.2.3".to_string(),
+                url: "https://test.example/new-download".to_string(),
+                digest: None,
+                checksum_url: Some("https://test.example/new-download.sha256".to_string()),
+            },
+            fake_client_http,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            std::fs::read_to_string(target_path).unwrap(),
+            "<fake-zed-update>"
+        );
+    }
+
+    #[gpui::test]
+    async fn test_download_release_rejects_checksum_mismatch(cx: &mut TestAppContext) {
+        cx.background_executor.allow_parking();
+        let fake_client_http = FakeHttpClient::create(move |req| async move {
+            if req.uri().path() == "/new-download" {
+                return Ok(Response::builder()
+                    .status(200)
+                    .body("<fake-zed-update>".into())
+                    .unwrap());
+            } else if req.uri().path() == "/new-download.sha256" {
+                return Ok(Response::builder()
+                    .status(200)
+                    .body(
+                        "0000000000000000000000000000000000000000000000000000000000000000  Stcode.dmg"
+                            .into(),
+                    )
+                    .unwrap());
+            }
+
+            Ok(Response::builder().status(404).body("".into()).unwrap())
+        });
+        let tmp_dir = tempdir().unwrap();
+        let target_path = tmp_dir.path().join("Stcode.dmg");
+
+        let error = download_release(
+            &target_path,
+            ReleaseAsset {
+                version: "1.2.3".to_string(),
+                url: "https://test.example/new-download".to_string(),
+                digest: None,
+                checksum_url: Some("https://test.example/new-download.sha256".to_string()),
+            },
+            fake_client_http,
+        )
+        .await
+        .unwrap_err();
+
+        assert!(error.to_string().contains("SHA-256 mismatch"));
+        assert!(!target_path.exists());
     }
 
     #[test]

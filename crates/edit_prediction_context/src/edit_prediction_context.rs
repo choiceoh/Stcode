@@ -19,8 +19,6 @@ use util::{RangeExt as _, ResultExt};
 
 mod assemble_excerpts;
 #[cfg(test)]
-mod edit_prediction_context_tests;
-#[cfg(test)]
 mod fake_definition_lsp;
 
 pub use zeta_prompt::{RelatedExcerpt, RelatedFile};

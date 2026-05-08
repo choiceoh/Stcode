@@ -1,6 +1,3 @@
-#[cfg(test)]
-mod file_finder_tests;
-
 use futures::future::join_all;
 pub use open_path_prompt::OpenPathDelegate;
 

@@ -3,6 +3,13 @@
   {
     "use_key_equivalents": true,
     "bindings": {
+      "f4": "debugger::Start",
+      "shift-f5": "debugger::Stop",
+      "shift-cmd-f5": "debugger::RerunSession",
+      "f6": "debugger::Pause",
+      "f7": "debugger::StepOver",
+      "ctrl-f11": "debugger::StepInto",
+      "shift-f11": "debugger::StepOut",
       "home": "menu::SelectFirst",
       "shift-pageup": "menu::SelectFirst",
       "pageup": "menu::SelectFirst",
@@ -209,6 +216,14 @@
     "use_key_equivalents": true,
     "bindings": {
       "cmd-c": "markdown::Copy",
+    },
+  },
+  {
+    "context": "Editor && jupyter",
+    "use_key_equivalents": true,
+    "bindings": {
+      "ctrl-shift-enter": "repl::Run",
+      "ctrl-alt-enter": "repl::RunInPlace",
     },
   },
   {
@@ -638,7 +653,6 @@
     "use_key_equivalents": true,
     "bindings": {
       "cmd-shift-o": "outline::Toggle",
-      "ctrl-g": "go_to_line::Toggle",
       "cmd-shift-backspace": "editor::GoToPreviousChange",
       "cmd-shift-alt-backspace": "editor::GoToNextChange",
     },
@@ -707,9 +721,9 @@
       "cmd-shift-f": "pane::DeploySearch",
       "cmd-shift-h": ["pane::DeploySearch", { "replace_enabled": true }],
       "cmd-shift-t": "pane::ReopenClosedItem",
-      "cmd-k cmd-s": "zed::OpenKeymap",
       "cmd-k cmd-t": "theme_selector::Toggle",
       "cmd-k cmd-shift-t": "theme::ToggleMode",
+      "ctrl-alt-cmd-p": "settings_profile_selector::Toggle",
       "cmd-t": "project_symbols::Toggle",
       "cmd-p": "file_finder::Toggle",
       "cmd-shift-p": "command_palette::Toggle",
@@ -717,8 +731,11 @@
       "cmd-shift-e": "project_panel::ToggleFocus",
       "cmd-shift-b": "outline_panel::ToggleFocus",
       "ctrl-shift-g": "git_panel::ToggleFocus",
+      "cmd-shift-d": "debug_panel::ToggleFocus",
       "cmd-?": "agent::ToggleFocus",
       "cmd-alt-s": "workspace::SaveAll",
+      "cmd-k n": "encoding_selector::Toggle",
+      "cmd-k m": "language_selector::Toggle",
       "cmd-k cmd-m": "toolchain::AddToolchain",
       "escape": "workspace::Unfollow",
       "cmd-k cmd-left": "workspace::ActivatePaneLeft",
@@ -730,6 +747,7 @@
       "cmd-k shift-up": "workspace::SwapPaneUp",
       "cmd-k shift-down": "workspace::SwapPaneDown",
       "cmd-shift-x": "zed::Extensions",
+      "f5": "debugger::Rerun",
       "cmd-w": "workspace::CloseActiveDock",
     },
   },
@@ -738,6 +756,15 @@
     "use_key_equivalents": true,
     "bindings": {
       "cmd-n": "workspace::NewFile",
+      "cmd-shift-r": "task::Spawn",
+      // All task parameters are captured and unchanged between reruns by default.
+      // Use the `"reevaluate_context"` parameter to control this.
+      "cmd-alt-r": ["task::Rerun", { "reevaluate_context": false }],
+      "ctrl-alt-shift-r": ["task::Spawn", { "reveal_target": "center" }],
+      // also possible to spawn tasks by name:
+      // "foo-bar": ["task::Spawn", { "task_name": "MyTask", "reveal_target": "dock" }]
+      // or by tag:
+      // "foo-bar": ["task::Spawn", { "task_tag": "MyTag" }],
     },
   },
   {
@@ -768,6 +795,21 @@
     "bindings": {
       "ctrl-tab": "agents_sidebar::ToggleThreadSwitcher",
       "ctrl-shift-tab": ["agents_sidebar::ToggleThreadSwitcher", { "select_last": true }],
+    },
+  },
+  {
+    "context": "Workspace && debugger_running",
+    "use_key_equivalents": true,
+    "bindings": {
+      "f5": "zed::NoAction",
+      "f11": "debugger::StepInto",
+    },
+  },
+  {
+    "context": "Workspace && debugger_stopped",
+    "use_key_equivalents": true,
+    "bindings": {
+      "f5": "debugger::Continue",
     },
   },
   // Bindings from Sublime Text
@@ -879,6 +921,8 @@
     "use_key_equivalents": true,
     "bindings": {
       "ctrl-alt-cmd-f": "workspace::FollowNextCollaborator",
+      // TODO: Move this to a dock open action
+      "cmd-shift-c": "collab_panel::ToggleFocus",
       // Only available in debug builds: opens an element inspector for development.
       "cmd-alt-i": "dev::ToggleInspector",
     },
@@ -984,6 +1028,20 @@
     },
   },
   {
+    "context": "VariableList",
+    "use_key_equivalents": true,
+    "bindings": {
+      "left": "variable_list::CollapseSelectedEntry",
+      "right": "variable_list::ExpandSelectedEntry",
+      "enter": "variable_list::EditVariable",
+      "cmd-c": "variable_list::CopyVariableValue",
+      "cmd-alt-c": "variable_list::CopyVariableName",
+      "delete": "variable_list::RemoveWatch",
+      "backspace": "variable_list::RemoveWatch",
+      "alt-enter": "variable_list::AddWatch",
+    },
+  },
+  {
     "context": "GitPanel && ChangesList && !GitBranchSelector",
     "use_key_equivalents": true,
     "bindings": {
@@ -1071,6 +1129,55 @@
     },
   },
   {
+    "context": "DebugPanel",
+    "bindings": {
+      "cmd-t": "debugger::ToggleThreadPicker",
+      "cmd-i": "debugger::ToggleSessionPicker",
+      "shift-alt-escape": "debugger::ToggleExpandItem",
+    },
+  },
+  {
+    "context": "BreakpointList",
+    "bindings": {
+      "space": "debugger::ToggleEnableBreakpoint",
+      "backspace": "debugger::UnsetBreakpoint",
+      "left": "debugger::PreviousBreakpointProperty",
+      "right": "debugger::NextBreakpointProperty",
+    },
+  },
+  {
+    "context": "CollabPanel && not_editing",
+    "use_key_equivalents": true,
+    "bindings": {
+      "ctrl-backspace": "collab_panel::Remove",
+      "space": "menu::Confirm",
+    },
+  },
+  {
+    "context": "CollabPanel",
+    "use_key_equivalents": true,
+    "bindings": {
+      "alt-up": "collab_panel::MoveChannelUp",
+      "alt-down": "collab_panel::MoveChannelDown",
+      "alt-enter": "collab_panel::OpenSelectedChannelNotes",
+      "shift-enter": "collab_panel::ToggleSelectedChannelFavorite",
+    },
+  },
+  {
+    "context": "(CollabPanel && editing) > Editor",
+    "use_key_equivalents": true,
+    "bindings": {
+      "space": "collab_panel::InsertSpace",
+    },
+  },
+  {
+    "context": "ChannelModal",
+    "use_key_equivalents": true,
+    "bindings": {
+      "tab": "channel_modal::ToggleMode",
+    },
+  },
+  {
     "context": "Picker > Editor",
     "use_key_equivalents": true,
     "bindings": {
@@ -1081,7 +1188,22 @@
       "alt-enter": ["picker::ConfirmInput", { "secondary": false }],
       "cmd-alt-enter": ["picker::ConfirmInput", { "secondary": true }],
     },
-  }{
+  },
+  {
+    "context": "ChannelModal > Picker > Editor",
+    "use_key_equivalents": true,
+    "bindings": {
+      "tab": "channel_modal::ToggleMode",
+    },
+  },
+  {
+    "context": "ToolchainSelector",
+    "use_key_equivalents": true,
+    "bindings": {
+      "cmd-shift-a": "toolchain::AddToolchain",
+    },
+  },
+  {
     "context": "FileFinder || (FileFinder > Picker > Editor)",
     "use_key_equivalents": true,
     "bindings": {
@@ -1108,6 +1230,15 @@
       "cmd-shift-a": "workspace::AddFolderToProject",
       "shift-backspace": "recent_projects::RemoveSelected",
       "cmd-shift-enter": "recent_projects::AddToWorkspace",
+    },
+  },
+  {
+    "context": "TabSwitcher",
+    "use_key_equivalents": true,
+    "bindings": {
+      "ctrl-shift-tab": "menu::SelectPrevious",
+      "ctrl-up": "menu::SelectPrevious",
+      "ctrl-down": "menu::SelectNext",
     },
   },
   {
@@ -1238,6 +1369,7 @@
     "use_key_equivalents": true,
     "bindings": {
       "enter": "menu::Confirm",
+      "alt-enter": "console::WatchExpression",
     },
   },
   {
@@ -1260,22 +1392,6 @@
       "cmd-up": "markdown::ScrollToTop",
       "cmd-down": "markdown::ScrollToBottom",
       "cmd-f": "buffer_search::Deploy",
-    },
-  },
-  {
-    "context": "KeymapEditor",
-    "use_key_equivalents": true,
-    "bindings": {
-      "cmd-f": "search::FocusSearch",
-      "cmd-alt-f": "keymap_editor::ToggleKeystrokeSearch",
-      "cmd-alt-c": "keymap_editor::ToggleConflictFilter",
-      "enter": "keymap_editor::EditBinding",
-      "alt-enter": "keymap_editor::CreateBinding",
-      "cmd-k": "keymap_editor::OpenCreateKeybindingModal",
-      "cmd-c": "keymap_editor::CopyAction",
-      "cmd-shift-c": "keymap_editor::CopyContext",
-      "cmd-t": "keymap_editor::ShowMatchingKeybinds",
-      "cmd-e": "zed::OpenKeymapFile",
     },
   },
   {
@@ -1427,6 +1543,15 @@
     },
   },
   {
+    "context": "RunModal",
+    "bindings": {
+      "cmd-1": "new_process_modal::ActivateTaskTab",
+      "cmd-2": "new_process_modal::ActivateDebugTab",
+      "cmd-3": "new_process_modal::ActivateAttachTab",
+      "cmd-4": "new_process_modal::ActivateLaunchTab",
+    },
+  },
+  {
     "context": "GitPicker",
     "bindings": {
       "cmd-1": "git_picker::ActivateBranchesTab",
@@ -1438,6 +1563,44 @@
     "use_key_equivalents": true,
     "bindings": {
       "cmd-shift-backspace": "worktree_picker::DeleteWorktree",
+    },
+  },
+  {
+    "context": "NotebookEditor",
+    "bindings": {
+      "shift-enter": "notebook::RunAndAdvance",
+      "cmd-enter": "notebook::Run",
+      "cmd-shift-enter": "notebook::RunAll",
+      "alt-up": "notebook::MoveCellUp",
+      "alt-down": "notebook::MoveCellDown",
+      "cmd-m": "notebook::AddCodeBlock",
+      "cmd-shift-m": "notebook::AddMarkdownBlock",
+      "cmd-shift-r": "notebook::RestartKernel",
+      "cmd-c": "notebook::InterruptKernel",
+    },
+  },
+  {
+    "context": "NotebookEditor && notebook_mode == command",
+    "bindings": {
+      "enter": "notebook::EnterEditMode",
+      "down": "menu::SelectNext",
+      "up": "menu::SelectPrevious",
+    },
+  },
+  {
+    "context": "NotebookEditor > Editor",
+    "bindings": {
+      "enter": "editor::Newline",
+      "shift-enter": "notebook::RunAndAdvance",
+      "cmd-enter": "notebook::Run",
+      "cmd-shift-enter": "notebook::RunAll",
+      "alt-up": "notebook::MoveCellUp",
+      "alt-down": "notebook::MoveCellDown",
+      "cmd-m": "notebook::AddCodeBlock",
+      "cmd-shift-m": "notebook::AddMarkdownBlock",
+      "cmd-shift-r": "notebook::RestartKernel",
+      "cmd-c": "notebook::InterruptKernel",
+      "escape": "notebook::EnterCommandMode",
     },
   },
 ]

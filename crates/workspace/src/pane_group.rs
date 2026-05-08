@@ -1,6 +1,6 @@
 use crate::{
-    AnyActiveCall, AppState, CollaboratorId, FollowerState, Pane, ParticipantLocation, Workspace,
-    WorkspaceSettings,
+    AnyActiveCall, AppLaunchMode, AppState, CollaboratorId, FollowerState, Pane,
+    ParticipantLocation, Workspace, WorkspaceSettings,
     notifications::DetachAndPromptErr,
     pane_group::element::pane_axis,
     workspace_settings::{PaneSplitDirectionHorizontal, PaneSplitDirectionVertical},
@@ -541,8 +541,28 @@ impl Member {
                     };
                 }
 
+                let collapse_empty_stcode_center_pane = {
+                    let pane_snapshot = pane.read(cx);
+                    AppLaunchMode::is_stcode(cx)
+                        && pane_snapshot.in_center_group
+                        && pane_snapshot.items_len() == 0
+                };
+
                 let decoration = render_cx.decorate(pane, cx);
                 let is_active = pane == render_cx.active_pane();
+
+                if collapse_empty_stcode_center_pane {
+                    return PaneRenderResult {
+                        element: div()
+                            .id("stcode-collapsed-center-pane")
+                            .flex_none()
+                            .w_0()
+                            .h_full()
+                            .overflow_hidden()
+                            .into_any(),
+                        contains_active_pane: is_active,
+                    };
+                }
 
                 PaneRenderResult {
                     element: div()

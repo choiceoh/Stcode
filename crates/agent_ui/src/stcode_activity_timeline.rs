@@ -1,14 +1,21 @@
 use acp_thread::{AcpThread, AgentThreadEntry, ThreadStatus, ToolCall, ToolCallStatus};
 use agent_client_protocol as acp;
 use anyhow::Result;
-use git::{repository::DiffType, status::FileStatus};
-use gpui::{Action, Entity, IntoElement, RenderOnce};
+use auto_update::{AutoUpdateStatus, AutoUpdater};
+use git::{
+    repository::{DiffType, UpstreamTrackingStatus},
+    status::FileStatus,
+};
+use gpui::{
+    Action, Context, Entity, EntityId, IntoElement, Render, RenderOnce, Subscription, WeakEntity,
+};
 use project::{
     Project,
     git_store::{Repository, StatusEntry},
 };
 use ui::{Button, ButtonStyle, Icon, IconName, Label, LabelSize, prelude::*};
 use util::{paths::PathStyle, truncate_and_trailoff};
+use workspace::{ItemHandle, OpenLog, StatusItemView, Workspace};
 use zed_actions::{
     CreateWorktree, NewWorktreeBranchTarget, agent::ReviewBranchDiff, git as zed_git,
 };
@@ -18,8 +25,12 @@ const MAX_ENTRY_LABEL_CHARS: usize = 48;
 const MAX_SMART_PANEL_GOAL_CHARS: usize = 64;
 const MAX_SMART_PANEL_FILES: usize = 2;
 const MAX_SMART_TODO_ENTRIES: usize = 2;
+const MAX_SMART_PARALLEL_LANES: usize = 4;
 const MAX_TODO_LABEL_CHARS: usize = 56;
 const MAX_WORKLINE_DETAIL_CHARS: usize = 72;
+const MAX_STATUS_WORKLINE_DETAIL_CHARS: usize = 64;
+const STCODE_ACTIVITY_SIDE_PANEL_WIDTH: Pixels = px(420.);
+const STCODE_ACTIVITY_SIDE_PANEL_MIN_WIDTH: Pixels = px(360.);
 
 #[derive(IntoElement)]
 pub(crate) struct StcodeActivityTimeline {
@@ -73,6 +84,7 @@ struct ActivityTimelineSnapshots {
     smart_todo: Option<SmartTodoSnapshot>,
     smart_parallel: Option<SmartParallelSnapshot>,
     smart_merge: Option<SmartMergeSnapshot>,
+    update_state: SmartWorklineUpdateState,
 }
 
 impl ActivityTimelineSnapshots {
@@ -80,6 +92,7 @@ impl ActivityTimelineSnapshots {
         thread: Option<&AcpThread>,
         project: &Entity<Project>,
         smart_run: Option<StcodeSmartRunSnapshot>,
+        update_status: Option<&AutoUpdateStatus>,
         cx: &App,
     ) -> Self {
         let has_thread_entries = thread.is_some_and(|thread| !thread.entries().is_empty());
@@ -99,7 +112,147 @@ impl ActivityTimelineSnapshots {
             smart_todo,
             smart_parallel: SmartParallelSnapshot::from_project(project, cx),
             smart_merge: SmartMergeSnapshot::from_project(project, cx),
+            update_state: SmartWorklineUpdateState::from_status(update_status),
         }
+    }
+
+    fn workline(&self) -> SmartWorklineSnapshot {
+        SmartWorklineSnapshot::from_snapshots(
+            self.has_thread_entries,
+            &self.activity,
+            self.smart_run.as_ref(),
+            self.smart_start.as_ref(),
+            self.smart_panel.as_ref(),
+            self.smart_todo.as_ref(),
+            self.smart_parallel.as_ref(),
+            self.smart_merge.as_ref(),
+            self.update_state,
+        )
+    }
+}
+
+pub struct StcodeWorklineStatusItem {
+    workspace: WeakEntity<Workspace>,
+    project: Entity<Project>,
+    observed_agent_panel_id: Option<EntityId>,
+    observed_thread_id: Option<EntityId>,
+    observed_auto_updater_id: Option<EntityId>,
+    _workspace_subscription: Subscription,
+    _project_subscription: Subscription,
+    _agent_panel_subscription: Option<Subscription>,
+    _thread_subscription: Option<Subscription>,
+    _auto_update_subscription: Option<Subscription>,
+}
+
+impl StcodeWorklineStatusItem {
+    pub fn new(
+        workspace: &Entity<Workspace>,
+        project: Entity<Project>,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let _workspace_subscription = cx.observe(workspace, |_this, _workspace, cx| cx.notify());
+        let _project_subscription = cx.observe(&project, |_this, _project, cx| cx.notify());
+
+        Self {
+            workspace: workspace.downgrade(),
+            project,
+            observed_agent_panel_id: None,
+            observed_thread_id: None,
+            observed_auto_updater_id: None,
+            _workspace_subscription,
+            _project_subscription,
+            _agent_panel_subscription: None,
+            _thread_subscription: None,
+            _auto_update_subscription: None,
+        }
+    }
+
+    fn observe_agent_panel(
+        &mut self,
+        agent_panel: Option<&Entity<crate::AgentPanel>>,
+        cx: &mut Context<Self>,
+    ) {
+        let agent_panel_id = agent_panel.map(|agent_panel| agent_panel.entity_id());
+        if self.observed_agent_panel_id == agent_panel_id {
+            return;
+        }
+
+        self.observed_agent_panel_id = agent_panel_id;
+        self._agent_panel_subscription = agent_panel
+            .map(|agent_panel| cx.observe(agent_panel, |_this, _agent_panel, cx| cx.notify()));
+    }
+
+    fn observe_thread(&mut self, thread: Option<&Entity<AcpThread>>, cx: &mut Context<Self>) {
+        let thread_id = thread.map(|thread| thread.entity_id());
+        if self.observed_thread_id == thread_id {
+            return;
+        }
+
+        self.observed_thread_id = thread_id;
+        self._thread_subscription =
+            thread.map(|thread| cx.observe(thread, |_this, _thread, cx| cx.notify()));
+    }
+
+    fn observe_auto_updater(
+        &mut self,
+        auto_updater: Option<&Entity<AutoUpdater>>,
+        cx: &mut Context<Self>,
+    ) {
+        let auto_updater_id = auto_updater.map(|auto_updater| auto_updater.entity_id());
+        if self.observed_auto_updater_id == auto_updater_id {
+            return;
+        }
+
+        self.observed_auto_updater_id = auto_updater_id;
+        self._auto_update_subscription = auto_updater
+            .map(|auto_updater| cx.observe(auto_updater, |_this, _auto_updater, cx| cx.notify()));
+    }
+}
+
+impl Render for StcodeWorklineStatusItem {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let agent_panel = self
+            .workspace
+            .upgrade()
+            .and_then(|workspace| workspace.read(cx).panel::<crate::AgentPanel>(cx));
+        self.observe_agent_panel(agent_panel.as_ref(), cx);
+
+        let (thread, smart_run) = agent_panel
+            .as_ref()
+            .map(|agent_panel| {
+                let agent_panel = agent_panel.read(cx);
+                (
+                    agent_panel.active_agent_thread(cx),
+                    agent_panel.stcode_smart_run_snapshot(cx),
+                )
+            })
+            .unwrap_or((None, None));
+        self.observe_thread(thread.as_ref(), cx);
+
+        let auto_updater = AutoUpdater::get(cx);
+        self.observe_auto_updater(auto_updater.as_ref(), cx);
+        let update_status = auto_updater
+            .as_ref()
+            .map(|auto_updater| auto_updater.read(cx).status());
+        let thread = thread.as_ref().map(|thread| thread.read(cx));
+        let snapshots = ActivityTimelineSnapshots::from_parts(
+            thread,
+            &self.project,
+            smart_run,
+            update_status.as_ref(),
+            cx,
+        );
+        render_smart_workline_status_bar(snapshots.workline(), cx)
+    }
+}
+
+impl StatusItemView for StcodeWorklineStatusItem {
+    fn set_active_pane_item(
+        &mut self,
+        _active_pane_item: Option<&dyn ItemHandle>,
+        _window: &mut Window,
+        _cx: &mut Context<Self>,
+    ) {
     }
 }
 
@@ -135,9 +288,15 @@ impl StcodeSmartRunSnapshot {
 
 impl RenderOnce for StcodeActivityTimeline {
     fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let update_status = AutoUpdater::get(cx).map(|auto_updater| auto_updater.read(cx).status());
         let thread = self.thread.as_ref().map(|thread| thread.read(cx));
-        let snapshots =
-            ActivityTimelineSnapshots::from_parts(thread, &self.project, self.smart_run, cx);
+        let snapshots = ActivityTimelineSnapshots::from_parts(
+            thread,
+            &self.project,
+            self.smart_run,
+            update_status.as_ref(),
+            cx,
+        );
 
         match self.layout {
             StcodeActivityLayout::Summary => render_activity_summary(snapshots, cx),
@@ -213,33 +372,24 @@ fn render_activity_side_panel(
     snapshots: ActivityTimelineSnapshots,
     cx: &mut App,
 ) -> gpui::AnyElement {
+    let workline = snapshots.workline();
     let ActivityTimelineSnapshots {
-        has_thread_entries,
         activity,
-        smart_run,
+        smart_run: _,
         smart_start,
         smart_panel,
         smart_todo,
         smart_parallel,
         smart_merge,
+        ..
     } = snapshots;
-    let workline = SmartWorklineSnapshot::from_snapshots(
-        has_thread_entries,
-        &activity,
-        smart_run.as_ref(),
-        smart_start.as_ref(),
-        smart_panel.as_ref(),
-        smart_todo.as_ref(),
-        smart_parallel.as_ref(),
-        smart_merge.as_ref(),
-    );
 
     v_flex()
         .id("stcode-activity-side-panel")
         .flex_none()
         .h_full()
-        .w(px(320.))
-        .min_w(px(280.))
+        .w(STCODE_ACTIVITY_SIDE_PANEL_WIDTH)
+        .min_w(STCODE_ACTIVITY_SIDE_PANEL_MIN_WIDTH)
         .gap_1()
         .px_3()
         .py_2()
@@ -303,7 +453,7 @@ struct SmartWorklineSnapshot {
     detail: String,
     icon: IconName,
     tone: ActivityTone,
-    primary_action: Option<SmartWorklineAction>,
+    controls: Vec<SmartWorklineControl>,
     stages: Vec<SmartWorklineStage>,
 }
 
@@ -317,6 +467,7 @@ impl SmartWorklineSnapshot {
         smart_todo: Option<&SmartTodoSnapshot>,
         smart_parallel: Option<&SmartParallelSnapshot>,
         smart_merge: Option<&SmartMergeSnapshot>,
+        update_state: SmartWorklineUpdateState,
     ) -> Self {
         let active_stage = smart_workline_active_stage(
             has_thread_entries,
@@ -336,6 +487,22 @@ impl SmartWorklineSnapshot {
             smart_workline_review_stage(smart_panel, has_thread_entries, active_stage),
             smart_workline_merge_stage(smart_merge, has_thread_entries, active_stage),
         ];
+        let controls = smart_workline_controls(SmartWorklineControlState {
+            active_stage,
+            has_thread_entries,
+            has_start_gate: smart_start.is_some(),
+            activity_live: activity.tone.is_live(),
+            todo_live: smart_todo.is_some_and(|snapshot| snapshot.should_render_card()),
+            panel_needs_review: smart_panel.is_some_and(|snapshot| snapshot.should_render_card()),
+            parallel_needs_attention: smart_parallel
+                .is_some_and(|snapshot| snapshot.should_render_card()),
+            merge_available: smart_merge.is_some_and(|snapshot| {
+                snapshot.can_run_smart_merge
+                    || snapshot.can_create_pull_request
+                    || (has_thread_entries && snapshot.should_render_card())
+            }),
+            update_state,
+        });
         let display_stage = stages
             .iter()
             .find(|stage| stage.active)
@@ -347,9 +514,17 @@ impl SmartWorklineSnapshot {
             detail: display_stage.detail.clone(),
             icon: display_stage.icon,
             tone: display_stage.tone,
-            primary_action: active_stage.map(SmartWorklineAction::from_stage),
+            controls,
             stages,
         }
+    }
+
+    fn primary_action(&self) -> Option<SmartWorklineAction> {
+        self.controls
+            .iter()
+            .find(|control| control.active)
+            .or_else(|| self.controls.first())
+            .map(|control| control.action)
     }
 }
 
@@ -387,12 +562,14 @@ impl SmartWorklineStageKind {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum SmartWorklineAction {
     Start,
     Panel,
     Parallel,
     Merge,
+    Update,
+    Logs,
 }
 
 impl SmartWorklineAction {
@@ -407,14 +584,275 @@ impl SmartWorklineAction {
         }
     }
 
+    fn label(self) -> &'static str {
+        match self {
+            Self::Start => "Start",
+            Self::Panel => "Review",
+            Self::Merge => "Merge",
+            Self::Parallel => "Parallel",
+            Self::Update => "Update",
+            Self::Logs => "Logs",
+        }
+    }
+
+    fn status_bar_id(self) -> &'static str {
+        match self {
+            Self::Start => "stcode-status-start",
+            Self::Panel => "stcode-status-review",
+            Self::Merge => "stcode-status-merge",
+            Self::Parallel => "stcode-status-parallel",
+            Self::Update => "stcode-status-update",
+            Self::Logs => "stcode-status-logs",
+        }
+    }
+
+    fn order(self) -> usize {
+        match self {
+            Self::Start => 0,
+            Self::Panel => 1,
+            Self::Merge => 2,
+            Self::Parallel => 3,
+            Self::Update => 4,
+            Self::Logs => 5,
+        }
+    }
+
     fn boxed_action(self) -> Box<dyn Action> {
         match self {
             Self::Start => crate::StcodeSmartStart.boxed_clone(),
             Self::Panel => crate::StcodeSmartPanel.boxed_clone(),
             Self::Parallel => crate::StcodeSmartParallel.boxed_clone(),
             Self::Merge => crate::StcodeSmartMerge.boxed_clone(),
+            Self::Update => auto_update::Check.boxed_clone(),
+            Self::Logs => OpenLog.boxed_clone(),
         }
     }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SmartWorklineUpdateState {
+    Idle,
+    Checking,
+    Downloading,
+    Installing,
+    Updated,
+    Errored,
+}
+
+impl SmartWorklineUpdateState {
+    fn from_status(status: Option<&AutoUpdateStatus>) -> Self {
+        match status {
+            Some(AutoUpdateStatus::Checking) => Self::Checking,
+            Some(AutoUpdateStatus::Downloading { .. }) => Self::Downloading,
+            Some(AutoUpdateStatus::Installing { .. }) => Self::Installing,
+            Some(AutoUpdateStatus::Updated { .. }) => Self::Updated,
+            Some(AutoUpdateStatus::Errored { .. }) => Self::Errored,
+            Some(AutoUpdateStatus::Idle) | None => Self::Idle,
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Idle => "Update",
+            Self::Checking => "Checking",
+            Self::Downloading => "Downloading",
+            Self::Installing => "Installing",
+            Self::Updated => "Restart",
+            Self::Errored => "Retry",
+        }
+    }
+
+    fn is_busy(self) -> bool {
+        matches!(self, Self::Checking | Self::Downloading | Self::Installing)
+    }
+
+    fn should_highlight(self) -> bool {
+        self != Self::Idle
+    }
+
+    fn should_restart(self) -> bool {
+        self == Self::Updated
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct SmartWorklineControl {
+    action: SmartWorklineAction,
+    active: bool,
+    update_state: Option<SmartWorklineUpdateState>,
+}
+
+impl SmartWorklineControl {
+    fn label(&self) -> &'static str {
+        self.update_state
+            .map(SmartWorklineUpdateState::label)
+            .unwrap_or_else(|| self.action.label())
+    }
+
+    fn is_visually_active(&self) -> bool {
+        self.active
+            || self
+                .update_state
+                .is_some_and(SmartWorklineUpdateState::should_highlight)
+    }
+
+    fn is_disabled(&self) -> bool {
+        self.update_state
+            .is_some_and(SmartWorklineUpdateState::is_busy)
+    }
+
+    fn is_loading(&self) -> bool {
+        self.update_state
+            .is_some_and(SmartWorklineUpdateState::is_busy)
+    }
+
+    fn should_restart(&self) -> bool {
+        self.update_state
+            .is_some_and(SmartWorklineUpdateState::should_restart)
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct SmartWorklineControlState {
+    active_stage: Option<SmartWorklineStageKind>,
+    has_thread_entries: bool,
+    has_start_gate: bool,
+    activity_live: bool,
+    todo_live: bool,
+    panel_needs_review: bool,
+    parallel_needs_attention: bool,
+    merge_available: bool,
+    update_state: SmartWorklineUpdateState,
+}
+
+fn smart_workline_controls(state: SmartWorklineControlState) -> Vec<SmartWorklineControl> {
+    let active_action = state.active_stage.map(SmartWorklineAction::from_stage);
+    let mut actions = Vec::new();
+
+    if state.has_start_gate
+        || !state.has_thread_entries
+        || active_action == Some(SmartWorklineAction::Start)
+    {
+        actions.push(SmartWorklineAction::Start);
+    }
+
+    if state.panel_needs_review
+        || state.todo_live
+        || state.activity_live
+        || state.has_thread_entries
+        || active_action == Some(SmartWorklineAction::Panel)
+    {
+        actions.push(SmartWorklineAction::Panel);
+    }
+
+    if state.merge_available || active_action == Some(SmartWorklineAction::Merge) {
+        actions.push(SmartWorklineAction::Merge);
+    }
+
+    if state.parallel_needs_attention || active_action == Some(SmartWorklineAction::Parallel) {
+        actions.push(SmartWorklineAction::Parallel);
+    }
+
+    if let Some(active_action) = active_action
+        && !actions.contains(&active_action)
+    {
+        actions.push(active_action);
+    }
+
+    actions.push(SmartWorklineAction::Update);
+    actions.push(SmartWorklineAction::Logs);
+    actions.sort_by_key(|action| action.order());
+    actions.dedup();
+
+    actions
+        .into_iter()
+        .map(|action| SmartWorklineControl {
+            action,
+            active: Some(action) == active_action,
+            update_state: (action == SmartWorklineAction::Update).then_some(state.update_state),
+        })
+        .collect()
+}
+
+fn render_smart_workline_status_bar(
+    snapshot: SmartWorklineSnapshot,
+    _cx: &mut App,
+) -> gpui::AnyElement {
+    let detail = truncate_and_trailoff(&snapshot.detail, MAX_STATUS_WORKLINE_DETAIL_CHARS);
+    let controls = snapshot.controls;
+
+    h_flex()
+        .id("stcode-ai-workline-control-bar")
+        .min_w_0()
+        .gap_2()
+        .overflow_hidden()
+        .child(
+            h_flex()
+                .min_w_0()
+                .gap_2()
+                .child(
+                    Icon::new(snapshot.icon)
+                        .size(IconSize::Medium)
+                        .color(snapshot.tone.color()),
+                )
+                .child(
+                    v_flex()
+                        .min_w_0()
+                        .gap_0p5()
+                        .child(
+                            h_flex()
+                                .min_w_0()
+                                .gap_1()
+                                .child(
+                                    Label::new("AI Workline")
+                                        .size(LabelSize::Small)
+                                        .color(Color::Default),
+                                )
+                                .child(
+                                    Label::new(snapshot.status)
+                                        .size(LabelSize::XSmall)
+                                        .color(snapshot.tone.color()),
+                                ),
+                        )
+                        .child(
+                            Label::new(detail)
+                                .size(LabelSize::XSmall)
+                                .color(Color::Muted)
+                                .truncate(),
+                        ),
+                ),
+        )
+        .child(
+            h_flex().flex_none().gap_1().children(
+                controls
+                    .into_iter()
+                    .map(render_smart_workline_status_action),
+            ),
+        )
+        .into_any_element()
+}
+
+fn render_smart_workline_status_action(control: SmartWorklineControl) -> impl IntoElement {
+    let action = control.action.boxed_action();
+    let should_restart = control.should_restart();
+
+    Button::new(control.action.status_bar_id(), control.label())
+        .size(ButtonSize::Default)
+        .label_size(LabelSize::Small)
+        .style(if control.is_visually_active() {
+            ButtonStyle::Filled
+        } else {
+            ButtonStyle::Subtle
+        })
+        .loading(control.is_loading())
+        .disabled(control.is_disabled())
+        .on_click(move |_, window, cx| {
+            if should_restart {
+                workspace::reload(cx);
+            } else {
+                window.dispatch_action(action.boxed_clone(), cx);
+            }
+        })
 }
 
 fn render_smart_workline_card(
@@ -429,11 +867,12 @@ fn render_smart_workline_card(
     let detail_rows = smart_workline_detail_rows(
         smart_panel.as_ref(),
         smart_todo.as_ref(),
+        smart_parallel.as_ref(),
         smart_merge.as_ref(),
     );
     let has_detail_rows = !detail_rows.is_empty();
     let primary_action = snapshot
-        .primary_action
+        .primary_action()
         .map(SmartWorklineAction::boxed_action);
     let start_review_repository = smart_start
         .as_ref()
@@ -447,7 +886,18 @@ fn render_smart_workline_card(
     let merge_review_repository = smart_merge
         .as_ref()
         .map(|snapshot| snapshot.repository.clone());
-    let can_start_handoff = smart_start.is_some();
+    let can_review_start_changes = smart_start
+        .as_ref()
+        .is_some_and(|snapshot| snapshot.can_review_changes);
+    let can_stash_start_changes = smart_start
+        .as_ref()
+        .is_some_and(|snapshot| snapshot.can_stash_changes);
+    let can_commit_start_changes = smart_start
+        .as_ref()
+        .is_some_and(|snapshot| snapshot.can_commit_changes);
+    let can_split_start_lane = smart_start
+        .as_ref()
+        .is_some_and(|snapshot| snapshot.can_split_lane);
     let can_review_files = smart_panel
         .as_ref()
         .is_some_and(|snapshot| snapshot.can_review);
@@ -463,6 +913,9 @@ fn render_smart_workline_card(
     let can_open_pull_request = smart_merge
         .as_ref()
         .is_some_and(|snapshot| snapshot.can_create_pull_request);
+    let can_run_smart_merge = smart_merge
+        .as_ref()
+        .is_some_and(|snapshot| snapshot.can_run_smart_merge);
     let can_commit_merge = smart_merge
         .as_ref()
         .is_some_and(|snapshot| snapshot.can_commit);
@@ -563,7 +1016,7 @@ fn render_smart_workline_card(
                             }),
                     )
                 })
-                .when(can_start_handoff, |this| {
+                .when(can_review_start_changes, |this| {
                     this.when_some(start_review_repository, |this, repository| {
                         this.child(
                             Button::new("stcode-smart-workline-start-review", "Review")
@@ -574,7 +1027,9 @@ fn render_smart_workline_card(
                                 }),
                         )
                     })
-                    .child(
+                })
+                .when(can_split_start_lane, |this| {
+                    this.child(
                         Button::new("stcode-smart-workline-split", "Split Worktree")
                             .label_size(LabelSize::XSmall)
                             .style(ButtonStyle::Outlined)
@@ -582,7 +1037,9 @@ fn render_smart_workline_card(
                                 window.dispatch_action(zed_git::Worktree.boxed_clone(), cx);
                             }),
                     )
-                    .when_some(start_stash_repository, |this, repository| {
+                })
+                .when(can_stash_start_changes, |this| {
+                    this.when_some(start_stash_repository, |this, repository| {
                         this.child(
                             Button::new("stcode-smart-workline-stash", "Stash")
                                 .label_size(LabelSize::XSmall)
@@ -592,7 +1049,9 @@ fn render_smart_workline_card(
                                 }),
                         )
                     })
-                    .child(
+                })
+                .when(can_commit_start_changes, |this| {
+                    this.child(
                         Button::new("stcode-smart-workline-start-commit", "Commit")
                             .label_size(LabelSize::XSmall)
                             .style(ButtonStyle::Outlined)
@@ -660,9 +1119,19 @@ fn render_smart_workline_card(
                         )
                     })
                 })
+                .when(can_run_smart_merge, |this| {
+                    this.child(
+                        Button::new("stcode-smart-workline-ai-merge", "AI Merge")
+                            .label_size(LabelSize::XSmall)
+                            .style(ButtonStyle::Outlined)
+                            .on_click(move |_, window, cx| {
+                                window.dispatch_action(crate::StcodeSmartMerge.boxed_clone(), cx);
+                            }),
+                    )
+                })
                 .when(can_open_pull_request, |this| {
                     this.child(
-                        Button::new("stcode-smart-workline-open-pr", "Open PR")
+                        Button::new("stcode-smart-workline-open-pr", "Create PR Link")
                             .label_size(LabelSize::XSmall)
                             .style(ButtonStyle::Outlined)
                             .on_click(move |_, window, cx| {
@@ -697,6 +1166,7 @@ struct SmartWorklineDetailRow {
 fn smart_workline_detail_rows(
     smart_panel: Option<&SmartPanelSnapshot>,
     smart_todo: Option<&SmartTodoSnapshot>,
+    smart_parallel: Option<&SmartParallelSnapshot>,
     smart_merge: Option<&SmartMergeSnapshot>,
 ) -> Vec<SmartWorklineDetailRow> {
     let mut rows = Vec::new();
@@ -728,6 +1198,32 @@ fn smart_workline_detail_rows(
         }
     }
 
+    if let Some(parallel) = smart_parallel.filter(|snapshot| snapshot.should_render_card()) {
+        let detail = parallel
+            .lanes
+            .iter()
+            .find(|lane| lane.overlaps_active_branch)
+            .or_else(|| parallel.lanes.first())
+            .map(|lane| {
+                format!(
+                    "{} · {} · {}",
+                    lane.label,
+                    lane.branch_label(),
+                    lane.path_label
+                )
+            })
+            .unwrap_or_else(|| parallel.detail.clone());
+
+        rows.push(SmartWorklineDetailRow {
+            id: "parallel-lane".to_string(),
+            label: "Lane".to_string(),
+            detail: smart_panel_compact_label(detail, MAX_WORKLINE_DETAIL_CHARS),
+            status: parallel.status,
+            icon: parallel.icon,
+            tone: parallel.tone,
+        });
+    }
+
     if let Some(panel) = smart_panel {
         rows.push(SmartWorklineDetailRow {
             id: "workspace".to_string(),
@@ -737,6 +1233,17 @@ fn smart_workline_detail_rows(
             icon: panel.icon,
             tone: panel.tone,
         });
+
+        if let Some(merge) = smart_merge.filter(|snapshot| snapshot.should_render_card()) {
+            rows.push(SmartWorklineDetailRow {
+                id: "merge".to_string(),
+                label: "Merge".to_string(),
+                detail: smart_panel_compact_label(&merge.detail, MAX_WORKLINE_DETAIL_CHARS),
+                status: merge.status,
+                icon: merge.icon,
+                tone: merge.tone,
+            });
+        }
 
         if let Some(item) = panel
             .work_items
@@ -947,10 +1454,10 @@ fn smart_workline_start_stage(
     if let Some(snapshot) = smart_start {
         return smart_workline_stage(
             SmartWorklineStageKind::Start,
-            "Handoff",
+            snapshot.status,
             &snapshot.detail,
-            IconName::Warning,
-            ActivityTone::Waiting,
+            snapshot.icon,
+            snapshot.tone,
             active_stage,
         );
     }
@@ -1188,59 +1695,190 @@ fn render_activity_entry(entry: ActivityEntry) -> impl IntoElement {
 #[derive(Clone)]
 struct SmartStartSnapshot {
     repository: Entity<Repository>,
+    status: &'static str,
     detail: String,
+    icon: IconName,
+    tone: ActivityTone,
+    can_review_changes: bool,
+    can_stash_changes: bool,
+    can_commit_changes: bool,
+    can_split_lane: bool,
 }
 
 impl SmartStartSnapshot {
     fn from_project(project: &Entity<Project>, cx: &App) -> Option<Self> {
         let repository = project.read(cx).active_repository(cx)?;
         let repository_ref = repository.read(cx);
-        let entries = repository_ref
-            .cached_status()
-            .filter(|entry| entry.status.has_changes())
-            .collect::<Vec<_>>();
-
-        if entries.is_empty() {
-            return None;
-        }
-
         let branch_name = repository_ref
             .branch
             .as_ref()
             .map(|branch| branch.name().to_string());
-        let detail = smart_start_detail(branch_name.as_deref(), &entries);
+        let branch_ref = repository_ref
+            .branch
+            .as_ref()
+            .map(|branch| branch.ref_name.to_string());
+        let entries = repository_ref
+            .cached_status()
+            .filter(|entry| entry.status.has_changes())
+            .collect::<Vec<_>>();
+        let changed_count = entries.len();
+        let conflicted_count = entries
+            .iter()
+            .filter(|entry| entry.status.is_conflicted())
+            .count();
+        let staged_count = entries
+            .iter()
+            .filter(|entry| entry.status.staging().has_staged())
+            .count();
+        let unstaged_count = entries
+            .iter()
+            .filter(|entry| entry.status.staging().has_unstaged())
+            .count();
+        let linked_worktree_count = repository_ref.linked_worktrees().len();
+        let is_linked_worktree = repository_ref.is_linked_worktree();
+        let shared_branch_lane_count =
+            smart_shared_branch_lane_count(&repository_ref, branch_ref.as_deref());
+        let state = smart_start_state(
+            changed_count,
+            conflicted_count,
+            is_linked_worktree,
+            linked_worktree_count,
+            shared_branch_lane_count,
+        )?;
 
-        Some(Self { repository, detail })
+        Some(Self {
+            repository,
+            status: state.status(),
+            detail: smart_start_detail(
+                state,
+                branch_name.as_deref(),
+                changed_count,
+                conflicted_count,
+                staged_count,
+                unstaged_count,
+                linked_worktree_count,
+                shared_branch_lane_count,
+            ),
+            icon: state.icon(),
+            tone: state.tone(),
+            can_review_changes: changed_count > 0,
+            can_stash_changes: changed_count > 0,
+            can_commit_changes: changed_count > 0,
+            can_split_lane: state.can_split_lane(),
+        })
     }
 }
 
-fn smart_start_detail(branch_name: Option<&str>, entries: &[StatusEntry]) -> String {
-    let changed_count = entries.len();
-    let conflicted_count = entries
-        .iter()
-        .filter(|entry| entry.status.is_conflicted())
-        .count();
-    let staged_count = entries
-        .iter()
-        .filter(|entry| entry.status.staging().has_staged())
-        .count();
-    let unstaged_count = entries
-        .iter()
-        .filter(|entry| entry.status.staging().has_unstaged())
-        .count();
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SmartStartState {
+    Conflicts,
+    LeftoverChanges,
+    BranchShared,
+    NeedsLane,
+}
 
-    let branch = branch_name.unwrap_or("detached HEAD");
-    let file_label = if changed_count == 1 { "file" } else { "files" };
-
-    if conflicted_count > 0 {
-        return format!(
-            "{changed_count} changed {file_label} remain on {branch}, including {conflicted_count} conflict(s). Resolve or isolate them before starting the next session."
-        );
+impl SmartStartState {
+    fn status(self) -> &'static str {
+        match self {
+            Self::Conflicts => "Blocked",
+            Self::LeftoverChanges => "Handoff needed",
+            Self::BranchShared => "Branch overlap",
+            Self::NeedsLane => "Split recommended",
+        }
     }
 
-    format!(
-        "{changed_count} changed {file_label} remain on {branch}: {staged_count} staged, {unstaged_count} unstaged. Choose how to hand them off before starting clean."
-    )
+    fn icon(self) -> IconName {
+        match self {
+            Self::Conflicts | Self::BranchShared => IconName::GitMergeConflict,
+            Self::LeftoverChanges => IconName::GitCommit,
+            Self::NeedsLane => IconName::GitBranchPlus,
+        }
+    }
+
+    fn tone(self) -> ActivityTone {
+        match self {
+            Self::Conflicts | Self::BranchShared => ActivityTone::Failed,
+            Self::LeftoverChanges | Self::NeedsLane => ActivityTone::Waiting,
+        }
+    }
+
+    fn can_split_lane(self) -> bool {
+        matches!(self, Self::BranchShared | Self::NeedsLane)
+    }
+}
+
+fn smart_start_state(
+    changed_count: usize,
+    conflicted_count: usize,
+    is_linked_worktree: bool,
+    _linked_worktree_count: usize,
+    shared_branch_lane_count: usize,
+) -> Option<SmartStartState> {
+    if conflicted_count > 0 {
+        Some(SmartStartState::Conflicts)
+    } else if changed_count > 0 {
+        Some(SmartStartState::LeftoverChanges)
+    } else if shared_branch_lane_count > 0 {
+        Some(SmartStartState::BranchShared)
+    } else if !is_linked_worktree {
+        Some(SmartStartState::NeedsLane)
+    } else {
+        None
+    }
+}
+
+fn smart_start_detail(
+    state: SmartStartState,
+    branch_name: Option<&str>,
+    changed_count: usize,
+    conflicted_count: usize,
+    staged_count: usize,
+    unstaged_count: usize,
+    linked_worktree_count: usize,
+    shared_branch_lane_count: usize,
+) -> String {
+    let branch = branch_name.unwrap_or("detached HEAD");
+
+    match state {
+        SmartStartState::Conflicts => {
+            let file_label = if changed_count == 1 { "file" } else { "files" };
+            format!(
+                "{changed_count} changed {file_label} remain on {branch}, including {conflicted_count} conflict(s). Resolve or isolate them before starting the next session."
+            )
+        }
+        SmartStartState::LeftoverChanges => {
+            let file_label = if changed_count == 1 { "file" } else { "files" };
+            format!(
+                "{changed_count} changed {file_label} remain on {branch}: {staged_count} staged, {unstaged_count} unstaged. Preserve or stash them before starting clean."
+            )
+        }
+        SmartStartState::BranchShared => {
+            let lane_label = if shared_branch_lane_count == 1 {
+                "lane"
+            } else {
+                "lanes"
+            };
+            format!(
+                "{branch} is already used by {shared_branch_lane_count} linked {lane_label}. Start the next session in a fresh lane before another agent edits it."
+            )
+        }
+        SmartStartState::NeedsLane => {
+            if linked_worktree_count == 0 {
+                format!(
+                    "{branch} is still on the main checkout. Create an isolated lane before autonomous work starts."
+                )
+            } else {
+                let lane_label = if linked_worktree_count == 1 {
+                    "lane exists"
+                } else {
+                    "lanes exist"
+                };
+                format!(
+                    "{branch} is still on the main checkout while {linked_worktree_count} linked {lane_label}. Move this session into its own lane before starting."
+                )
+            }
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -1273,6 +1911,14 @@ impl SmartPanelSnapshot {
             .branch
             .as_ref()
             .map(|branch| branch.ref_name.to_string());
+        let tracking_status = repository_ref
+            .branch
+            .as_ref()
+            .and_then(|branch| branch.tracking_status());
+        let has_upstream = repository_ref
+            .branch
+            .as_ref()
+            .is_some_and(|branch| branch.upstream.is_some());
         let entries = repository_ref
             .cached_status()
             .filter(|entry| entry.status.has_changes())
@@ -1290,6 +1936,8 @@ impl SmartPanelSnapshot {
             branch_name.as_deref(),
             counts.changed_count,
             counts.conflicted_count,
+            tracking_status,
+            has_upstream,
         );
         let thread_summary = smart_panel_thread_summary(thread, cx);
         let work_items = smart_panel_work_items(
@@ -1700,7 +2348,14 @@ fn smart_panel_merge_item(
     SmartPanelWorkItem {
         id: "merge",
         label: "Merge readiness",
-        detail: smart_merge_detail(merge_state, branch_name, changed_count, conflicted_count),
+        detail: smart_merge_detail(
+            merge_state,
+            branch_name,
+            changed_count,
+            conflicted_count,
+            None,
+            None,
+        ),
         status: merge_state.status(),
         icon: merge_state.icon(),
         tone: merge_state.tone(),
@@ -2020,6 +2675,24 @@ struct SmartParallelSnapshot {
     detail: String,
     icon: IconName,
     tone: ActivityTone,
+    lanes: Vec<SmartParallelLane>,
+}
+
+#[derive(Clone)]
+struct SmartParallelLane {
+    label: String,
+    branch_ref: Option<String>,
+    path_label: String,
+    overlaps_active_branch: bool,
+}
+
+impl SmartParallelLane {
+    fn branch_label(&self) -> &str {
+        self.branch_ref
+            .as_deref()
+            .map(smart_branch_ref_label)
+            .unwrap_or("detached HEAD")
+    }
 }
 
 impl SmartParallelSnapshot {
@@ -2034,21 +2707,11 @@ impl SmartParallelSnapshot {
             .branch
             .as_ref()
             .map(|branch| branch.ref_name.to_string());
-        let duplicate_branch_count = branch_ref
-            .as_deref()
-            .map(|branch_ref| {
-                repository_ref
-                    .linked_worktrees()
-                    .iter()
-                    .filter(|worktree| {
-                        worktree
-                            .ref_name
-                            .as_ref()
-                            .is_some_and(|ref_name| ref_name.as_ref() == branch_ref)
-                    })
-                    .count()
-            })
-            .unwrap_or(0);
+        let lanes = smart_parallel_lanes(repository_ref.linked_worktrees(), branch_ref.as_deref());
+        let duplicate_branch_count = lanes
+            .iter()
+            .filter(|lane| lane.overlaps_active_branch)
+            .count();
         let linked_worktree_count = repository_ref.linked_worktrees().len();
         let state =
             smart_parallel_state(repository_ref.is_linked_worktree(), duplicate_branch_count);
@@ -2060,9 +2723,11 @@ impl SmartParallelSnapshot {
                 branch_name.as_deref(),
                 linked_worktree_count,
                 duplicate_branch_count,
+                &lanes,
             ),
             icon: state.icon(),
             tone: state.tone(),
+            lanes,
         })
     }
 
@@ -2124,6 +2789,7 @@ fn smart_parallel_detail(
     branch_name: Option<&str>,
     linked_worktree_count: usize,
     duplicate_branch_count: usize,
+    lanes: &[SmartParallelLane],
 ) -> String {
     let branch = branch_name.unwrap_or("detached HEAD");
 
@@ -2164,11 +2830,61 @@ fn smart_parallel_detail(
             } else {
                 "linked lanes"
             };
+            let overlap_labels = lanes
+                .iter()
+                .filter(|lane| lane.overlaps_active_branch)
+                .map(|lane| lane.label.as_str())
+                .take(3)
+                .collect::<Vec<_>>()
+                .join(", ");
+            let overlap_detail = if overlap_labels.is_empty() {
+                String::new()
+            } else {
+                format!(": {overlap_labels}")
+            };
             format!(
-                "{branch} also appears in {duplicate_branch_count} {lane_label}. Switch lanes or create a fresh lane before more agents edit it."
+                "{branch} also appears in {duplicate_branch_count} {lane_label}{overlap_detail}. Switch lanes or create a fresh lane before more agents edit it."
             )
         }
     }
+}
+
+fn smart_parallel_lanes(
+    linked_worktrees: &[git::repository::Worktree],
+    active_branch_ref: Option<&str>,
+) -> Vec<SmartParallelLane> {
+    linked_worktrees
+        .iter()
+        .take(MAX_SMART_PARALLEL_LANES)
+        .map(|worktree| {
+            let branch_ref = worktree.ref_name.as_ref().map(ToString::to_string);
+            let overlaps_active_branch = active_branch_ref
+                .zip(branch_ref.as_deref())
+                .is_some_and(|(active, linked)| active == linked);
+
+            SmartParallelLane {
+                label: smart_lane_label(&worktree.path),
+                branch_ref,
+                path_label: worktree.path.display().to_string(),
+                overlaps_active_branch,
+            }
+        })
+        .collect()
+}
+
+fn smart_lane_label(path: &std::path::Path) -> String {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| !name.is_empty())
+        .unwrap_or("workspace")
+        .to_string()
+}
+
+fn smart_branch_ref_label(ref_name: &str) -> &str {
+    ref_name
+        .strip_prefix("refs/heads/")
+        .or_else(|| ref_name.strip_prefix("refs/remotes/"))
+        .unwrap_or(ref_name)
 }
 
 #[derive(Clone)]
@@ -2181,6 +2897,7 @@ struct SmartMergeSnapshot {
     can_review: bool,
     can_create_pull_request: bool,
     can_commit: bool,
+    can_run_smart_merge: bool,
 }
 
 impl SmartMergeSnapshot {
@@ -2191,6 +2908,14 @@ impl SmartMergeSnapshot {
             .branch
             .as_ref()
             .map(|branch| branch.name().to_string());
+        let tracking_status = repository_ref
+            .branch
+            .as_ref()
+            .and_then(|branch| branch.tracking_status());
+        let has_upstream = repository_ref
+            .branch
+            .as_ref()
+            .is_some_and(|branch| branch.upstream.is_some());
         let entries = repository_ref
             .cached_status()
             .filter(|entry| entry.status.has_changes())
@@ -2200,7 +2925,13 @@ impl SmartMergeSnapshot {
             .iter()
             .filter(|entry| entry.status.is_conflicted())
             .count();
-        let state = smart_merge_state(branch_name.as_deref(), changed_count, conflicted_count);
+        let state = smart_merge_state(
+            branch_name.as_deref(),
+            changed_count,
+            conflicted_count,
+            tracking_status,
+            has_upstream,
+        );
 
         Some(Self {
             repository,
@@ -2210,6 +2941,8 @@ impl SmartMergeSnapshot {
                 branch_name.as_deref(),
                 changed_count,
                 conflicted_count,
+                tracking_status.map(|status| status.ahead),
+                tracking_status.map(|status| status.behind),
             ),
             icon: state.icon(),
             tone: state.tone(),
@@ -2218,17 +2951,20 @@ impl SmartMergeSnapshot {
                 .is_some_and(|branch_name| !is_merge_base_branch(branch_name)),
             can_create_pull_request: state == SmartMergeState::Ready,
             can_commit: changed_count > 0,
+            can_run_smart_merge: state.can_automerge(),
         })
     }
 
     fn should_render_card(&self) -> bool {
-        self.can_create_pull_request || self.tone.needs_attention()
+        self.can_run_smart_merge || self.tone.needs_attention()
     }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SmartMergeState {
     Ready,
+    NeedsPublish,
+    NeedsSync,
     NeedsCheckpoint,
     HasConflicts,
     ProtectedBranch,
@@ -2239,6 +2975,8 @@ impl SmartMergeState {
     fn status(self) -> &'static str {
         match self {
             SmartMergeState::Ready => "Ready",
+            SmartMergeState::NeedsPublish => "Publish needed",
+            SmartMergeState::NeedsSync => "Sync needed",
             SmartMergeState::NeedsCheckpoint => "Checkpoint needed",
             SmartMergeState::HasConflicts => "Blocked",
             SmartMergeState::ProtectedBranch => "Base branch",
@@ -2249,6 +2987,8 @@ impl SmartMergeState {
     fn icon(self) -> IconName {
         match self {
             SmartMergeState::Ready => IconName::PullRequest,
+            SmartMergeState::NeedsPublish => IconName::GitBranchPlus,
+            SmartMergeState::NeedsSync => IconName::PullRequest,
             SmartMergeState::NeedsCheckpoint => IconName::GitCommit,
             SmartMergeState::HasConflicts => IconName::GitMergeConflict,
             SmartMergeState::ProtectedBranch | SmartMergeState::Detached => IconName::GitBranch,
@@ -2259,10 +2999,16 @@ impl SmartMergeState {
         match self {
             SmartMergeState::Ready => ActivityTone::Done,
             SmartMergeState::HasConflicts => ActivityTone::Failed,
-            SmartMergeState::NeedsCheckpoint
+            SmartMergeState::NeedsPublish
+            | SmartMergeState::NeedsSync
+            | SmartMergeState::NeedsCheckpoint
             | SmartMergeState::ProtectedBranch
             | SmartMergeState::Detached => ActivityTone::Waiting,
         }
+    }
+
+    fn can_automerge(self) -> bool {
+        !matches!(self, SmartMergeState::Detached)
     }
 }
 
@@ -2270,6 +3016,8 @@ fn smart_merge_state(
     branch_name: Option<&str>,
     changed_count: usize,
     conflicted_count: usize,
+    tracking_status: Option<UpstreamTrackingStatus>,
+    has_upstream: bool,
 ) -> SmartMergeState {
     let Some(branch_name) = branch_name else {
         return SmartMergeState::Detached;
@@ -2287,6 +3035,22 @@ fn smart_merge_state(
         return SmartMergeState::ProtectedBranch;
     }
 
+    if !has_upstream {
+        return SmartMergeState::NeedsPublish;
+    }
+
+    let Some(tracking_status) = tracking_status else {
+        return SmartMergeState::NeedsPublish;
+    };
+
+    if tracking_status.behind > 0 {
+        return SmartMergeState::NeedsSync;
+    }
+
+    if tracking_status.ahead > 0 {
+        return SmartMergeState::NeedsPublish;
+    }
+
     SmartMergeState::Ready
 }
 
@@ -2295,24 +3059,42 @@ fn smart_merge_detail(
     branch_name: Option<&str>,
     changed_count: usize,
     conflicted_count: usize,
+    ahead_count: Option<u32>,
+    behind_count: Option<u32>,
 ) -> String {
     let branch = branch_name.unwrap_or("detached HEAD");
 
     match state {
         SmartMergeState::Ready => format!(
-            "{branch} is clean locally. Review the merge diff or open a PR so checks can take over."
+            "{branch} is clean, published, and ready for AI Smart Merge to watch checks and merge."
         ),
+        SmartMergeState::NeedsPublish => {
+            let ahead = ahead_count
+                .map(|count| format!(" {count} local commit(s) are ahead of upstream."))
+                .unwrap_or_default();
+            format!(
+                "{branch} is clean locally but still needs publishing.{ahead} AI Smart Merge can push, create the PR, watch checks, and merge."
+            )
+        }
+        SmartMergeState::NeedsSync => {
+            let behind = behind_count
+                .map(|count| format!(" {count} upstream commit(s) are ahead."))
+                .unwrap_or_default();
+            format!(
+                "{branch} needs a base sync before merge.{behind} AI Smart Merge should rebase or pull, then continue through PR and CI."
+            )
+        }
         SmartMergeState::NeedsCheckpoint => {
             let file_label = if changed_count == 1 { "file" } else { "files" };
             format!(
-                "{changed_count} changed {file_label} remain on {branch}. Commit or stash them before Smart Merge can prepare a clean PR."
+                "{changed_count} changed {file_label} remain on {branch}. AI Smart Merge should review, commit, test, push, open the PR, and continue to merge."
             )
         }
         SmartMergeState::HasConflicts => format!(
-            "{conflicted_count} conflict(s) remain on {branch}. Resolve them before Smart Merge can make this merge-ready."
+            "{conflicted_count} conflict(s) remain on {branch}. AI Smart Merge should resolve them before continuing to checks, PR, and merge."
         ),
         SmartMergeState::ProtectedBranch => format!(
-            "{branch} is the base branch. Split into a task branch before asking Smart Merge to prepare a PR."
+            "{branch} is the base branch. AI Smart Merge should split work into a task branch before preparing the PR."
         ),
         SmartMergeState::Detached => {
             "This workspace is detached. Create a task branch before Smart Merge can prepare a PR."
@@ -2719,16 +3501,14 @@ mod tests {
     #[test]
     fn smart_start_detail_summarizes_clean_handoff_counts() {
         let detail = smart_start_detail(
+            SmartStartState::LeftoverChanges,
             Some("feature"),
-            &[
-                status_entry(git::status::FileStatus::index(
-                    git::status::StatusCode::Modified,
-                )),
-                status_entry(git::status::FileStatus::worktree(
-                    git::status::StatusCode::Modified,
-                )),
-                status_entry(git::status::FileStatus::Untracked),
-            ],
+            3,
+            0,
+            1,
+            2,
+            0,
+            0,
         );
 
         assert!(detail.contains("3 changed files remain on feature"));
@@ -2739,22 +3519,58 @@ mod tests {
     #[test]
     fn smart_start_detail_prioritizes_conflicts() {
         let detail = smart_start_detail(
+            SmartStartState::Conflicts,
             Some("feature"),
-            &[
-                status_entry(git::status::FileStatus::Unmerged(
-                    git::status::UnmergedStatus {
-                        first_head: git::status::UnmergedStatusCode::Updated,
-                        second_head: git::status::UnmergedStatusCode::Updated,
-                    },
-                )),
-                status_entry(git::status::FileStatus::worktree(
-                    git::status::StatusCode::Modified,
-                )),
-            ],
+            2,
+            1,
+            0,
+            1,
+            0,
+            0,
         );
 
         assert!(detail.contains("including 1 conflict"));
         assert!(detail.contains("Resolve or isolate them"));
+    }
+
+    #[test]
+    fn smart_start_state_surfaces_lane_risk_before_work_starts() {
+        assert_eq!(
+            smart_start_state(0, 0, false, 2, 0),
+            Some(SmartStartState::NeedsLane)
+        );
+        assert_eq!(
+            smart_start_state(0, 0, true, 2, 1),
+            Some(SmartStartState::BranchShared)
+        );
+        assert_eq!(smart_start_state(0, 0, true, 0, 0), None);
+    }
+
+    #[test]
+    fn smart_start_detail_explains_lane_start_gate() {
+        let split = smart_start_detail(
+            SmartStartState::NeedsLane,
+            Some("feature"),
+            0,
+            0,
+            0,
+            0,
+            2,
+            0,
+        );
+        let overlap = smart_start_detail(
+            SmartStartState::BranchShared,
+            Some("feature"),
+            0,
+            0,
+            0,
+            0,
+            2,
+            1,
+        );
+
+        assert!(split.contains("main checkout while 2 linked lanes exist"));
+        assert!(overlap.contains("feature is already used by 1 linked lane"));
     }
 
     #[test]
@@ -2875,7 +3691,7 @@ mod tests {
         let item = smart_panel_merge_item(Some("feature"), 0, 0, SmartMergeState::Ready);
 
         assert_eq!(item.status, "Ready");
-        assert!(item.detail.contains("feature is clean locally"));
+        assert!(item.detail.contains("feature is clean, published"));
         assert_eq!(item.tone, ActivityTone::Done);
     }
 
@@ -2999,6 +3815,128 @@ mod tests {
     }
 
     #[test]
+    fn smart_workline_controls_keep_idle_bar_focused() {
+        let controls = smart_workline_controls(SmartWorklineControlState {
+            active_stage: None,
+            has_thread_entries: false,
+            has_start_gate: false,
+            activity_live: false,
+            todo_live: false,
+            panel_needs_review: false,
+            parallel_needs_attention: false,
+            merge_available: false,
+            update_state: SmartWorklineUpdateState::Idle,
+        });
+
+        assert_eq!(
+            workline_control_actions(&controls),
+            vec![
+                (SmartWorklineAction::Start, false),
+                (SmartWorklineAction::Update, false),
+                (SmartWorklineAction::Logs, false),
+            ]
+        );
+    }
+
+    #[test]
+    fn smart_workline_controls_promote_active_start_gate() {
+        let controls = smart_workline_controls(SmartWorklineControlState {
+            active_stage: Some(SmartWorklineStageKind::Start),
+            has_thread_entries: false,
+            has_start_gate: true,
+            activity_live: false,
+            todo_live: false,
+            panel_needs_review: false,
+            parallel_needs_attention: false,
+            merge_available: false,
+            update_state: SmartWorklineUpdateState::Idle,
+        });
+
+        assert_eq!(
+            workline_control_actions(&controls),
+            vec![
+                (SmartWorklineAction::Start, true),
+                (SmartWorklineAction::Update, false),
+                (SmartWorklineAction::Logs, false),
+            ]
+        );
+    }
+
+    #[test]
+    fn smart_workline_controls_share_review_merge_parallel_state() {
+        let controls = smart_workline_controls(SmartWorklineControlState {
+            active_stage: Some(SmartWorklineStageKind::Review),
+            has_thread_entries: true,
+            has_start_gate: false,
+            activity_live: false,
+            todo_live: false,
+            panel_needs_review: true,
+            parallel_needs_attention: true,
+            merge_available: true,
+            update_state: SmartWorklineUpdateState::Idle,
+        });
+
+        assert_eq!(
+            workline_control_actions(&controls),
+            vec![
+                (SmartWorklineAction::Panel, true),
+                (SmartWorklineAction::Merge, false),
+                (SmartWorklineAction::Parallel, false),
+                (SmartWorklineAction::Update, false),
+                (SmartWorklineAction::Logs, false),
+            ]
+        );
+    }
+
+    #[test]
+    fn smart_workline_update_control_reflects_update_status() {
+        let controls = smart_workline_controls(SmartWorklineControlState {
+            active_stage: None,
+            has_thread_entries: false,
+            has_start_gate: false,
+            activity_live: false,
+            todo_live: false,
+            panel_needs_review: false,
+            parallel_needs_attention: false,
+            merge_available: false,
+            update_state: SmartWorklineUpdateState::Updated,
+        });
+
+        let update = controls
+            .iter()
+            .find(|control| control.action == SmartWorklineAction::Update)
+            .expect("update control should be present");
+        assert_eq!(update.label(), "Restart");
+        assert!(update.is_visually_active());
+        assert!(!update.is_disabled());
+        assert!(update.should_restart());
+    }
+
+    #[test]
+    fn smart_workline_update_control_blocks_busy_clicks() {
+        let controls = smart_workline_controls(SmartWorklineControlState {
+            active_stage: None,
+            has_thread_entries: false,
+            has_start_gate: false,
+            activity_live: false,
+            todo_live: false,
+            panel_needs_review: false,
+            parallel_needs_attention: false,
+            merge_available: false,
+            update_state: SmartWorklineUpdateState::Downloading,
+        });
+
+        let update = controls
+            .iter()
+            .find(|control| control.action == SmartWorklineAction::Update)
+            .expect("update control should be present");
+        assert_eq!(update.label(), "Downloading");
+        assert!(update.is_visually_active());
+        assert!(update.is_disabled());
+        assert!(update.is_loading());
+    }
+
+    #[test]
     fn smart_parallel_state_recommends_lane_for_main_checkout() {
         assert_eq!(
             smart_parallel_state(false, 0),
@@ -3025,7 +3963,7 @@ mod tests {
 
     #[test]
     fn smart_parallel_detail_explains_main_checkout_risk() {
-        let detail = smart_parallel_detail(SmartParallelState::NeedsLane, Some("main"), 2, 0);
+        let detail = smart_parallel_detail(SmartParallelState::NeedsLane, Some("main"), 2, 0, &[]);
 
         assert!(detail.contains("main is the main checkout"));
         assert!(detail.contains("2 linked lanes exist"));
@@ -3034,7 +3972,8 @@ mod tests {
 
     #[test]
     fn smart_parallel_detail_explains_isolated_lane() {
-        let detail = smart_parallel_detail(SmartParallelState::Isolated, Some("feature"), 1, 0);
+        let detail =
+            smart_parallel_detail(SmartParallelState::Isolated, Some("feature"), 1, 0, &[]);
 
         assert!(detail.contains("feature is isolated"));
         assert!(detail.contains("1 other lane"));
@@ -3042,25 +3981,48 @@ mod tests {
 
     #[test]
     fn smart_parallel_detail_explains_branch_overlap() {
-        let detail = smart_parallel_detail(SmartParallelState::BranchShared, Some("feature"), 2, 2);
+        let detail = smart_parallel_detail(
+            SmartParallelState::BranchShared,
+            Some("feature"),
+            2,
+            2,
+            &[
+                SmartParallelLane {
+                    label: "lane-a".to_string(),
+                    branch_ref: Some("refs/heads/feature".to_string()),
+                    path_label: "/worktrees/lane-a".to_string(),
+                    overlaps_active_branch: true,
+                },
+                SmartParallelLane {
+                    label: "lane-b".to_string(),
+                    branch_ref: Some("refs/heads/feature".to_string()),
+                    path_label: "/worktrees/lane-b".to_string(),
+                    overlaps_active_branch: true,
+                },
+            ],
+        );
 
         assert!(detail.contains("feature also appears"));
         assert!(detail.contains("2 linked lanes"));
+        assert!(detail.contains("lane-a, lane-b"));
     }
 
     #[test]
     fn smart_merge_state_requires_a_branch() {
-        assert_eq!(smart_merge_state(None, 0, 0), SmartMergeState::Detached);
+        assert_eq!(
+            smart_merge_state(None, 0, 0, None, false),
+            SmartMergeState::Detached
+        );
     }
 
     #[test]
     fn smart_merge_state_blocks_base_branches() {
         assert_eq!(
-            smart_merge_state(Some("main"), 0, 0),
+            smart_merge_state(Some("main"), 0, 0, None, false),
             SmartMergeState::ProtectedBranch
         );
         assert_eq!(
-            smart_merge_state(Some("origin/master"), 0, 0),
+            smart_merge_state(Some("origin/master"), 0, 0, None, false),
             SmartMergeState::ProtectedBranch
         );
     }
@@ -3068,7 +4030,7 @@ mod tests {
     #[test]
     fn smart_merge_state_blocks_dirty_work() {
         assert_eq!(
-            smart_merge_state(Some("feature"), 2, 0),
+            smart_merge_state(Some("feature"), 2, 0, None, false),
             SmartMergeState::NeedsCheckpoint
         );
     }
@@ -3076,7 +4038,7 @@ mod tests {
     #[test]
     fn smart_merge_state_prioritizes_conflicts() {
         assert_eq!(
-            smart_merge_state(Some("feature"), 2, 1),
+            smart_merge_state(Some("feature"), 2, 1, None, false),
             SmartMergeState::HasConflicts
         );
     }
@@ -3084,17 +4046,67 @@ mod tests {
     #[test]
     fn smart_merge_state_accepts_clean_feature_branch() {
         assert_eq!(
-            smart_merge_state(Some("feature"), 0, 0),
+            smart_merge_state(
+                Some("feature"),
+                0,
+                0,
+                Some(UpstreamTrackingStatus {
+                    ahead: 0,
+                    behind: 0,
+                }),
+                true,
+            ),
             SmartMergeState::Ready
         );
     }
 
     #[test]
+    fn smart_merge_state_tracks_publish_and_sync_work() {
+        assert_eq!(
+            smart_merge_state(Some("feature"), 0, 0, None, false),
+            SmartMergeState::NeedsPublish
+        );
+        assert_eq!(
+            smart_merge_state(
+                Some("feature"),
+                0,
+                0,
+                Some(UpstreamTrackingStatus {
+                    ahead: 2,
+                    behind: 0,
+                }),
+                true,
+            ),
+            SmartMergeState::NeedsPublish
+        );
+        assert_eq!(
+            smart_merge_state(
+                Some("feature"),
+                0,
+                0,
+                Some(UpstreamTrackingStatus {
+                    ahead: 0,
+                    behind: 1,
+                }),
+                true,
+            ),
+            SmartMergeState::NeedsSync
+        );
+    }
+
+    #[test]
     fn smart_merge_detail_explains_checkpoint_requirement() {
-        let detail = smart_merge_detail(SmartMergeState::NeedsCheckpoint, Some("feature"), 3, 0);
+        let detail = smart_merge_detail(
+            SmartMergeState::NeedsCheckpoint,
+            Some("feature"),
+            3,
+            0,
+            None,
+            None,
+        );
 
         assert!(detail.contains("3 changed files remain on feature"));
-        assert!(detail.contains("Commit or stash"));
+        assert!(detail.contains("review, commit, test"));
     }
 
     fn status_entry(status: git::status::FileStatus) -> StatusEntry {
@@ -3117,5 +4129,14 @@ mod tests {
             status,
             diff_stat: Some(git::status::DiffStat { added, deleted }),
         }
+    }
+
+    fn workline_control_actions(
+        controls: &[SmartWorklineControl],
+    ) -> Vec<(SmartWorklineAction, bool)> {
+        controls
+            .iter()
+            .map(|control| (control.action, control.active))
+            .collect()
     }
 }

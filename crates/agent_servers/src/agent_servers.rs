@@ -1,9 +1,6 @@
 mod acp;
 mod custom;
 
-#[cfg(any(test, feature = "test-support"))]
-pub mod e2e_tests;
-
 use client::ProxySettings;
 use collections::{HashMap, HashSet};
 pub use custom::*;

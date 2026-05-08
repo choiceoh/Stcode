@@ -15,6 +15,7 @@ members = [
     "crates/assets",
     "crates/audio",
     "crates/auto_update",
+    "crates/auto_update_helper",
     "crates/auto_update_ui",
     "crates/aws_http_client",
     "crates/bedrock",
@@ -36,10 +37,13 @@ members = [
     "crates/copilot_chat",
     "crates/crashes",
     "crates/credentials_provider",
+    "crates/csv_preview",
     "crates/dap",
     "crates/dap_adapters",
     "crates/db",
     "crates/debug_adapter_extension",
+    "crates/deepseek",
+    "crates/denoise",
     "crates/diagnostics",
     "crates/edit_prediction",
     "crates/edit_prediction_context",
@@ -47,7 +51,10 @@ members = [
     "crates/edit_prediction_types",
     "crates/edit_prediction_ui",
     "crates/editor",
+    "crates/encoding_selector",
     "crates/env_var",
+    "crates/etw_tracing",
+    "crates/eval_utils",
     "crates/extension",
     "crates/extension_api",
     "crates/extension_host",
@@ -62,7 +69,6 @@ members = [
     "crates/git",
     "crates/git_hosting_providers",
     "crates/git_ui",
-    "crates/go_to_line",
     "crates/google_ai",
     "crates/grammars",
     "crates/gpui",
@@ -73,6 +79,7 @@ members = [
     "crates/gpui_platform",
     "crates/gpui_tokio",
     "crates/gpui_util",
+    "crates/gpui_web",
     "crates/gpui_wgpu",
     "crates/gpui_windows",
     "crates/html_to_markdown",
@@ -80,9 +87,9 @@ members = [
     "crates/http_client_tls",
     "crates/icons",
     "crates/image_viewer",
+    "crates/input_latency_ui",
     "crates/install_cli",
     "crates/json_schema_store",
-    "crates/keymap_editor",
     "crates/language",
     "crates/language_core",
     "crates/language_extension",
@@ -91,22 +98,29 @@ members = [
     "crates/language_models",
     "crates/language_models_cloud",
     "crates/language_onboarding",
+    "crates/language_selector",
     "crates/language_tools",
     "crates/languages",
+    "crates/line_ending_selector",
+    "crates/lmstudio",
     "crates/lsp",
     "crates/markdown",
     "crates/markdown_preview",
     "crates/media",
     "crates/menu",
+    "crates/migrator",
+    "crates/mistral",
     "crates/multi_buffer",
     "crates/nc",
     "crates/net",
     "crates/node_runtime",
     "crates/notifications",
+    "crates/ollama",
     "crates/onboarding",
     "crates/opencode",
     "crates/open_ai",
     "crates/open_path_prompt",
+    "crates/open_router",
     "crates/outline",
     "crates/outline_panel",
     "crates/panel",
@@ -137,6 +151,7 @@ members = [
     "crates/settings_content",
     "crates/settings_json",
     "crates/settings_macros",
+    "crates/settings_profile_selector",
     "crates/settings_ui",
     "crates/shell_command_parser",
     "crates/sidebar",
@@ -146,9 +161,11 @@ members = [
     "crates/sqlez_macros",
     "crates/streaming_diff",
     "crates/sum_tree",
+    "crates/svg_preview",
     "crates/system_specs",
     "crates/syntax_theme",
     "crates/task",
+    "crates/tasks_ui",
     "crates/telemetry",
     "crates/telemetry_events",
     "crates/terminal",
@@ -160,12 +177,17 @@ members = [
     "crates/theme_selector",
     "crates/time_format",
     "crates/title_bar",
+    "crates/toolchain_selector",
     "crates/ui",
     "crates/ui_input",
     "crates/ui_macros",
+    "crates/ui_prompt",
     "crates/util",
     "crates/util_macros",
+    "crates/vercel",
     "crates/watch",
+    "crates/web_search",
+    "crates/web_search_providers",
     "crates/workspace",
     "crates/worktree",
     "crates/x_ai",
@@ -234,15 +256,20 @@ copilot_ui = { path = "crates/copilot_ui" }
 crashes = { path = "crates/crashes" }
 credentials_provider = { path = "crates/credentials_provider" }
 crossbeam = "0.8.4"
+csv_preview = { path = "crates/csv_preview"}
 dap = { path = "crates/dap" }
 dap_adapters = { path = "crates/dap_adapters" }
 db = { path = "crates/db" }
 debug_adapter_extension = { path = "crates/debug_adapter_extension" }
+deepseek = { path = "crates/deepseek" }
 derive_refineable = { path = "crates/refineable/derive_refineable" }
 diagnostics = { path = "crates/diagnostics" }
 dialoguer = { version = "0.12", default-features = false }
 editor = { path = "crates/editor" }
+encoding_selector = { path = "crates/encoding_selector" }
 env_var = { path = "crates/env_var" }
+etw_tracing = { path = "crates/etw_tracing" }
+eval_utils = { path = "crates/eval_utils" }
 extension = { path = "crates/extension" }
 extension_host = { path = "crates/extension_host" }
 extensions_ui = { path = "crates/extensions_ui" }
@@ -256,7 +283,6 @@ fuzzy_nucleo = { path = "crates/fuzzy_nucleo" }
 git = { path = "crates/git" }
 git_hosting_providers = { path = "crates/git_hosting_providers" }
 git_ui = { path = "crates/git_ui" }
-go_to_line = { path = "crates/go_to_line" }
 google_ai = { path = "crates/google_ai" }
 grammars = { path = "crates/grammars" }
 gpui = { path = "crates/gpui", default-features = false }
@@ -265,6 +291,7 @@ gpui_linux = { path = "crates/gpui_linux", default-features = false }
 gpui_macos = { path = "crates/gpui_macos", default-features = false }
 gpui_macros = { path = "crates/gpui_macros" }
 gpui_platform = { path = "crates/gpui_platform", default-features = false }
+gpui_web = { path = "crates/gpui_web" }
 gpui_wgpu = { path = "crates/gpui_wgpu" }
 gpui_windows = { path = "crates/gpui_windows", default-features = false }
 gpui_tokio = { path = "crates/gpui_tokio" }
@@ -277,9 +304,9 @@ image_viewer = { path = "crates/image_viewer" }
 edit_prediction_types = { path = "crates/edit_prediction_types" }
 edit_prediction_ui = { path = "crates/edit_prediction_ui" }
 edit_prediction_context = { path = "crates/edit_prediction_context" }
+input_latency_ui = { path = "crates/input_latency_ui" }
 install_cli = { path = "crates/install_cli" }
 json_schema_store = { path = "crates/json_schema_store" }
-keymap_editor = { path = "crates/keymap_editor" }
 language = { path = "crates/language" }
 language_core = { path = "crates/language_core" }
 language_extension = { path = "crates/language_extension" }
@@ -288,23 +315,31 @@ language_model_core = { path = "crates/language_model_core" }
 language_models = { path = "crates/language_models" }
 language_models_cloud = { path = "crates/language_models_cloud" }
 language_onboarding = { path = "crates/language_onboarding" }
+language_selector = { path = "crates/language_selector" }
 language_tools = { path = "crates/language_tools" }
 languages = { path = "crates/languages" }
+line_ending_selector = { path = "crates/line_ending_selector" }
+lmstudio = { path = "crates/lmstudio" }
 lsp = { path = "crates/lsp" }
 markdown = { path = "crates/markdown" }
 markdown_preview = { path = "crates/markdown_preview" }
+svg_preview = { path = "crates/svg_preview" }
 media = { path = "crates/media" }
 menu = { path = "crates/menu" }
 mermaid-rs-renderer = { git = "https://github.com/zed-industries/mermaid-rs-renderer", rev = "374db9ead5426697c6c2111151d9f246899bc638", default-features = false }
+migrator = { path = "crates/migrator" }
+mistral = { path = "crates/mistral" }
 multi_buffer = { path = "crates/multi_buffer" }
 nc = { path = "crates/nc" }
 net = { path = "crates/net" }
 node_runtime = { path = "crates/node_runtime" }
 notifications = { path = "crates/notifications" }
+ollama = { path = "crates/ollama" }
 onboarding = { path = "crates/onboarding" }
 opencode = { path = "crates/opencode" }
 open_ai = { path = "crates/open_ai" }
 open_path_prompt = { path = "crates/open_path_prompt" }
+open_router = { path = "crates/open_router", features = ["schemars"] }
 outline = { path = "crates/outline" }
 outline_panel = { path = "crates/outline_panel" }
 panel = { path = "crates/panel" }
@@ -312,6 +347,7 @@ paths = { path = "crates/paths" }
 perf = { path = "tooling/perf" }
 picker = { path = "crates/picker" }
 prettier = { path = "crates/prettier" }
+settings_profile_selector = { path = "crates/settings_profile_selector" }
 project = { path = "crates/project" }
 project_panel = { path = "crates/project_panel" }
 project_symbols = { path = "crates/project_symbols" }
@@ -348,6 +384,7 @@ codestral = { path = "crates/codestral" }
 system_specs = { path = "crates/system_specs" }
 syntax_theme = { path = "crates/syntax_theme" }
 task = { path = "crates/task" }
+tasks_ui = { path = "crates/tasks_ui" }
 telemetry = { path = "crates/telemetry" }
 telemetry_events = { path = "crates/telemetry_events" }
 terminal = { path = "crates/terminal" }
@@ -360,13 +397,18 @@ theme_selector = { path = "crates/theme_selector" }
 time_format = { path = "crates/time_format" }
 platform_title_bar = { path = "crates/platform_title_bar" }
 title_bar = { path = "crates/title_bar" }
+toolchain_selector = { path = "crates/toolchain_selector" }
 ui = { path = "crates/ui" }
 ui_input = { path = "crates/ui_input" }
 ui_macros = { path = "crates/ui_macros" }
+ui_prompt = { path = "crates/ui_prompt" }
 util = { path = "crates/util" }
 util_macros = { path = "crates/util_macros" }
+vercel = { path = "crates/vercel" }
 
 watch = { path = "crates/watch" }
+web_search = { path = "crates/web_search" }
+web_search_providers = { path = "crates/web_search_providers" }
 workspace = { path = "crates/workspace" }
 worktree = { path = "crates/worktree" }
 x_ai = { path = "crates/x_ai" }
@@ -813,8 +855,10 @@ image_viewer = { codegen-units = 1 }
 edit_prediction_ui = { codegen-units = 1 }
 install_cli = { codegen-units = 1 }
 json_schema_store = { codegen-units = 1 }
+lmstudio = { codegen-units = 1 }
 menu = { codegen-units = 1 }
 notifications = { codegen-units = 1 }
+ollama = { codegen-units = 1 }
 outline = { codegen-units = 1 }
 paths = { codegen-units = 1 }
 prettier = { codegen-units = 1 }

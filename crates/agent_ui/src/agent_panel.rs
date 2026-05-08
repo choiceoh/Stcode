@@ -85,12 +85,14 @@ use ui::{
 use util::ResultExt as _;
 use workspace::{
     AppLaunchMode, CollaboratorId, DraggedSelection, DraggedTab, PathList, SerializedPathList,
-    ToggleWorkspaceSidebar, ToggleZoom, Workspace, WorkspaceId,
+    SidebarSide, ToggleWorkspaceSidebar, ToggleZoom, Workspace, WorkspaceId,
     dock::{DockPosition, Panel, PanelEvent},
 };
 
 const AGENT_PANEL_KEY: &str = "agent_panel";
 const MIN_PANEL_WIDTH: Pixels = px(300.);
+const STCODE_AGENT_PANEL_MIN_WIDTH: Pixels = px(720.);
+const STCODE_AGENT_PANEL_DEFAULT_WIDTH: Pixels = px(1120.);
 const LAST_USED_AGENT_KEY: &str = "agent_panel__last_used_external_agent";
 
 /// Maximum number of idle threads kept in the agent panel's retained list.
@@ -301,6 +303,10 @@ fn stcode_smart_run_steps(
     kind: StcodeSmartRunKind,
     phase: StcodeSmartRunPhase,
 ) -> Vec<StcodeSmartRunStep> {
+    if kind == StcodeSmartRunKind::Merge {
+        return stcode_smart_merge_run_steps(phase);
+    }
+
     let agent_phase = match phase {
         StcodeSmartRunPhase::Pending => StcodeSmartRunPhase::Active,
         StcodeSmartRunPhase::Active => StcodeSmartRunPhase::Active,
@@ -342,6 +348,60 @@ fn stcode_smart_run_steps(
                 _ => "Waiting",
             },
             phase: checkpoint_phase,
+        },
+    ]
+}
+
+fn stcode_smart_merge_run_steps(phase: StcodeSmartRunPhase) -> Vec<StcodeSmartRunStep> {
+    let agent_phase = match phase {
+        StcodeSmartRunPhase::Pending | StcodeSmartRunPhase::Active => StcodeSmartRunPhase::Active,
+        StcodeSmartRunPhase::Complete => StcodeSmartRunPhase::Complete,
+        StcodeSmartRunPhase::Blocked => StcodeSmartRunPhase::Blocked,
+    };
+    let downstream_phase = match phase {
+        StcodeSmartRunPhase::Complete => StcodeSmartRunPhase::Complete,
+        StcodeSmartRunPhase::Blocked => StcodeSmartRunPhase::Blocked,
+        _ => StcodeSmartRunPhase::Pending,
+    };
+
+    vec![
+        StcodeSmartRunStep {
+            label: "Snapshot",
+            status: "Done",
+            phase: StcodeSmartRunPhase::Complete,
+        },
+        StcodeSmartRunStep {
+            label: "Merge runbook",
+            status: "Sent",
+            phase: StcodeSmartRunPhase::Complete,
+        },
+        StcodeSmartRunStep {
+            label: "Agent",
+            status: match agent_phase {
+                StcodeSmartRunPhase::Active => "Running",
+                StcodeSmartRunPhase::Complete => "Done",
+                StcodeSmartRunPhase::Blocked => "Blocked",
+                StcodeSmartRunPhase::Pending => "Waiting",
+            },
+            phase: agent_phase,
+        },
+        StcodeSmartRunStep {
+            label: "Checks + PR",
+            status: match downstream_phase {
+                StcodeSmartRunPhase::Complete => "Done",
+                StcodeSmartRunPhase::Blocked => "Blocked",
+                _ => "Waiting",
+            },
+            phase: downstream_phase,
+        },
+        StcodeSmartRunStep {
+            label: "Merge",
+            status: match downstream_phase {
+                StcodeSmartRunPhase::Complete => "Done",
+                StcodeSmartRunPhase::Blocked => "Blocked",
+                _ => "Waiting",
+            },
+            phase: downstream_phase,
         },
     ]
 }
@@ -819,9 +879,16 @@ fn build_conflicted_files_resolution_prompt(
 }
 
 const MAX_STCODE_SMART_PROMPT_FILES: usize = 8;
+const MAX_STCODE_SMART_PROMPT_LANES: usize = 8;
 
 struct StcodeSmartPromptContext {
     branch_name: Option<String>,
+    branch_ref: Option<String>,
+    upstream_ref: Option<String>,
+    upstream_remote: Option<String>,
+    ahead_count: Option<u32>,
+    behind_count: Option<u32>,
+    work_directory: PathBuf,
     changed_count: usize,
     staged_count: usize,
     unstaged_count: usize,
@@ -833,6 +900,7 @@ struct StcodeSmartPromptContext {
     is_linked_worktree: bool,
     shared_branch_lane_count: usize,
     files: Vec<StcodeSmartPromptFile>,
+    lanes: Vec<StcodeSmartPromptLane>,
 }
 
 struct StcodeSmartPromptFile {
@@ -840,6 +908,14 @@ struct StcodeSmartPromptFile {
     status: &'static str,
     diff_label: Option<String>,
     abs_path: Option<PathBuf>,
+}
+
+struct StcodeSmartPromptLane {
+    label: String,
+    branch_ref: Option<String>,
+    path: PathBuf,
+    is_current: bool,
+    overlaps_active_branch: bool,
 }
 
 impl StcodeSmartPromptContext {
@@ -854,6 +930,21 @@ impl StcodeSmartPromptContext {
             .branch
             .as_ref()
             .map(|branch| branch.ref_name.to_string());
+        let upstream_ref = repository_ref
+            .branch
+            .as_ref()
+            .and_then(|branch| branch.upstream.as_ref())
+            .map(|upstream| upstream.ref_name.to_string());
+        let upstream_remote = repository_ref
+            .branch
+            .as_ref()
+            .and_then(|branch| branch.upstream.as_ref())
+            .and_then(|upstream| upstream.remote_name())
+            .map(str::to_string);
+        let tracking_status = repository_ref
+            .branch
+            .as_ref()
+            .and_then(|branch| branch.tracking_status());
         let entries = repository_ref
             .cached_status()
             .filter(|entry| entry.status.has_changes())
@@ -876,6 +967,12 @@ impl StcodeSmartPromptContext {
 
         Some(Self {
             branch_name,
+            branch_ref: branch_ref.clone(),
+            upstream_ref,
+            upstream_remote,
+            ahead_count: tracking_status.map(|status| status.ahead),
+            behind_count: tracking_status.map(|status| status.behind),
+            work_directory: repository_ref.work_directory_abs_path.to_path_buf(),
             changed_count: entries.len(),
             staged_count: entries
                 .iter()
@@ -929,11 +1026,27 @@ impl StcodeSmartPromptContext {
                     }
                 })
                 .collect(),
+            lanes: stcode_smart_prompt_lanes(
+                &repository_ref.work_directory_abs_path,
+                branch_ref.as_deref(),
+                repository_ref.linked_worktrees(),
+            ),
         })
     }
 
     fn snapshot_text(&self) -> String {
         let branch = self.branch_name.as_deref().unwrap_or("detached HEAD");
+        let branch_ref = self.branch_ref.as_deref().unwrap_or("none");
+        let upstream = self.upstream_ref.as_deref().unwrap_or("not configured");
+        let upstream_remote = self.upstream_remote.as_deref().unwrap_or("none");
+        let ahead = self
+            .ahead_count
+            .map(|count| count.to_string())
+            .unwrap_or_else(|| "unknown".to_string());
+        let behind = self
+            .behind_count
+            .map(|count| count.to_string())
+            .unwrap_or_else(|| "unknown".to_string());
         let lane = if self.is_linked_worktree {
             "isolated linked worktree"
         } else {
@@ -946,12 +1059,21 @@ impl StcodeSmartPromptContext {
         };
         let mut text = format!(
             indoc::indoc!(
-                "Live workspace snapshot:
+                 "Live workspace snapshot:
                  - Branch: {branch}
+                 - Branch ref: {branch_ref}
+                 - Worktree: {worktree}
+                 - Upstream: {upstream}; remote {upstream_remote}; ahead {ahead}; behind {behind}
                  - Lane: {lane}; {linked_worktree_count} linked lane(s); {shared_branch_lane_count} branch overlap(s)
                  - Changes: {changed_count} changed {file_label}, {staged_count} staged, {unstaged_count} unstaged, {conflicted_count} conflicts, {untracked_count} new, +{added_lines} -{removed_lines}"
             ),
             branch = branch,
+            branch_ref = branch_ref,
+            worktree = self.work_directory.display(),
+            upstream = upstream,
+            upstream_remote = upstream_remote,
+            ahead = ahead,
+            behind = behind,
             lane = lane,
             linked_worktree_count = self.linked_worktree_count,
             shared_branch_lane_count = self.shared_branch_lane_count,
@@ -985,6 +1107,28 @@ impl StcodeSmartPromptContext {
             }
         }
 
+        text.push_str("\n- Lane inventory:");
+        for lane in &self.lanes {
+            let role = if lane.is_current { "current" } else { "linked" };
+            let branch = lane
+                .branch_ref
+                .as_deref()
+                .map(stcode_smart_branch_ref_label)
+                .unwrap_or("detached HEAD");
+            let overlap = if lane.overlaps_active_branch {
+                "; overlaps active branch"
+            } else {
+                ""
+            };
+            text.push_str(&format!(
+                "\n  - {role}: {}; branch {}; path {}{}",
+                lane.label,
+                branch,
+                lane.path.display(),
+                overlap
+            ));
+        }
+
         text
     }
 
@@ -1014,6 +1158,57 @@ impl StcodeSmartPromptContext {
             })
             .collect()
     }
+}
+
+fn stcode_smart_prompt_lanes(
+    work_directory: &std::path::Path,
+    active_branch_ref: Option<&str>,
+    linked_worktrees: &[git::repository::Worktree],
+) -> Vec<StcodeSmartPromptLane> {
+    let mut lanes = vec![StcodeSmartPromptLane {
+        label: stcode_smart_lane_label(work_directory),
+        branch_ref: active_branch_ref.map(str::to_string),
+        path: work_directory.to_path_buf(),
+        is_current: true,
+        overlaps_active_branch: false,
+    }];
+
+    lanes.extend(
+        linked_worktrees
+            .iter()
+            .take(MAX_STCODE_SMART_PROMPT_LANES.saturating_sub(1))
+            .map(|worktree| {
+                let branch_ref = worktree.ref_name.as_ref().map(ToString::to_string);
+                let overlaps_active_branch = active_branch_ref
+                    .zip(branch_ref.as_deref())
+                    .is_some_and(|(active, linked)| active == linked);
+
+                StcodeSmartPromptLane {
+                    label: stcode_smart_lane_label(&worktree.path),
+                    branch_ref,
+                    path: worktree.path.clone(),
+                    is_current: false,
+                    overlaps_active_branch,
+                }
+            }),
+    );
+
+    lanes
+}
+
+fn stcode_smart_lane_label(path: &std::path::Path) -> String {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| !name.is_empty())
+        .unwrap_or("workspace")
+        .to_string()
+}
+
+fn stcode_smart_branch_ref_label(ref_name: &str) -> &str {
+    ref_name
+        .strip_prefix("refs/heads/")
+        .or_else(|| ref_name.strip_prefix("refs/remotes/"))
+        .unwrap_or(ref_name)
 }
 
 fn stcode_smart_file_status(status: git::status::FileStatus) -> &'static str {
@@ -1080,9 +1275,9 @@ fn build_stcode_smart_start_prompt(
         indoc::indoc!(
         "AI Smart Start: prepare this workspace for an autonomous coding session.
 
-         Inspect the current branch, worktree, and local changes. If leftover work exists, decide the safest path yourself: preserve useful changes in a commit, stash unrelated leftovers, resolve obvious conflicts, or split the next task into an isolated worktree lane. Do not ask the user to choose between routine Git/worktree options.
+         Inspect the current branch, worktree, lane inventory, branch overlap, and local changes. If leftover work exists, decide the safest path yourself: preserve useful changes in a commit, stash unrelated leftovers, resolve obvious conflicts, or split the next task into an isolated worktree lane. If this session is still on the main checkout or shares a branch with another linked lane, create or move to a fresh isolated lane before starting real implementation work. Do not ask the user to choose between routine Git/worktree options.
 
-         Continue until the session has a clean, understandable handoff state and the next coding lane cannot overwrite another agent's work. Summarize what you preserved, what lane/branch is active, and the next autonomous step."
+         Continue until the session has a clean, understandable handoff state and the next coding lane cannot overwrite another agent's work. Summarize what you preserved, what lane/branch is active, any lane you created or avoided, and the next autonomous step."
         ),
         context,
     )
@@ -1123,11 +1318,20 @@ fn build_stcode_smart_merge_prompt(
 ) -> Vec<acp::ContentBlock> {
     stcode_smart_prompt(
         indoc::indoc!(
-        "AI Smart Merge: autonomously prepare this branch for merge.
+        "AI Smart Merge: autonomously take this workline all the way through merge.
 
-         Inspect the current branch, local changes, conflicts, default branch, recent commits, and available checks. If local changes remain, review and commit them with a clear message. If conflicts or stale base changes exist, resolve or rebase them. Run the fastest meaningful checks first, then widen only when needed for confidence.
+         Treat this as a one-click merge run, not a status review. Do not stop at opening a pull request. Continue through the whole merge lifecycle unless there is a missing credential, destructive data-loss risk, or a product-direction decision that cannot be inferred from the repository.
 
-         If no PR exists, create one. If CI or local checks fail, inspect the failure and fix it. Continue until the branch is clean, non-conflicting, and merge-ready with checks passing or with a precise blocker that cannot be solved locally. Do not ask the user to operate Git, pick routine merge options, or approve normal commands."
+         Merge runbook:
+         1. Inspect the current branch, worktree, upstream, local changes, conflicts, default branch, recent commits, and repository PR/check conventions.
+         2. If local changes remain, review them, keep only task-related work, run formatting when cheap, and commit with a clear imperative message.
+         3. If the branch is detached, on a base branch, shared with another lane, or stale behind its base, create or move to a safe task branch and preserve the work before continuing.
+         4. Run the fastest meaningful local checks first, then widen only when needed for confidence. In this repository, prefer focused Rust checks before long full-suite runs.
+         5. Push the branch. If no pull request exists, create one with a clear imperative title, a useful body, verification notes, and a final Release Notes section.
+         6. Watch required checks. If GraphQL quota or a UI path fails, use GitHub REST or another available route. If checks fail, inspect logs, fix the branch, and continue.
+         7. When checks are passing or no required checks exist and the PR is clean, merge it using the repository's normal merge method, delete the remote branch when safe, and sync the local base branch.
+
+         End state required: merged PR or a precise blocker that cannot be solved from this machine. Do not ask the user to operate Git, pick routine merge options, approve normal commands, or manually babysit CI."
         ),
         context,
     )
@@ -3223,14 +3427,26 @@ impl Panel for AgentPanel {
     fn default_size(&self, window: &Window, cx: &App) -> Pixels {
         let settings = AgentSettings::get_global(cx);
         match self.position(window, cx) {
-            DockPosition::Left | DockPosition::Right => settings.default_width,
+            DockPosition::Left | DockPosition::Right => {
+                if AppLaunchMode::is_stcode(cx) {
+                    settings.default_width.max(STCODE_AGENT_PANEL_DEFAULT_WIDTH)
+                } else {
+                    settings.default_width
+                }
+            }
             DockPosition::Bottom => settings.default_height,
         }
     }
 
     fn min_size(&self, window: &Window, cx: &App) -> Option<Pixels> {
         match self.position(window, cx) {
-            DockPosition::Left | DockPosition::Right => Some(MIN_PANEL_WIDTH),
+            DockPosition::Left | DockPosition::Right => {
+                if AppLaunchMode::is_stcode(cx) {
+                    Some(STCODE_AGENT_PANEL_MIN_WIDTH)
+                } else {
+                    Some(MIN_PANEL_WIDTH)
+                }
+            }
             DockPosition::Bottom => None,
         }
     }
@@ -3588,6 +3804,7 @@ impl AgentPanel {
             }
             _ => false,
         };
+        let show_reauthenticate = has_auth_methods && !AppLaunchMode::is_stcode(cx);
 
         PopoverMenu::new("agent-options-menu")
             .trigger_with_tooltip(
@@ -3649,7 +3866,7 @@ impl AgentPanel {
                             .separator()
                             .action("Toggle Threads Sidebar", Box::new(ToggleWorkspaceSidebar));
 
-                        if has_auth_methods {
+                        if show_reauthenticate {
                             menu = menu.action("Reauthenticate", Box::new(ReauthenticateAgent))
                         }
 
@@ -3672,6 +3889,27 @@ impl AgentPanel {
                     Tooltip::for_action_in("Go Back", &workspace::GoBack, &focus_handle, cx)
                 }
             })
+    }
+
+    fn stcode_toolbar_needs_window_button_inset(&self, window: &Window, cx: &App) -> bool {
+        if !(cfg!(target_os = "macos") && AppLaunchMode::is_stcode(cx) && !window.is_fullscreen()) {
+            return false;
+        }
+
+        let left_sidebar_open = self
+            .workspace
+            .upgrade()
+            .and_then(|workspace| {
+                let multi_workspace = workspace.read(cx).multi_workspace().cloned()?;
+                multi_workspace.upgrade()
+            })
+            .map(|multi_workspace| {
+                let sidebar = multi_workspace.read(cx).sidebar_render_state(cx);
+                sidebar.open && sidebar.side == SidebarSide::Left
+            })
+            .unwrap_or(false);
+
+        !left_sidebar_open
     }
 
     fn render_toolbar(&self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
@@ -3950,6 +4188,8 @@ impl AgentPanel {
         };
 
         let use_v2_empty_toolbar = is_empty_state && !is_in_history_or_config;
+        let needs_stcode_window_button_inset =
+            self.stcode_toolbar_needs_window_button_inset(window, cx);
 
         let max_content_width = AgentSettings::get_global(cx).max_content_width;
 
@@ -4016,6 +4256,9 @@ impl AgentPanel {
                         .size_full()
                         .gap(DynamicSpacing::Base04.rems(cx))
                         .pl(DynamicSpacing::Base04.rems(cx))
+                        .when(needs_stcode_window_button_inset, |this| {
+                            this.pl(px(ui::utils::TRAFFIC_LIGHT_PADDING))
+                        })
                         .child(agent_selector_menu),
                 )
                 .child(
@@ -4055,6 +4298,9 @@ impl AgentPanel {
                         .size_full()
                         .gap(DynamicSpacing::Base04.rems(cx))
                         .pl(DynamicSpacing::Base04.rems(cx))
+                        .when(needs_stcode_window_button_inset, |this| {
+                            this.pl(px(ui::utils::TRAFFIC_LIGHT_PADDING))
+                        })
                         .child(if self.is_overlay_open() {
                             self.render_toolbar_back_button(cx).into_any_element()
                         } else {
@@ -4127,6 +4373,10 @@ impl AgentPanel {
     }
 
     fn should_render_new_user_onboarding(&mut self, cx: &mut Context<Self>) -> bool {
+        if AppLaunchMode::is_stcode(cx) {
+            return false;
+        }
+
         if self
             .new_user_onboarding_upsell_dismissed
             .load(Ordering::Acquire)
@@ -4355,7 +4605,7 @@ impl AgentPanel {
         )
     }
 
-    fn stcode_smart_run_snapshot(&self, cx: &App) -> Option<StcodeSmartRunSnapshot> {
+    pub(crate) fn stcode_smart_run_snapshot(&self, cx: &App) -> Option<StcodeSmartRunSnapshot> {
         let run = self.stcode_smart_run.as_ref()?;
         Some(run.snapshot(self.stcode_smart_run_thread_status(run, cx)))
     }
@@ -5236,6 +5486,12 @@ mod tests {
     fn test_stcode_smart_prompts_drive_autonomous_work() {
         let context = StcodeSmartPromptContext {
             branch_name: Some("codex/v13".to_string()),
+            branch_ref: Some("refs/heads/codex/v13".to_string()),
+            upstream_ref: Some("refs/remotes/origin/codex/v13".to_string()),
+            upstream_remote: Some("origin".to_string()),
+            ahead_count: Some(1),
+            behind_count: Some(0),
+            work_directory: PathBuf::from("/project"),
             changed_count: 2,
             staged_count: 1,
             unstaged_count: 1,
@@ -5252,6 +5508,22 @@ mod tests {
                 diff_label: Some("+12 -3".to_string()),
                 abs_path: Some(PathBuf::from("/project/src/main.rs")),
             }],
+            lanes: vec![
+                StcodeSmartPromptLane {
+                    label: "project".to_string(),
+                    branch_ref: Some("refs/heads/codex/v13".to_string()),
+                    path: PathBuf::from("/project"),
+                    is_current: true,
+                    overlaps_active_branch: false,
+                },
+                StcodeSmartPromptLane {
+                    label: "project-parallel".to_string(),
+                    branch_ref: Some("refs/heads/codex/v13".to_string()),
+                    path: PathBuf::from("/worktrees/project-parallel"),
+                    is_current: false,
+                    overlaps_active_branch: true,
+                },
+            ],
         };
 
         let start_blocks = build_stcode_smart_start_prompt(Some(&context));
@@ -5278,12 +5550,17 @@ mod tests {
         let parallel = expect_text_block(&parallel_blocks[0]);
         assert!(parallel.contains("parallel autonomous agents"));
         assert!(parallel.contains("branch overlap"));
+        assert!(parallel.contains("Lane inventory"));
+        assert!(parallel.contains("project-parallel"));
+        assert!(parallel.contains("overlaps active branch"));
 
         let merge_blocks = build_stcode_smart_merge_prompt(Some(&context));
         let merge = expect_text_block(&merge_blocks[0]);
         assert!(merge.contains("AI Smart Merge"));
-        assert!(merge.contains("CI or local checks fail"));
-        assert!(merge.contains("merge-ready"));
+        assert!(merge.contains("one-click merge run"));
+        assert!(merge.contains("Do not stop at opening a pull request"));
+        assert!(merge.contains("delete the remote branch"));
+        assert!(merge.contains("Upstream: refs/remotes/origin/codex/v13"));
     }
 
     #[test]
@@ -5340,7 +5617,13 @@ mod tests {
             snapshot
                 .steps
                 .iter()
-                .any(|step| step.label == "Merge-ready"
+                .any(|step| step.label == "Merge" && step.phase == StcodeSmartRunPhase::Complete)
+        );
+        assert!(
+            snapshot
+                .steps
+                .iter()
+                .any(|step| step.label == "Checks + PR"
                     && step.phase == StcodeSmartRunPhase::Complete)
         );
     }

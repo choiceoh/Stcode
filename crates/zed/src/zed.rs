@@ -2,17 +2,16 @@ mod app_menus;
 pub mod edit_prediction_registry;
 #[cfg(target_os = "macos")]
 pub(crate) mod mac_only_instance;
+mod migrate;
 mod open_listener;
 mod open_url_modal;
 mod quick_action_bar;
 pub mod remote_debug;
 pub mod telemetry_log;
-#[cfg(all(target_os = "macos", feature = "visual-tests"))]
-pub mod visual_tests;
 #[cfg(target_os = "windows")]
 pub(crate) mod windows_only_instance;
 
-use agent_ui::AgentDiffToolbar;
+use agent_ui::{AgentDiffToolbar, StcodeWorklineStatusItem};
 use anyhow::Context as _;
 pub use app_menus::*;
 use assets::Assets;
@@ -42,6 +41,8 @@ use language_onboarding::BasedPyrightBanner;
 use language_tools::lsp_button::{self, LspButton};
 use language_tools::lsp_log_view::LspLogToolbarItemView;
 use markdown::{Markdown, MarkdownElement, MarkdownFont, MarkdownStyle};
+use migrate::{MigrationBanner, MigrationEvent, MigrationNotification, MigrationType};
+use migrator::migrate_keymap;
 use onboarding::DOCS_URL;
 use onboarding::multibuffer_hint::MultibufferHint;
 pub use open_listener::*;
@@ -59,7 +60,7 @@ use rope::Rope;
 use search::project_search::ProjectSearchBar;
 use settings::{
     BaseKeymap, DEFAULT_KEYMAP_PATH, InvalidSettingsError, KeybindSource, KeymapFile,
-    KeymapFileLoadResult, Settings, SettingsFile, SettingsStore,
+    KeymapFileLoadResult, MigrationStatus, Settings, SettingsFile, SettingsStore,
     initial_local_debug_tasks_content, initial_project_settings_content, initial_tasks_content,
     update_settings_file,
 };
@@ -212,8 +213,12 @@ pub fn init(cx: &mut App) {
         });
     })
     .on_action(|_: &OpenAccountSettings, cx| {
-        with_active_or_new_workspace(cx, |_, _, cx| {
-            cx.open_url(&zed_urls::account_url(cx));
+        with_active_or_new_workspace(cx, |_, window, cx| {
+            if workspace::AppLaunchMode::is_stcode(cx) {
+                window.dispatch_action(zed_actions::agent::OpenSettings.boxed_clone(), cx);
+            } else {
+                cx.open_url(&zed_urls::account_url(cx));
+            }
         });
     })
     .on_action(|_: &OpenTasks, cx| {
@@ -511,58 +516,76 @@ pub fn initialize_workspace(app_state: Arc<AppState>, cx: &mut App) {
             crashes::set_gpu_info(specs);
         }
 
-        let edit_prediction_menu_handle = PopoverMenuHandle::default();
-        let edit_prediction_ui = cx.new(|cx| {
-            edit_prediction_ui::EditPredictionButton::new(
-                app_state.fs.clone(),
-                app_state.user_store.clone(),
-                edit_prediction_menu_handle.clone(),
-                workspace.project().clone(),
+        if workspace::AppLaunchMode::is_stcode(cx) {
+            let stcode_workline = cx.new(|cx| {
+                StcodeWorklineStatusItem::new(&workspace_handle, workspace.project().clone(), cx)
+            });
+            workspace.status_bar().update(cx, |status_bar, cx| {
+                status_bar.add_left_item(stcode_workline, window, cx);
+            });
+        } else {
+            let edit_prediction_menu_handle = PopoverMenuHandle::default();
+            let edit_prediction_ui = cx.new(|cx| {
+                edit_prediction_ui::EditPredictionButton::new(
+                    app_state.fs.clone(),
+                    app_state.user_store.clone(),
+                    edit_prediction_menu_handle.clone(),
+                    workspace.project().clone(),
+                    cx,
+                )
+            });
+            workspace.register_action({
+                move |_, _: &edit_prediction_ui::ToggleMenu, window, cx| {
+                    edit_prediction_menu_handle.toggle(window, cx);
+                }
+            });
+
+            let search_button = cx.new(|_| search::search_status_button::SearchButton::new());
+            let diagnostic_summary =
+                cx.new(|cx| diagnostics::items::DiagnosticIndicator::new(workspace, cx));
+            let active_file_name = cx.new(|_| workspace::active_file_name::ActiveFileName::new());
+            let activity_indicator = activity_indicator::ActivityIndicator::new(
+                workspace,
+                workspace.project().read(cx).languages().clone(),
+                window,
                 cx,
-            )
-        });
-        workspace.register_action({
-            move |_, _: &edit_prediction_ui::ToggleMenu, window, cx| {
-                edit_prediction_menu_handle.toggle(window, cx);
-            }
-        });
+            );
+            let active_buffer_encoding =
+                cx.new(|_| encoding_selector::ActiveBufferEncoding::new(workspace));
+            let active_buffer_language =
+                cx.new(|_| language_selector::ActiveBufferLanguage::new(workspace));
+            let active_toolchain_language =
+                cx.new(|cx| toolchain_selector::ActiveToolchain::new(workspace, window, cx));
+            let image_info = cx.new(|_cx| ImageInfo::new(workspace));
 
-        let search_button = cx.new(|_| search::search_status_button::SearchButton::new());
-        let diagnostic_summary =
-            cx.new(|cx| diagnostics::items::DiagnosticIndicator::new(workspace, cx));
-        let active_file_name = cx.new(|_| workspace::active_file_name::ActiveFileName::new());
-        let activity_indicator = activity_indicator::ActivityIndicator::new(
-            workspace,
-            workspace.project().read(cx).languages().clone(),
-            window,
-            cx,
-        );
-        let image_info = cx.new(|_cx| ImageInfo::new(workspace));
+            let lsp_button_menu_handle = PopoverMenuHandle::default();
+            let lsp_button =
+                cx.new(|cx| LspButton::new(workspace, lsp_button_menu_handle.clone(), window, cx));
+            workspace.register_action({
+                move |_, _: &lsp_button::ToggleMenu, window, cx| {
+                    lsp_button_menu_handle.toggle(window, cx);
+                }
+            });
 
-        let lsp_button_menu_handle = PopoverMenuHandle::default();
-        let lsp_button =
-            cx.new(|cx| LspButton::new(workspace, lsp_button_menu_handle.clone(), window, cx));
-        workspace.register_action({
-            move |_, _: &lsp_button::ToggleMenu, window, cx| {
-                lsp_button_menu_handle.toggle(window, cx);
-            }
-        });
-
-        let cursor_position =
-            cx.new(|_| go_to_line::cursor_position::CursorPosition::new(workspace));
-        let merge_conflict_indicator =
-            cx.new(|cx| git_ui::MergeConflictIndicator::new(workspace, cx));
-        workspace.status_bar().update(cx, |status_bar, cx| {
-            status_bar.add_left_item(search_button, window, cx);
-            status_bar.add_left_item(lsp_button, window, cx);
-            status_bar.add_left_item(diagnostic_summary, window, cx);
-            status_bar.add_left_item(active_file_name, window, cx);
-            status_bar.add_left_item(activity_indicator, window, cx);
-            status_bar.add_left_item(merge_conflict_indicator, window, cx);
-            status_bar.add_right_item(edit_prediction_ui, window, cx);
-            status_bar.add_right_item(cursor_position, window, cx);
-            status_bar.add_right_item(image_info, window, cx);
-        });
+            let line_ending_indicator =
+                cx.new(|_| line_ending_selector::LineEndingIndicator::default());
+            let merge_conflict_indicator =
+                cx.new(|cx| git_ui::MergeConflictIndicator::new(workspace, cx));
+            workspace.status_bar().update(cx, |status_bar, cx| {
+                status_bar.add_left_item(search_button, window, cx);
+                status_bar.add_left_item(lsp_button, window, cx);
+                status_bar.add_left_item(diagnostic_summary, window, cx);
+                status_bar.add_left_item(active_file_name, window, cx);
+                status_bar.add_left_item(activity_indicator, window, cx);
+                status_bar.add_left_item(merge_conflict_indicator, window, cx);
+                status_bar.add_right_item(edit_prediction_ui, window, cx);
+                status_bar.add_right_item(active_buffer_encoding, window, cx);
+                status_bar.add_right_item(active_buffer_language, window, cx);
+                status_bar.add_right_item(active_toolchain_language, window, cx);
+                status_bar.add_right_item(line_ending_indicator, window, cx);
+                status_bar.add_right_item(image_info, window, cx);
+            });
+        }
 
         let panels_task = initialize_panels(window, cx);
         workspace.set_panels_task(panels_task);
@@ -835,6 +858,22 @@ fn register_actions(
 ) {
     workspace
         .register_action(|_, _: &OpenDocs, _, cx| cx.open_url(DOCS_URL))
+        .register_action(
+            |workspace: &mut Workspace,
+             _: &input_latency_ui::DumpInputLatencyHistogram,
+             window: &mut Window,
+             cx: &mut Context<Workspace>| {
+                let report =
+                    input_latency_ui::format_input_latency_report(window, cx);
+                let project = workspace.project().clone();
+                let buffer = project.update(cx, |project, cx| {
+                    project.create_local_buffer(&report, None, true, cx)
+                });
+                let editor =
+                    cx.new(|cx| Editor::for_buffer(buffer, Some(project), window, cx));
+                workspace.add_item_to_active_pane(Box::new(editor), None, true, window, cx);
+            },
+        )
         .register_action(|_, _: &Minimize, window, _| {
             window.minimize_window();
         })
@@ -1279,6 +1318,9 @@ fn initialize_pane(
             toolbar.add_item(telemetry_log_item, window, cx);
             let syntax_tree_item = cx.new(|_| language_tools::SyntaxTreeToolbarItemView::new());
             toolbar.add_item(syntax_tree_item, window, cx);
+            let migration_banner =
+                cx.new(|inner_cx| MigrationBanner::new(workspace_handle.clone(), inner_cx));
+            toolbar.add_item(migration_banner, window, cx);
             let highlights_tree_item =
                 cx.new(|_| language_tools::HighlightsTreeToolbarItemView::new());
             toolbar.add_item(highlights_tree_item, window, cx);
@@ -1748,11 +1790,12 @@ fn notify_settings_errors(result: settings::SettingsParseResult, is_user: bool, 
     };
     let id = NotificationId::Named(format!("failed-to-parse-settings-{is_user}").into());
 
-    match error {
+    let showed_parse_error = match error {
         Some(error) => {
             if let Some(InvalidSettingsError::LocalSettings { .. }) =
                 error.downcast_ref::<InvalidSettingsError>()
             {
+                false
                 // Local settings errors are displayed by the projects
             } else {
                 show_app_notification(id, cx, move |cx| {
@@ -1769,19 +1812,61 @@ fn notify_settings_errors(result: settings::SettingsParseResult, is_user: bool, 
                             })
                     })
                 });
+                true
             }
         }
         None => {
             dismiss_app_notification(&id, cx);
+            false
         }
-    }
+    };
+    let id = NotificationId::Named(format!("failed-to-migrate-settings-{is_user}").into());
+
+    match result.migration_status {
+        settings::MigrationStatus::Succeeded | settings::MigrationStatus::NotNeeded => {
+            dismiss_app_notification(&id, cx);
+        }
+        settings::MigrationStatus::Failed { error: err } => {
+            if !showed_parse_error {
+                show_app_notification(id, cx, move |cx| {
+                    cx.new(|cx| {
+                        MessageNotification::new(
+                            format!(
+                                "Failed to migrate settings\n\
+                                {err}"
+                            ),
+                            cx,
+                        )
+                        .primary_message("Open Settings File")
+                        .primary_icon(IconName::Settings)
+                        .primary_on_click(|window, cx| {
+                            window.dispatch_action(zed_actions::OpenSettingsFile.boxed_clone(), cx);
+                            cx.emit(DismissEvent);
+                        })
+                    })
+                });
+            }
+        }
+    };
 }
 
 pub fn watch_settings_files(fs: Arc<dyn fs::Fs>, cx: &mut App) {
+    MigrationNotification::set_global(cx.new(|_| MigrationNotification), cx);
+
     SettingsStore::update_global(cx, move |store, cx| {
         store.watch_settings_files(fs, cx, |settings_file, result, cx| {
             let is_user = matches!(settings_file, SettingsFile::User);
+            let migrating_in_memory =
+                matches!(&result.migration_status, MigrationStatus::Succeeded);
             notify_settings_errors(result, is_user, cx);
+            if let Some(notifier) = MigrationNotification::try_global(cx) {
+                notifier.update(cx, |_, cx| {
+                    cx.emit(MigrationEvent::ContentChanged {
+                        migration_type: MigrationType::Settings,
+                        migrating_in_memory,
+                    });
+                });
+            }
         });
     });
 }
@@ -1842,6 +1927,7 @@ pub fn handle_keymap_file_changes(
         let mut user_keymap_file_rx = Some(user_keymap_file_rx);
         let mut user_keymap_file_content = String::new();
         let mut user_keymap_content = String::new();
+        let mut migrating_in_memory = false;
         loop {
             let mut user_keymap_file_closed = false;
             let mut should_reload_keymap = true;
@@ -1855,7 +1941,13 @@ pub fn handle_keymap_file_changes(
                                 should_reload_keymap = false;
                             } else {
                                 user_keymap_file_content = content.clone();
-                                user_keymap_content = content;
+                                if let Ok(Some(migrated_content)) = migrate_keymap(&content) {
+                                    user_keymap_content = migrated_content;
+                                    migrating_in_memory = true;
+                                } else {
+                                    user_keymap_content = content;
+                                    migrating_in_memory = false;
+                                }
                             }
                         } else {
                             user_keymap_file_closed = true;
@@ -1879,6 +1971,14 @@ pub fn handle_keymap_file_changes(
             }
 
             cx.update(|cx| {
+                if let Some(notifier) = MigrationNotification::try_global(cx) {
+                    notifier.update(cx, |_, cx| {
+                        cx.emit(MigrationEvent::ContentChanged {
+                            migration_type: MigrationType::Keymap,
+                            migrating_in_memory,
+                        });
+                    });
+                }
                 let load_result = KeymapFile::load(&user_keymap_content, cx);
                 match load_result {
                     KeymapFileLoadResult::Success { key_bindings } => {
@@ -1991,8 +2091,6 @@ fn reload_keymaps(cx: &mut App, mut user_key_bindings: Vec<KeyBinding>) {
         "New Window",
         workspace::NewWindow,
     )]);
-    // todo: nicer api here?
-    keymap_editor::KeymapEventChannel::trigger_keymap_changed(cx);
 }
 
 pub fn load_default_keymap(cx: &mut App) {
@@ -2001,12 +2099,37 @@ pub fn load_default_keymap(cx: &mut App) {
         return;
     }
 
-    cx.bind_keys(
-        KeymapFile::load_asset(DEFAULT_KEYMAP_PATH, Some(KeybindSource::Default), cx).unwrap(),
-    );
+    cx.bind_keys(load_built_in_keymap_asset(
+        DEFAULT_KEYMAP_PATH,
+        KeybindSource::Default,
+        cx,
+    ));
 
     if let Some(asset_path) = base_keymap.asset_path() {
-        cx.bind_keys(KeymapFile::load_asset(asset_path, Some(KeybindSource::Base), cx).unwrap());
+        cx.bind_keys(load_built_in_keymap_asset(
+            asset_path,
+            KeybindSource::Base,
+            cx,
+        ));
+    }
+}
+
+fn load_built_in_keymap_asset(
+    asset_path: &str,
+    source: KeybindSource,
+    cx: &App,
+) -> Vec<KeyBinding> {
+    match KeymapFile::load_asset_allow_partial_failure(asset_path, cx) {
+        Ok(mut key_bindings) => {
+            for key_binding in &mut key_bindings {
+                key_binding.set_meta(source.meta());
+            }
+            key_bindings
+        }
+        Err(error) => {
+            log::error!("failed to load built-in keymap {asset_path}: {error:#}");
+            Vec::new()
+        }
     }
 }
 
@@ -5058,25 +5181,27 @@ mod tests {
                 "console",
                 "context_server",
                 "copilot",
+                "csv",
                 "debug_panel",
                 "debugger",
                 "dev",
                 "diagnostics",
                 "edit_prediction",
                 "editor",
+                "encoding_selector",
                 "file_finder",
                 "git",
                 "git_onboarding",
                 "git_panel",
                 "git_picker",
-                "go_to_line",
                 "highlights_tree_view",
                 "icon_theme_selector",
                 "image_viewer",
                 "inline_assistant",
-                "keymap_editor",
                 "keystroke_input",
+                "language_selector",
                 "welcome",
+                "line_ending_selector",
                 "lsp_tool",
                 "markdown",
                 "menu",
@@ -5097,7 +5222,9 @@ mod tests {
                 "rules_library",
                 "search",
                 "settings_editor",
+                "settings_profile_selector",
                 "stash_picker",
+                "svg",
                 "syntax_tree_view",
                 "task",
                 "terminal",
@@ -5105,6 +5232,7 @@ mod tests {
                 "theme",
                 "theme_selector",
                 "toast",
+                "toolchain",
                 "variable_list",
                 "vim",
                 "window",
@@ -5306,6 +5434,8 @@ mod tests {
                 cx,
             );
             language_models::init(app_state.user_store.clone(), app_state.client.clone(), cx);
+            web_search::init(cx);
+            web_search_providers::init(app_state.client.clone(), app_state.user_store.clone(), cx);
             let prompt_builder = PromptBuilder::load(app_state.fs.clone(), false, cx);
             project::AgentRegistryStore::init_global(
                 cx,
@@ -5321,6 +5451,7 @@ mod tests {
                 cx,
             );
 
+            tasks_ui::init(cx);
             project::debugger::breakpoint_store::BreakpointStore::init(
                 &app_state.client.clone().into(),
             );
