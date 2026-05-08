@@ -12,6 +12,16 @@ The product direction is simple:
 
 This repository currently starts from the Zed v1.0.0 source tree and is being carved down into a focused Stcode app. The baseline keeps the heavy pieces that make chat input, editor behavior, agent panels, workspace state, and terminal-backed execution feel real, while removing upstream Zed website, release, extension sample, hosted collaboration server, and infrastructure material that does not serve Stcode.
 
+## Install On macOS
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/choiceoh/Stcode/codex/stcode-trim-test-fixtures/script/stcode-install-macos | bash
+```
+
+The installer downloads the latest release for the current Mac, verifies it, installs `Stcode.app` into `/Applications`, and opens it. Running the same command again updates Stcode.
+
+See [docs/installing-stcode.md](docs/installing-stcode.md) for options.
+
 ## Product Shape
 
 Stcode is not trying to be another general-purpose IDE.

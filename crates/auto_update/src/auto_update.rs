@@ -1777,6 +1777,42 @@ mod tests {
     }
 
     #[test]
+    fn test_stcode_github_release_accepts_latest_alias_asset() {
+        let release = http_client::github::GithubRelease {
+            tag_name: "v1.2.3".to_string(),
+            pre_release: false,
+            tarball_url: "https://example.com/source.tar.gz".to_string(),
+            zipball_url: "https://example.com/source.zip".to_string(),
+            assets: vec![
+                http_client::github::GithubReleaseAsset {
+                    name: "Stcode-1.2.3-aarch64.dmg".to_string(),
+                    browser_download_url: "https://example.com/versioned.dmg".to_string(),
+                    digest: None,
+                },
+                http_client::github::GithubReleaseAsset {
+                    name: "Stcode-latest-aarch64.dmg".to_string(),
+                    browser_download_url: "https://example.com/latest.dmg".to_string(),
+                    digest: None,
+                },
+                http_client::github::GithubReleaseAsset {
+                    name: "Stcode-latest-aarch64.dmg.sha256".to_string(),
+                    browser_download_url: "https://example.com/latest.dmg.sha256".to_string(),
+                    digest: None,
+                },
+            ],
+        };
+
+        let asset = stcode_release_asset_from_github_release(&release, "macos", "aarch64").unwrap();
+
+        assert_eq!(asset.version, "1.2.3");
+        assert_eq!(asset.url, "https://example.com/latest.dmg");
+        assert_eq!(
+            asset.checksum_url.as_deref(),
+            Some("https://example.com/latest.dmg.sha256")
+        );
+    }
+
+    #[test]
     fn test_stcode_github_release_rejects_checksum_assets() {
         let release = http_client::github::GithubRelease {
             tag_name: "v1.2.3".to_string(),

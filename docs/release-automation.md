@@ -10,8 +10,12 @@ The workflow builds two macOS DMGs:
 
 - `Stcode-<version>-aarch64.dmg`
 - `Stcode-<version>-x86_64.dmg`
+- `Stcode-latest-aarch64.dmg`
+- `Stcode-latest-x86_64.dmg`
 
 Each DMG also gets a `.sha256` file. The updater ignores checksum files and selects the DMG for the user's architecture.
+
+The versioned assets are the durable release artifacts. The `Stcode-latest-*` aliases make installer and updater entrypoints simple because they can download a predictable file from the latest GitHub Release without parsing the GitHub API.
 
 ## Running A Release
 
@@ -20,7 +24,8 @@ The default release path is PR merge:
 1. Merge a pull request into `main` or `codex/stcode-trim-test-fixtures`.
 2. The workflow resolves the next patch version from existing `vX.Y.Z` tags.
 3. The workflow builds macOS DMGs.
-4. The workflow creates the next GitHub Release and tag automatically.
+4. The workflow creates versioned DMGs plus `Stcode-latest-*` aliases.
+5. The workflow creates the next GitHub Release and tag automatically.
 
 The first automatic release uses `v1.0.0` if no existing `vX.Y.Z` tag is present.
 
@@ -53,6 +58,16 @@ cargo install cargo-bundle --locked
 ```
 
 The output is written to `target/stcode-release/`.
+
+## User Installation
+
+The user-facing macOS install path is:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/choiceoh/Stcode/codex/stcode-trim-test-fixtures/script/stcode-install-macos | bash
+```
+
+The script downloads the latest architecture-matched DMG, verifies the `.sha256` checksum, installs `Stcode.app` into `/Applications`, and opens it. Running the same command again updates the installed app.
 
 ## Signing And Notarization
 

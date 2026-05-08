@@ -1,0 +1,162 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  cat >&2 <<'EOF'
+usage: script/stcode-install-macos [options]
+
+Downloads the latest Stcode macOS DMG, verifies its checksum, installs
+Stcode.app into /Applications, and opens it. Running this again updates the
+installed app to the latest release.
+
+Options:
+  --install-dir <path>       Install directory. Defaults to /Applications.
+  --repo <owner/repo>        GitHub repository. Defaults to choiceoh/Stcode.
+  --version <version>        Install a specific version, for example 1.2.3.
+  --no-open                  Install or update without opening Stcode.
+  --print-download-url       Print the resolved DMG and checksum URLs only.
+  -h, --help                 Show this help.
+EOF
+}
+
+fail() {
+  echo "stcode-install: $*" >&2
+  exit 1
+}
+
+require_command() {
+  if ! command -v "$1" >/dev/null 2>&1; then
+    fail "$1 is required"
+  fi
+}
+
+repo="${STCODE_RELEASE_REPO:-choiceoh/Stcode}"
+install_dir="/Applications"
+version=""
+open_after_install=true
+print_download_url=false
+
+while (($#)); do
+  case "$1" in
+    --install-dir)
+      install_dir="${2:-}"
+      [[ -n "$install_dir" ]] || fail "--install-dir requires a path"
+      shift 2
+      ;;
+    --repo)
+      repo="${2:-}"
+      [[ "$repo" =~ ^[^/]+/[^/]+$ ]] || fail "--repo must look like owner/repo"
+      shift 2
+      ;;
+    --version)
+      version="${2:-}"
+      [[ -n "$version" ]] || fail "--version requires a version"
+      shift 2
+      ;;
+    --no-open)
+      open_after_install=false
+      shift
+      ;;
+    --print-download-url)
+      print_download_url=true
+      shift
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      fail "unknown option: $1"
+      ;;
+  esac
+done
+
+[[ "$(uname -s)" == "Darwin" ]] || fail "macOS is required"
+
+case "$(uname -m)" in
+  arm64|aarch64)
+    arch="aarch64"
+    ;;
+  x86_64)
+    arch="x86_64"
+    ;;
+  *)
+    fail "unsupported Mac architecture: $(uname -m)"
+    ;;
+esac
+
+if [[ -n "$version" ]]; then
+  version="${version#v}"
+  [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.-]+)?$ ]] ||
+    fail "--version must be semver, for example 1.2.3"
+  asset_name="Stcode-$version-$arch.dmg"
+  release_path="download/v$version"
+else
+  asset_name="Stcode-latest-$arch.dmg"
+  release_path="latest/download"
+fi
+
+download_url="https://github.com/$repo/releases/$release_path/$asset_name"
+checksum_url="$download_url.sha256"
+
+if $print_download_url; then
+  echo "$download_url"
+  echo "$checksum_url"
+  exit 0
+fi
+
+require_command curl
+require_command hdiutil
+require_command ditto
+require_command shasum
+require_command awk
+
+work_dir="$(mktemp -d "${TMPDIR:-/tmp}/stcode-install.XXXXXX")"
+mount_dir="$work_dir/mount"
+dmg_path="$work_dir/$asset_name"
+checksum_path="$work_dir/$asset_name.sha256"
+mounted=false
+
+cleanup() {
+  if $mounted; then
+    hdiutil detach "$mount_dir" -quiet >/dev/null 2>&1 || true
+  fi
+  rm -rf "$work_dir"
+}
+trap cleanup EXIT
+
+mkdir -p "$mount_dir"
+
+echo "Downloading Stcode for $arch..."
+curl -fL --progress-bar -o "$dmg_path" "$download_url"
+curl -fL --progress-bar -o "$checksum_path" "$checksum_url"
+
+expected_sha="$(awk '{ print tolower($1); exit }' "$checksum_path")"
+[[ "$expected_sha" =~ ^[a-f0-9]{64}$ ]] || fail "checksum file did not contain a SHA-256 digest"
+
+actual_sha="$(shasum -a 256 "$dmg_path" | awk '{ print tolower($1) }')"
+if [[ "$actual_sha" != "$expected_sha" ]]; then
+  fail "downloaded DMG checksum mismatch"
+fi
+
+echo "Installing Stcode.app into $install_dir..."
+hdiutil attach "$dmg_path" -nobrowse -readonly -mountpoint "$mount_dir" >/dev/null
+mounted=true
+
+source_app="$mount_dir/Stcode.app"
+[[ -d "$source_app" ]] || fail "the DMG did not contain Stcode.app"
+
+mkdir -p "$install_dir"
+target_app="$install_dir/Stcode.app"
+staged_app="$install_dir/.Stcode.app.installing"
+
+rm -rf "$staged_app"
+ditto "$source_app" "$staged_app"
+rm -rf "$target_app"
+mv "$staged_app" "$target_app"
+
+echo "Stcode is installed at $target_app"
+
+if $open_after_install; then
+  open "$target_app"
+fi
