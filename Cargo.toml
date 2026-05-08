@@ -48,7 +48,6 @@ members = [
     "crates/edit_prediction_types",
     "crates/edit_prediction_ui",
     "crates/editor",
-    "crates/encoding_selector",
     "crates/env_var",
     "crates/extension",
     "crates/extension_api",
@@ -93,10 +92,8 @@ members = [
     "crates/language_models",
     "crates/language_models_cloud",
     "crates/language_onboarding",
-    "crates/language_selector",
     "crates/language_tools",
     "crates/languages",
-    "crates/line_ending_selector",
     "crates/lsp",
     "crates/markdown",
     "crates/markdown_preview",
@@ -252,7 +249,6 @@ derive_refineable = { path = "crates/refineable/derive_refineable" }
 diagnostics = { path = "crates/diagnostics" }
 dialoguer = { version = "0.12", default-features = false }
 editor = { path = "crates/editor" }
-encoding_selector = { path = "crates/encoding_selector" }
 env_var = { path = "crates/env_var" }
 extension = { path = "crates/extension" }
 extension_host = { path = "crates/extension_host" }
@@ -299,10 +295,8 @@ language_model_core = { path = "crates/language_model_core" }
 language_models = { path = "crates/language_models" }
 language_models_cloud = { path = "crates/language_models_cloud" }
 language_onboarding = { path = "crates/language_onboarding" }
-language_selector = { path = "crates/language_selector" }
 language_tools = { path = "crates/language_tools" }
 languages = { path = "crates/languages" }
-line_ending_selector = { path = "crates/line_ending_selector" }
 lsp = { path = "crates/lsp" }
 markdown = { path = "crates/markdown" }
 markdown_preview = { path = "crates/markdown_preview" }
