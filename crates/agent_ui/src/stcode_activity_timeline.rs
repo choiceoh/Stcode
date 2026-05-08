@@ -2,13 +2,16 @@ use acp_thread::{AcpThread, AgentThreadEntry, ThreadStatus, ToolCall, ToolCallSt
 use agent_client_protocol as acp;
 use anyhow::Result;
 use git::{repository::DiffType, status::FileStatus};
-use gpui::{Action, Entity, IntoElement, RenderOnce};
+use gpui::{
+    Action, Context, Entity, EntityId, IntoElement, Render, RenderOnce, Subscription, WeakEntity,
+};
 use project::{
     Project,
     git_store::{Repository, StatusEntry},
 };
 use ui::{Button, ButtonStyle, Icon, IconName, Label, LabelSize, prelude::*};
 use util::{paths::PathStyle, truncate_and_trailoff};
+use workspace::{ItemHandle, OpenLog, StatusItemView, Workspace};
 use zed_actions::{
     CreateWorktree, NewWorktreeBranchTarget, agent::ReviewBranchDiff, git as zed_git,
 };
@@ -20,6 +23,7 @@ const MAX_SMART_PANEL_FILES: usize = 2;
 const MAX_SMART_TODO_ENTRIES: usize = 2;
 const MAX_TODO_LABEL_CHARS: usize = 56;
 const MAX_WORKLINE_DETAIL_CHARS: usize = 72;
+const MAX_STATUS_WORKLINE_DETAIL_CHARS: usize = 64;
 const STCODE_ACTIVITY_SIDE_PANEL_WIDTH: Pixels = px(420.);
 const STCODE_ACTIVITY_SIDE_PANEL_MIN_WIDTH: Pixels = px(360.);
 
@@ -102,6 +106,114 @@ impl ActivityTimelineSnapshots {
             smart_parallel: SmartParallelSnapshot::from_project(project, cx),
             smart_merge: SmartMergeSnapshot::from_project(project, cx),
         }
+    }
+
+    fn workline(&self) -> SmartWorklineSnapshot {
+        SmartWorklineSnapshot::from_snapshots(
+            self.has_thread_entries,
+            &self.activity,
+            self.smart_run.as_ref(),
+            self.smart_start.as_ref(),
+            self.smart_panel.as_ref(),
+            self.smart_todo.as_ref(),
+            self.smart_parallel.as_ref(),
+            self.smart_merge.as_ref(),
+        )
+    }
+}
+
+pub struct StcodeWorklineStatusItem {
+    workspace: WeakEntity<Workspace>,
+    project: Entity<Project>,
+    observed_agent_panel_id: Option<EntityId>,
+    observed_thread_id: Option<EntityId>,
+    _workspace_subscription: Subscription,
+    _project_subscription: Subscription,
+    _agent_panel_subscription: Option<Subscription>,
+    _thread_subscription: Option<Subscription>,
+}
+
+impl StcodeWorklineStatusItem {
+    pub fn new(
+        workspace: &Entity<Workspace>,
+        project: Entity<Project>,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let _workspace_subscription = cx.observe(workspace, |_this, _workspace, cx| cx.notify());
+        let _project_subscription = cx.observe(&project, |_this, _project, cx| cx.notify());
+
+        Self {
+            workspace: workspace.downgrade(),
+            project,
+            observed_agent_panel_id: None,
+            observed_thread_id: None,
+            _workspace_subscription,
+            _project_subscription,
+            _agent_panel_subscription: None,
+            _thread_subscription: None,
+        }
+    }
+
+    fn observe_agent_panel(
+        &mut self,
+        agent_panel: Option<&Entity<crate::AgentPanel>>,
+        cx: &mut Context<Self>,
+    ) {
+        let agent_panel_id = agent_panel.map(|agent_panel| agent_panel.entity_id());
+        if self.observed_agent_panel_id == agent_panel_id {
+            return;
+        }
+
+        self.observed_agent_panel_id = agent_panel_id;
+        self._agent_panel_subscription = agent_panel
+            .map(|agent_panel| cx.observe(agent_panel, |_this, _agent_panel, cx| cx.notify()));
+    }
+
+    fn observe_thread(&mut self, thread: Option<&Entity<AcpThread>>, cx: &mut Context<Self>) {
+        let thread_id = thread.map(|thread| thread.entity_id());
+        if self.observed_thread_id == thread_id {
+            return;
+        }
+
+        self.observed_thread_id = thread_id;
+        self._thread_subscription =
+            thread.map(|thread| cx.observe(thread, |_this, _thread, cx| cx.notify()));
+    }
+}
+
+impl Render for StcodeWorklineStatusItem {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let agent_panel = self
+            .workspace
+            .upgrade()
+            .and_then(|workspace| workspace.read(cx).panel::<crate::AgentPanel>(cx));
+        self.observe_agent_panel(agent_panel.as_ref(), cx);
+
+        let (thread, smart_run) = agent_panel
+            .as_ref()
+            .map(|agent_panel| {
+                let agent_panel = agent_panel.read(cx);
+                (
+                    agent_panel.active_agent_thread(cx),
+                    agent_panel.stcode_smart_run_snapshot(cx),
+                )
+            })
+            .unwrap_or((None, None));
+        self.observe_thread(thread.as_ref(), cx);
+
+        let thread = thread.as_ref().map(|thread| thread.read(cx));
+        let snapshots = ActivityTimelineSnapshots::from_parts(thread, &self.project, smart_run, cx);
+        render_smart_workline_status_bar(snapshots.workline(), cx)
+    }
+}
+
+impl StatusItemView for StcodeWorklineStatusItem {
+    fn set_active_pane_item(
+        &mut self,
+        _active_pane_item: Option<&dyn ItemHandle>,
+        _window: &mut Window,
+        _cx: &mut Context<Self>,
+    ) {
     }
 }
 
@@ -215,26 +327,17 @@ fn render_activity_side_panel(
     snapshots: ActivityTimelineSnapshots,
     cx: &mut App,
 ) -> gpui::AnyElement {
+    let workline = snapshots.workline();
     let ActivityTimelineSnapshots {
-        has_thread_entries,
         activity,
-        smart_run,
+        smart_run: _,
         smart_start,
         smart_panel,
         smart_todo,
         smart_parallel,
         smart_merge,
+        ..
     } = snapshots;
-    let workline = SmartWorklineSnapshot::from_snapshots(
-        has_thread_entries,
-        &activity,
-        smart_run.as_ref(),
-        smart_start.as_ref(),
-        smart_panel.as_ref(),
-        smart_todo.as_ref(),
-        smart_parallel.as_ref(),
-        smart_merge.as_ref(),
-    );
 
     v_flex()
         .id("stcode-activity-side-panel")
@@ -389,7 +492,7 @@ impl SmartWorklineStageKind {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 enum SmartWorklineAction {
     Start,
     Panel,
@@ -417,6 +520,115 @@ impl SmartWorklineAction {
             Self::Merge => crate::StcodeSmartMerge.boxed_clone(),
         }
     }
+}
+
+fn render_smart_workline_status_bar(
+    snapshot: SmartWorklineSnapshot,
+    _cx: &mut App,
+) -> gpui::AnyElement {
+    let active_action = snapshot
+        .stages
+        .iter()
+        .find(|stage| stage.active)
+        .map(|stage| SmartWorklineAction::from_stage(stage.kind));
+    let detail = truncate_and_trailoff(&snapshot.detail, MAX_STATUS_WORKLINE_DETAIL_CHARS);
+
+    h_flex()
+        .id("stcode-ai-workline-control-bar")
+        .min_w_0()
+        .gap_2()
+        .overflow_hidden()
+        .child(
+            h_flex()
+                .min_w_0()
+                .gap_2()
+                .child(
+                    Icon::new(snapshot.icon)
+                        .size(IconSize::Medium)
+                        .color(snapshot.tone.color()),
+                )
+                .child(
+                    v_flex()
+                        .min_w_0()
+                        .gap_0p5()
+                        .child(
+                            h_flex()
+                                .min_w_0()
+                                .gap_1()
+                                .child(
+                                    Label::new("AI Workline")
+                                        .size(LabelSize::Small)
+                                        .color(Color::Default),
+                                )
+                                .child(
+                                    Label::new(snapshot.status)
+                                        .size(LabelSize::XSmall)
+                                        .color(snapshot.tone.color()),
+                                ),
+                        )
+                        .child(
+                            Label::new(detail)
+                                .size(LabelSize::XSmall)
+                                .color(Color::Muted)
+                                .truncate(),
+                        ),
+                ),
+        )
+        .child(
+            h_flex()
+                .flex_none()
+                .gap_1()
+                .child(render_smart_workline_status_action(
+                    "stcode-status-start",
+                    "Start",
+                    SmartWorklineAction::Start.boxed_action(),
+                    active_action == Some(SmartWorklineAction::Start),
+                ))
+                .child(render_smart_workline_status_action(
+                    "stcode-status-review",
+                    "Review",
+                    SmartWorklineAction::Panel.boxed_action(),
+                    active_action == Some(SmartWorklineAction::Panel),
+                ))
+                .child(render_smart_workline_status_action(
+                    "stcode-status-merge",
+                    "Merge",
+                    SmartWorklineAction::Merge.boxed_action(),
+                    active_action == Some(SmartWorklineAction::Merge),
+                ))
+                .child(render_smart_workline_status_action(
+                    "stcode-status-parallel",
+                    "Parallel",
+                    SmartWorklineAction::Parallel.boxed_action(),
+                    active_action == Some(SmartWorklineAction::Parallel),
+                ))
+                .child(render_smart_workline_status_action(
+                    "stcode-status-logs",
+                    "Logs",
+                    OpenLog.boxed_clone(),
+                    false,
+                )),
+        )
+        .into_any_element()
+}
+
+fn render_smart_workline_status_action(
+    id: &'static str,
+    label: &'static str,
+    action: Box<dyn Action>,
+    active: bool,
+) -> impl IntoElement {
+    Button::new(id, label)
+        .size(ButtonSize::Default)
+        .label_size(LabelSize::Small)
+        .style(if active {
+            ButtonStyle::Filled
+        } else {
+            ButtonStyle::Subtle
+        })
+        .on_click(move |_, window, cx| {
+            window.dispatch_action(action.boxed_clone(), cx);
+        })
 }
 
 fn render_smart_workline_card(

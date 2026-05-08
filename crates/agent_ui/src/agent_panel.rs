@@ -3602,6 +3602,7 @@ impl AgentPanel {
             }
             _ => false,
         };
+        let show_reauthenticate = has_auth_methods && !AppLaunchMode::is_stcode(cx);
 
         PopoverMenu::new("agent-options-menu")
             .trigger_with_tooltip(
@@ -3663,7 +3664,7 @@ impl AgentPanel {
                             .separator()
                             .action("Toggle Threads Sidebar", Box::new(ToggleWorkspaceSidebar));
 
-                        if has_auth_methods {
+                        if show_reauthenticate {
                             menu = menu.action("Reauthenticate", Box::new(ReauthenticateAgent))
                         }
 
@@ -4102,6 +4103,10 @@ impl AgentPanel {
     }
 
     fn should_render_trial_end_upsell(&self, cx: &mut Context<Self>) -> bool {
+        if AppLaunchMode::is_stcode(cx) {
+            return false;
+        }
+
         if TrialEndUpsell::dismissed(cx) {
             return false;
         }
@@ -4137,6 +4142,10 @@ impl AgentPanel {
     }
 
     fn should_render_new_user_onboarding(&mut self, cx: &mut Context<Self>) -> bool {
+        if AppLaunchMode::is_stcode(cx) {
+            return false;
+        }
+
         if self
             .new_user_onboarding_upsell_dismissed
             .load(Ordering::Acquire)
@@ -4365,7 +4374,7 @@ impl AgentPanel {
         )
     }
 
-    fn stcode_smart_run_snapshot(&self, cx: &App) -> Option<StcodeSmartRunSnapshot> {
+    pub(crate) fn stcode_smart_run_snapshot(&self, cx: &App) -> Option<StcodeSmartRunSnapshot> {
         let run = self.stcode_smart_run.as_ref()?;
         Some(run.snapshot(self.stcode_smart_run_thread_status(run, cx)))
     }
