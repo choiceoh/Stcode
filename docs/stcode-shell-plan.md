@@ -55,7 +55,7 @@ The terminal panel is hidden by default in Stcode mode because users should not 
 
 Stcode's product surface should make Git, CI, worktrees, and parallel agent coordination feel like one managed workflow instead of separate developer tools.
 
-- AI Smart Start: start each session from an isolated worktree when possible, route the default New Thread action to lane creation, name the new lane from the task prompt, auto-open the destination agent draft, auto-submit transferred prompt text, and surface leftover changes as a handoff task before the next session starts
+- AI Smart Start: start each session from an isolated worktree when possible, route the default New Thread action to lane creation, name the new lane from the task prompt, auto-open the destination agent draft, auto-submit transferred prompt text, and surface leftover changes, main-checkout starts, and branch-overlap risk as handoff tasks before the next session starts
 - AI Smart Parallel: keep parallel agents isolated so they do not edit the same worktree or overwrite each other's work
 - AI Smart Panel: show the current goal, todo state, lane isolation, changed files, checks, blockers, PR state, and merge readiness in a right-side work panel
 - AI Smart Merge: take a task through the full merge runbook automatically: checkpoint local work, run focused checks, push, create or update the PR, watch CI, fix failures, merge when clean, delete the remote branch when safe, and sync the local base branch
