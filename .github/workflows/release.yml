@@ -251,6 +251,21 @@ jobs:
             exit 1
           fi
 
+          for arch in aarch64 x86_64; do
+            dmg="dist/Stcode-$version-$arch.dmg"
+            latest_dmg="dist/Stcode-latest-$arch.dmg"
+
+            if [[ ! -f "$dmg" ]]; then
+              echo "Missing release asset: $dmg" >&2
+              exit 1
+            fi
+
+            cp "$dmg" "$latest_dmg"
+            sha256sum "$latest_dmg" > "$latest_dmg.sha256"
+          done
+
+          assets=(dist/*)
+
           if gh release view "$tag" >/dev/null 2>&1; then
             gh release upload "$tag" "${assets[@]}" --clobber
             exit 0
