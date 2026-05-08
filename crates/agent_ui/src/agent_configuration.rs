@@ -440,12 +440,15 @@ impl AgentConfiguration {
                     .child(
                         v_flex()
                             .min_w_0()
+                            .flex_1()
+                            .overflow_hidden()
                             .gap_0p5()
                             .child(Label::new(title.into()).truncate())
                             .child(
                                 Label::new(description.into())
                                     .size(LabelSize::Small)
-                                    .color(Color::Muted),
+                                    .color(Color::Muted)
+                                    .truncate(),
                             ),
                     ),
             )

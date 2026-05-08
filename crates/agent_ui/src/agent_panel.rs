@@ -85,7 +85,7 @@ use ui::{
 use util::ResultExt as _;
 use workspace::{
     AppLaunchMode, CollaboratorId, DraggedSelection, DraggedTab, PathList, SerializedPathList,
-    ToggleWorkspaceSidebar, ToggleZoom, Workspace, WorkspaceId,
+    SidebarSide, ToggleWorkspaceSidebar, ToggleZoom, Workspace, WorkspaceId,
     dock::{DockPosition, Panel, PanelEvent},
 };
 
@@ -3891,6 +3891,27 @@ impl AgentPanel {
             })
     }
 
+    fn stcode_toolbar_needs_window_button_inset(&self, window: &Window, cx: &App) -> bool {
+        if !(cfg!(target_os = "macos") && AppLaunchMode::is_stcode(cx) && !window.is_fullscreen()) {
+            return false;
+        }
+
+        let left_sidebar_open = self
+            .workspace
+            .upgrade()
+            .and_then(|workspace| {
+                let multi_workspace = workspace.read(cx).multi_workspace().cloned()?;
+                multi_workspace.upgrade()
+            })
+            .map(|multi_workspace| {
+                let sidebar = multi_workspace.read(cx).sidebar_render_state(cx);
+                sidebar.open && sidebar.side == SidebarSide::Left
+            })
+            .unwrap_or(false);
+
+        !left_sidebar_open
+    }
+
     fn render_toolbar(&self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let agent_server_store = self.project.read(cx).agent_server_store().clone();
 
@@ -4167,6 +4188,8 @@ impl AgentPanel {
         };
 
         let use_v2_empty_toolbar = is_empty_state && !is_in_history_or_config;
+        let needs_stcode_window_button_inset =
+            self.stcode_toolbar_needs_window_button_inset(window, cx);
 
         let max_content_width = AgentSettings::get_global(cx).max_content_width;
 
@@ -4233,6 +4256,9 @@ impl AgentPanel {
                         .size_full()
                         .gap(DynamicSpacing::Base04.rems(cx))
                         .pl(DynamicSpacing::Base04.rems(cx))
+                        .when(needs_stcode_window_button_inset, |this| {
+                            this.pl(px(ui::utils::TRAFFIC_LIGHT_PADDING))
+                        })
                         .child(agent_selector_menu),
                 )
                 .child(
@@ -4272,6 +4298,9 @@ impl AgentPanel {
                         .size_full()
                         .gap(DynamicSpacing::Base04.rems(cx))
                         .pl(DynamicSpacing::Base04.rems(cx))
+                        .when(needs_stcode_window_button_inset, |this| {
+                            this.pl(px(ui::utils::TRAFFIC_LIGHT_PADDING))
+                        })
                         .child(if self.is_overlay_open() {
                             self.render_toolbar_back_button(cx).into_any_element()
                         } else {
