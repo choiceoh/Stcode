@@ -40,7 +40,7 @@ The `stcode` binary should:
 - render an AI Smart Parallel card that detects whether the current session is already in an isolated worktree lane, is still on the main checkout, or overlaps a branch used by another linked worktree, with direct paths to create or manage lanes
 - render an AI Smart Merge readiness card that explains whether the current branch is clean enough for merge prep, blocked by local changes or conflicts, or still on a base branch, with direct paths to review the merge diff, commit, or open a PR
 - replace the traditional editor status bar in Stcode mode with an AI Workline control bar that hides human editor state such as active language, encoding, line ending, and LSP status
-- keep the bottom AI Workline control bar and the right AI Smart Panel on the same workline snapshot so their ready, waiting, blocked, and merge states cannot drift apart
+- keep the bottom AI Workline control bar and the right AI Smart Panel on the same workline snapshot, including the same active stage and primary action, so their ready, waiting, blocked, and merge states cannot drift apart
 - collapse the empty center editor pane in Stcode mode so the agent workspace and AI Smart Panel own the first screen, while reopening the editor area automatically when files, diffs, or review buffers are present
 - suppress account, trial, upgrade, and reauthentication upsell surfaces in Stcode mode; missing model credentials should route to model/provider configuration, and quota blocks should route to model switching
 - use a dedicated Stcode app icon across bundled app metadata, runtime About surfaces, Linux launcher resources, and Windows icon resources
@@ -59,7 +59,7 @@ Stcode's product surface should make Git, CI, worktrees, and parallel agent coor
 - AI Smart Parallel: keep parallel agents isolated so they do not edit the same worktree or overwrite each other's work
 - AI Smart Panel: show the current goal, todo state, lane isolation, changed files, checks, blockers, PR state, and merge readiness in a right-side work panel
 - AI Smart Merge: take a task through the full merge runbook automatically: checkpoint local work, run focused checks, push, create or update the PR, watch CI, fix failures, merge when clean, delete the remote branch when safe, and sync the local base branch
-- AI Smart Workline: provide one shared state model for the right-side detail board and the bottom summary actions, with Start, Review, Merge, Parallel, and Logs available as the main controls
+- AI Smart Workline: provide one shared state model for the right-side detail board and the bottom summary actions, deriving Start, Review, Merge, Parallel, and Logs from the live stage/action model instead of maintaining separate button logic
 
 ## What Stays Shared
 
