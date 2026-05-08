@@ -5113,7 +5113,6 @@ mod tests {
                 "rules_library",
                 "search",
                 "settings_editor",
-                "settings_profile_selector",
                 "snippets",
                 "stash_picker",
                 "svg",
