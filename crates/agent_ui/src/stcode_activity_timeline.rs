@@ -1,6 +1,7 @@
 use acp_thread::{AcpThread, AgentThreadEntry, ThreadStatus, ToolCall, ToolCallStatus};
 use agent_client_protocol as acp;
 use anyhow::Result;
+use auto_update::{AutoUpdateStatus, AutoUpdater};
 use git::{
     repository::{DiffType, UpstreamTrackingStatus},
     status::FileStatus,
@@ -83,6 +84,7 @@ struct ActivityTimelineSnapshots {
     smart_todo: Option<SmartTodoSnapshot>,
     smart_parallel: Option<SmartParallelSnapshot>,
     smart_merge: Option<SmartMergeSnapshot>,
+    update_state: SmartWorklineUpdateState,
 }
 
 impl ActivityTimelineSnapshots {
@@ -90,6 +92,7 @@ impl ActivityTimelineSnapshots {
         thread: Option<&AcpThread>,
         project: &Entity<Project>,
         smart_run: Option<StcodeSmartRunSnapshot>,
+        update_status: Option<&AutoUpdateStatus>,
         cx: &App,
     ) -> Self {
         let has_thread_entries = thread.is_some_and(|thread| !thread.entries().is_empty());
@@ -109,6 +112,7 @@ impl ActivityTimelineSnapshots {
             smart_todo,
             smart_parallel: SmartParallelSnapshot::from_project(project, cx),
             smart_merge: SmartMergeSnapshot::from_project(project, cx),
+            update_state: SmartWorklineUpdateState::from_status(update_status),
         }
     }
 
@@ -122,6 +126,7 @@ impl ActivityTimelineSnapshots {
             self.smart_todo.as_ref(),
             self.smart_parallel.as_ref(),
             self.smart_merge.as_ref(),
+            self.update_state,
         )
     }
 }
@@ -131,10 +136,12 @@ pub struct StcodeWorklineStatusItem {
     project: Entity<Project>,
     observed_agent_panel_id: Option<EntityId>,
     observed_thread_id: Option<EntityId>,
+    observed_auto_updater_id: Option<EntityId>,
     _workspace_subscription: Subscription,
     _project_subscription: Subscription,
     _agent_panel_subscription: Option<Subscription>,
     _thread_subscription: Option<Subscription>,
+    _auto_update_subscription: Option<Subscription>,
 }
 
 impl StcodeWorklineStatusItem {
@@ -151,10 +158,12 @@ impl StcodeWorklineStatusItem {
             project,
             observed_agent_panel_id: None,
             observed_thread_id: None,
+            observed_auto_updater_id: None,
             _workspace_subscription,
             _project_subscription,
             _agent_panel_subscription: None,
             _thread_subscription: None,
+            _auto_update_subscription: None,
         }
     }
 
@@ -183,6 +192,21 @@ impl StcodeWorklineStatusItem {
         self._thread_subscription =
             thread.map(|thread| cx.observe(thread, |_this, _thread, cx| cx.notify()));
     }
+
+    fn observe_auto_updater(
+        &mut self,
+        auto_updater: Option<&Entity<AutoUpdater>>,
+        cx: &mut Context<Self>,
+    ) {
+        let auto_updater_id = auto_updater.map(|auto_updater| auto_updater.entity_id());
+        if self.observed_auto_updater_id == auto_updater_id {
+            return;
+        }
+
+        self.observed_auto_updater_id = auto_updater_id;
+        self._auto_update_subscription = auto_updater
+            .map(|auto_updater| cx.observe(auto_updater, |_this, _auto_updater, cx| cx.notify()));
+    }
 }
 
 impl Render for StcodeWorklineStatusItem {
@@ -205,8 +229,19 @@ impl Render for StcodeWorklineStatusItem {
             .unwrap_or((None, None));
         self.observe_thread(thread.as_ref(), cx);
 
+        let auto_updater = AutoUpdater::get(cx);
+        self.observe_auto_updater(auto_updater.as_ref(), cx);
+        let update_status = auto_updater
+            .as_ref()
+            .map(|auto_updater| auto_updater.read(cx).status());
         let thread = thread.as_ref().map(|thread| thread.read(cx));
-        let snapshots = ActivityTimelineSnapshots::from_parts(thread, &self.project, smart_run, cx);
+        let snapshots = ActivityTimelineSnapshots::from_parts(
+            thread,
+            &self.project,
+            smart_run,
+            update_status.as_ref(),
+            cx,
+        );
         render_smart_workline_status_bar(snapshots.workline(), cx)
     }
 }
@@ -253,9 +288,15 @@ impl StcodeSmartRunSnapshot {
 
 impl RenderOnce for StcodeActivityTimeline {
     fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let update_status = AutoUpdater::get(cx).map(|auto_updater| auto_updater.read(cx).status());
         let thread = self.thread.as_ref().map(|thread| thread.read(cx));
-        let snapshots =
-            ActivityTimelineSnapshots::from_parts(thread, &self.project, self.smart_run, cx);
+        let snapshots = ActivityTimelineSnapshots::from_parts(
+            thread,
+            &self.project,
+            self.smart_run,
+            update_status.as_ref(),
+            cx,
+        );
 
         match self.layout {
             StcodeActivityLayout::Summary => render_activity_summary(snapshots, cx),
@@ -426,6 +467,7 @@ impl SmartWorklineSnapshot {
         smart_todo: Option<&SmartTodoSnapshot>,
         smart_parallel: Option<&SmartParallelSnapshot>,
         smart_merge: Option<&SmartMergeSnapshot>,
+        update_state: SmartWorklineUpdateState,
     ) -> Self {
         let active_stage = smart_workline_active_stage(
             has_thread_entries,
@@ -459,6 +501,7 @@ impl SmartWorklineSnapshot {
                     || snapshot.can_create_pull_request
                     || (has_thread_entries && snapshot.should_render_card())
             }),
+            update_state,
         });
         let display_stage = stages
             .iter()
@@ -586,10 +629,87 @@ impl SmartWorklineAction {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SmartWorklineUpdateState {
+    Idle,
+    Checking,
+    Downloading,
+    Installing,
+    Updated,
+    Errored,
+}
+
+impl SmartWorklineUpdateState {
+    fn from_status(status: Option<&AutoUpdateStatus>) -> Self {
+        match status {
+            Some(AutoUpdateStatus::Checking) => Self::Checking,
+            Some(AutoUpdateStatus::Downloading { .. }) => Self::Downloading,
+            Some(AutoUpdateStatus::Installing { .. }) => Self::Installing,
+            Some(AutoUpdateStatus::Updated { .. }) => Self::Updated,
+            Some(AutoUpdateStatus::Errored { .. }) => Self::Errored,
+            Some(AutoUpdateStatus::Idle) | None => Self::Idle,
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Idle => "Update",
+            Self::Checking => "Checking",
+            Self::Downloading => "Downloading",
+            Self::Installing => "Installing",
+            Self::Updated => "Restart",
+            Self::Errored => "Retry",
+        }
+    }
+
+    fn is_busy(self) -> bool {
+        matches!(self, Self::Checking | Self::Downloading | Self::Installing)
+    }
+
+    fn should_highlight(self) -> bool {
+        self != Self::Idle
+    }
+
+    fn should_restart(self) -> bool {
+        self == Self::Updated
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct SmartWorklineControl {
     action: SmartWorklineAction,
     active: bool,
+    update_state: Option<SmartWorklineUpdateState>,
+}
+
+impl SmartWorklineControl {
+    fn label(&self) -> &'static str {
+        self.update_state
+            .map(SmartWorklineUpdateState::label)
+            .unwrap_or_else(|| self.action.label())
+    }
+
+    fn is_visually_active(&self) -> bool {
+        self.active
+            || self
+                .update_state
+                .is_some_and(SmartWorklineUpdateState::should_highlight)
+    }
+
+    fn is_disabled(&self) -> bool {
+        self.update_state
+            .is_some_and(SmartWorklineUpdateState::is_busy)
+    }
+
+    fn is_loading(&self) -> bool {
+        self.update_state
+            .is_some_and(SmartWorklineUpdateState::is_busy)
+    }
+
+    fn should_restart(&self) -> bool {
+        self.update_state
+            .is_some_and(SmartWorklineUpdateState::should_restart)
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -602,6 +722,7 @@ struct SmartWorklineControlState {
     panel_needs_review: bool,
     parallel_needs_attention: bool,
     merge_available: bool,
+    update_state: SmartWorklineUpdateState,
 }
 
 fn smart_workline_controls(state: SmartWorklineControlState) -> Vec<SmartWorklineControl> {
@@ -648,6 +769,7 @@ fn smart_workline_controls(state: SmartWorklineControlState) -> Vec<SmartWorklin
         .map(|action| SmartWorklineControl {
             action,
             active: Some(action) == active_action,
+            update_state: (action == SmartWorklineAction::Update).then_some(state.update_state),
         })
         .collect()
 }
@@ -712,17 +834,24 @@ fn render_smart_workline_status_bar(
 
 fn render_smart_workline_status_action(control: SmartWorklineControl) -> impl IntoElement {
     let action = control.action.boxed_action();
+    let should_restart = control.should_restart();
 
-    Button::new(control.action.status_bar_id(), control.action.label())
+    Button::new(control.action.status_bar_id(), control.label())
         .size(ButtonSize::Default)
         .label_size(LabelSize::Small)
-        .style(if control.active {
+        .style(if control.is_visually_active() {
             ButtonStyle::Filled
         } else {
             ButtonStyle::Subtle
         })
+        .loading(control.is_loading())
+        .disabled(control.is_disabled())
         .on_click(move |_, window, cx| {
-            window.dispatch_action(action.boxed_clone(), cx);
+            if should_restart {
+                workspace::reload(cx);
+            } else {
+                window.dispatch_action(action.boxed_clone(), cx);
+            }
         })
 }
 
@@ -3696,6 +3825,7 @@ mod tests {
             panel_needs_review: false,
             parallel_needs_attention: false,
             merge_available: false,
+            update_state: SmartWorklineUpdateState::Idle,
         });
 
         assert_eq!(
@@ -3719,6 +3849,7 @@ mod tests {
             panel_needs_review: false,
             parallel_needs_attention: false,
             merge_available: false,
+            update_state: SmartWorklineUpdateState::Idle,
         });
 
         assert_eq!(
@@ -3742,6 +3873,7 @@ mod tests {
             panel_needs_review: true,
             parallel_needs_attention: true,
             merge_available: true,
+            update_state: SmartWorklineUpdateState::Idle,
         });
 
         assert_eq!(
@@ -3754,6 +3886,54 @@ mod tests {
                 (SmartWorklineAction::Logs, false),
             ]
         );
+    }
+
+    #[test]
+    fn smart_workline_update_control_reflects_update_status() {
+        let controls = smart_workline_controls(SmartWorklineControlState {
+            active_stage: None,
+            has_thread_entries: false,
+            has_start_gate: false,
+            activity_live: false,
+            todo_live: false,
+            panel_needs_review: false,
+            parallel_needs_attention: false,
+            merge_available: false,
+            update_state: SmartWorklineUpdateState::Updated,
+        });
+
+        let update = controls
+            .iter()
+            .find(|control| control.action == SmartWorklineAction::Update)
+            .expect("update control should be present");
+        assert_eq!(update.label(), "Restart");
+        assert!(update.is_visually_active());
+        assert!(!update.is_disabled());
+        assert!(update.should_restart());
+    }
+
+    #[test]
+    fn smart_workline_update_control_blocks_busy_clicks() {
+        let controls = smart_workline_controls(SmartWorklineControlState {
+            active_stage: None,
+            has_thread_entries: false,
+            has_start_gate: false,
+            activity_live: false,
+            todo_live: false,
+            panel_needs_review: false,
+            parallel_needs_attention: false,
+            merge_available: false,
+            update_state: SmartWorklineUpdateState::Downloading,
+        });
+
+        let update = controls
+            .iter()
+            .find(|control| control.action == SmartWorklineAction::Update)
+            .expect("update control should be present");
+        assert_eq!(update.label(), "Downloading");
+        assert!(update.is_visually_active());
+        assert!(update.is_disabled());
+        assert!(update.is_loading());
     }
 
     #[test]
