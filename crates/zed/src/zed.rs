@@ -11,7 +11,7 @@ pub mod telemetry_log;
 #[cfg(target_os = "windows")]
 pub(crate) mod windows_only_instance;
 
-use agent_ui::AgentDiffToolbar;
+use agent_ui::{AgentDiffToolbar, StcodeWorklineStatusItem};
 use anyhow::Context as _;
 pub use app_menus::*;
 use assets::Assets;
@@ -213,8 +213,12 @@ pub fn init(cx: &mut App) {
         });
     })
     .on_action(|_: &OpenAccountSettings, cx| {
-        with_active_or_new_workspace(cx, |_, _, cx| {
-            cx.open_url(&zed_urls::account_url(cx));
+        with_active_or_new_workspace(cx, |_, window, cx| {
+            if workspace::AppLaunchMode::is_stcode(cx) {
+                window.dispatch_action(zed_actions::agent::OpenSettings.boxed_clone(), cx);
+            } else {
+                cx.open_url(&zed_urls::account_url(cx));
+            }
         });
     })
     .on_action(|_: &OpenTasks, cx| {
@@ -512,67 +516,76 @@ pub fn initialize_workspace(app_state: Arc<AppState>, cx: &mut App) {
             crashes::set_gpu_info(specs);
         }
 
-        let edit_prediction_menu_handle = PopoverMenuHandle::default();
-        let edit_prediction_ui = cx.new(|cx| {
-            edit_prediction_ui::EditPredictionButton::new(
-                app_state.fs.clone(),
-                app_state.user_store.clone(),
-                edit_prediction_menu_handle.clone(),
-                workspace.project().clone(),
+        if workspace::AppLaunchMode::is_stcode(cx) {
+            let stcode_workline = cx.new(|cx| {
+                StcodeWorklineStatusItem::new(&workspace_handle, workspace.project().clone(), cx)
+            });
+            workspace.status_bar().update(cx, |status_bar, cx| {
+                status_bar.add_left_item(stcode_workline, window, cx);
+            });
+        } else {
+            let edit_prediction_menu_handle = PopoverMenuHandle::default();
+            let edit_prediction_ui = cx.new(|cx| {
+                edit_prediction_ui::EditPredictionButton::new(
+                    app_state.fs.clone(),
+                    app_state.user_store.clone(),
+                    edit_prediction_menu_handle.clone(),
+                    workspace.project().clone(),
+                    cx,
+                )
+            });
+            workspace.register_action({
+                move |_, _: &edit_prediction_ui::ToggleMenu, window, cx| {
+                    edit_prediction_menu_handle.toggle(window, cx);
+                }
+            });
+
+            let search_button = cx.new(|_| search::search_status_button::SearchButton::new());
+            let diagnostic_summary =
+                cx.new(|cx| diagnostics::items::DiagnosticIndicator::new(workspace, cx));
+            let active_file_name = cx.new(|_| workspace::active_file_name::ActiveFileName::new());
+            let activity_indicator = activity_indicator::ActivityIndicator::new(
+                workspace,
+                workspace.project().read(cx).languages().clone(),
+                window,
                 cx,
-            )
-        });
-        workspace.register_action({
-            move |_, _: &edit_prediction_ui::ToggleMenu, window, cx| {
-                edit_prediction_menu_handle.toggle(window, cx);
-            }
-        });
+            );
+            let active_buffer_encoding =
+                cx.new(|_| encoding_selector::ActiveBufferEncoding::new(workspace));
+            let active_buffer_language =
+                cx.new(|_| language_selector::ActiveBufferLanguage::new(workspace));
+            let active_toolchain_language =
+                cx.new(|cx| toolchain_selector::ActiveToolchain::new(workspace, window, cx));
+            let image_info = cx.new(|_cx| ImageInfo::new(workspace));
 
-        let search_button = cx.new(|_| search::search_status_button::SearchButton::new());
-        let diagnostic_summary =
-            cx.new(|cx| diagnostics::items::DiagnosticIndicator::new(workspace, cx));
-        let active_file_name = cx.new(|_| workspace::active_file_name::ActiveFileName::new());
-        let activity_indicator = activity_indicator::ActivityIndicator::new(
-            workspace,
-            workspace.project().read(cx).languages().clone(),
-            window,
-            cx,
-        );
-        let active_buffer_encoding =
-            cx.new(|_| encoding_selector::ActiveBufferEncoding::new(workspace));
-        let active_buffer_language =
-            cx.new(|_| language_selector::ActiveBufferLanguage::new(workspace));
-        let active_toolchain_language =
-            cx.new(|cx| toolchain_selector::ActiveToolchain::new(workspace, window, cx));
-        let image_info = cx.new(|_cx| ImageInfo::new(workspace));
+            let lsp_button_menu_handle = PopoverMenuHandle::default();
+            let lsp_button =
+                cx.new(|cx| LspButton::new(workspace, lsp_button_menu_handle.clone(), window, cx));
+            workspace.register_action({
+                move |_, _: &lsp_button::ToggleMenu, window, cx| {
+                    lsp_button_menu_handle.toggle(window, cx);
+                }
+            });
 
-        let lsp_button_menu_handle = PopoverMenuHandle::default();
-        let lsp_button =
-            cx.new(|cx| LspButton::new(workspace, lsp_button_menu_handle.clone(), window, cx));
-        workspace.register_action({
-            move |_, _: &lsp_button::ToggleMenu, window, cx| {
-                lsp_button_menu_handle.toggle(window, cx);
-            }
-        });
-
-        let line_ending_indicator =
-            cx.new(|_| line_ending_selector::LineEndingIndicator::default());
-        let merge_conflict_indicator =
-            cx.new(|cx| git_ui::MergeConflictIndicator::new(workspace, cx));
-        workspace.status_bar().update(cx, |status_bar, cx| {
-            status_bar.add_left_item(search_button, window, cx);
-            status_bar.add_left_item(lsp_button, window, cx);
-            status_bar.add_left_item(diagnostic_summary, window, cx);
-            status_bar.add_left_item(active_file_name, window, cx);
-            status_bar.add_left_item(activity_indicator, window, cx);
-            status_bar.add_left_item(merge_conflict_indicator, window, cx);
-            status_bar.add_right_item(edit_prediction_ui, window, cx);
-            status_bar.add_right_item(active_buffer_encoding, window, cx);
-            status_bar.add_right_item(active_buffer_language, window, cx);
-            status_bar.add_right_item(active_toolchain_language, window, cx);
-            status_bar.add_right_item(line_ending_indicator, window, cx);
-            status_bar.add_right_item(image_info, window, cx);
-        });
+            let line_ending_indicator =
+                cx.new(|_| line_ending_selector::LineEndingIndicator::default());
+            let merge_conflict_indicator =
+                cx.new(|cx| git_ui::MergeConflictIndicator::new(workspace, cx));
+            workspace.status_bar().update(cx, |status_bar, cx| {
+                status_bar.add_left_item(search_button, window, cx);
+                status_bar.add_left_item(lsp_button, window, cx);
+                status_bar.add_left_item(diagnostic_summary, window, cx);
+                status_bar.add_left_item(active_file_name, window, cx);
+                status_bar.add_left_item(activity_indicator, window, cx);
+                status_bar.add_left_item(merge_conflict_indicator, window, cx);
+                status_bar.add_right_item(edit_prediction_ui, window, cx);
+                status_bar.add_right_item(active_buffer_encoding, window, cx);
+                status_bar.add_right_item(active_buffer_language, window, cx);
+                status_bar.add_right_item(active_toolchain_language, window, cx);
+                status_bar.add_right_item(line_ending_indicator, window, cx);
+                status_bar.add_right_item(image_info, window, cx);
+            });
+        }
 
         let panels_task = initialize_panels(window, cx);
         workspace.set_panels_task(panels_task);

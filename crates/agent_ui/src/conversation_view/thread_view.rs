@@ -8541,6 +8541,26 @@ impl ThreadView {
         error: SharedString,
         cx: &mut Context<Self>,
     ) -> Callout {
+        if AppLaunchMode::is_stcode(cx) {
+            let message = SharedString::from(format!(
+                "The selected agent needs credentials before it can continue. \
+                Configure a local or API-backed model provider, then rerun the task.\n\n{error}"
+            ));
+
+            return Callout::new()
+                .severity(Severity::Error)
+                .title("Model Credentials Needed")
+                .icon(IconName::XCircle)
+                .description(message.clone())
+                .actions_slot(
+                    h_flex()
+                        .gap_0p5()
+                        .child(self.configure_models_button(cx))
+                        .child(self.create_copy_button(message)),
+                )
+                .dismiss_action(self.dismiss_error_button(cx));
+        }
+
         Callout::new()
             .severity(Severity::Error)
             .title("Authentication Required")
@@ -8556,6 +8576,27 @@ impl ThreadView {
     }
 
     fn render_payment_required_error(&self, cx: &mut Context<Self>) -> Callout {
+        if AppLaunchMode::is_stcode(cx) {
+            let error_message = SharedString::from(
+                "The selected cloud model is out of quota. Switch to another configured model \
+                or use a local provider to keep the autonomous run moving.",
+            );
+
+            return Callout::new()
+                .severity(Severity::Error)
+                .icon(IconName::XCircle)
+                .title("Model Quota Blocked")
+                .description(error_message.clone())
+                .actions_slot(
+                    h_flex()
+                        .gap_0p5()
+                        .child(self.switch_model_button(cx))
+                        .child(self.configure_models_button(cx))
+                        .child(self.create_copy_button(error_message)),
+                )
+                .dismiss_action(self.dismiss_error_button(cx));
+        }
+
         let pro_plan_name = if AppLaunchMode::is_stcode(cx) {
             "Stcode Pro"
         } else {
@@ -8642,6 +8683,30 @@ impl ThreadView {
             .on_click(cx.listener(|this, _, window, cx| {
                 this.clear_thread_error(cx);
                 window.dispatch_action(NewThread.boxed_clone(), cx);
+            }))
+    }
+
+    fn switch_model_button(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        Button::new("switch-model", "Switch Model")
+            .label_size(LabelSize::Small)
+            .style(ButtonStyle::Filled)
+            .on_click(cx.listener({
+                move |this, _, window, cx| {
+                    this.clear_thread_error(cx);
+                    window.dispatch_action(ToggleModelSelector.boxed_clone(), cx);
+                }
+            }))
+    }
+
+    fn configure_models_button(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        Button::new("configure-models", "Configure Models")
+            .label_size(LabelSize::Small)
+            .style(ButtonStyle::Outlined)
+            .on_click(cx.listener({
+                move |this, _, window, cx| {
+                    this.clear_thread_error(cx);
+                    window.dispatch_action(OpenSettings.boxed_clone(), cx);
+                }
             }))
     }
 
