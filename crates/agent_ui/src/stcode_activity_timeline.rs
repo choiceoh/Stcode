@@ -525,6 +525,7 @@ enum SmartWorklineAction {
     Panel,
     Parallel,
     Merge,
+    Update,
     Logs,
 }
 
@@ -546,6 +547,7 @@ impl SmartWorklineAction {
             Self::Panel => "Review",
             Self::Merge => "Merge",
             Self::Parallel => "Parallel",
+            Self::Update => "Update",
             Self::Logs => "Logs",
         }
     }
@@ -556,6 +558,7 @@ impl SmartWorklineAction {
             Self::Panel => "stcode-status-review",
             Self::Merge => "stcode-status-merge",
             Self::Parallel => "stcode-status-parallel",
+            Self::Update => "stcode-status-update",
             Self::Logs => "stcode-status-logs",
         }
     }
@@ -566,7 +569,8 @@ impl SmartWorklineAction {
             Self::Panel => 1,
             Self::Merge => 2,
             Self::Parallel => 3,
-            Self::Logs => 4,
+            Self::Update => 4,
+            Self::Logs => 5,
         }
     }
 
@@ -576,6 +580,7 @@ impl SmartWorklineAction {
             Self::Panel => crate::StcodeSmartPanel.boxed_clone(),
             Self::Parallel => crate::StcodeSmartParallel.boxed_clone(),
             Self::Merge => crate::StcodeSmartMerge.boxed_clone(),
+            Self::Update => auto_update::Check.boxed_clone(),
             Self::Logs => OpenLog.boxed_clone(),
         }
     }
@@ -633,6 +638,7 @@ fn smart_workline_controls(state: SmartWorklineControlState) -> Vec<SmartWorklin
         actions.push(active_action);
     }
 
+    actions.push(SmartWorklineAction::Update);
     actions.push(SmartWorklineAction::Logs);
     actions.sort_by_key(|action| action.order());
     actions.dedup();
@@ -3696,6 +3702,7 @@ mod tests {
             workline_control_actions(&controls),
             vec![
                 (SmartWorklineAction::Start, false),
+                (SmartWorklineAction::Update, false),
                 (SmartWorklineAction::Logs, false),
             ]
         );
@@ -3718,6 +3725,7 @@ mod tests {
             workline_control_actions(&controls),
             vec![
                 (SmartWorklineAction::Start, true),
+                (SmartWorklineAction::Update, false),
                 (SmartWorklineAction::Logs, false),
             ]
         );
@@ -3742,6 +3750,7 @@ mod tests {
                 (SmartWorklineAction::Panel, true),
                 (SmartWorklineAction::Merge, false),
                 (SmartWorklineAction::Parallel, false),
+                (SmartWorklineAction::Update, false),
                 (SmartWorklineAction::Logs, false),
             ]
         );
