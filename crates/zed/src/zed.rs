@@ -2,7 +2,6 @@ mod app_menus;
 pub mod edit_prediction_registry;
 #[cfg(target_os = "macos")]
 pub(crate) mod mac_only_instance;
-mod migrate;
 mod open_listener;
 mod open_url_modal;
 mod quick_action_bar;
@@ -41,8 +40,6 @@ use language_onboarding::BasedPyrightBanner;
 use language_tools::lsp_button::{self, LspButton};
 use language_tools::lsp_log_view::LspLogToolbarItemView;
 use markdown::{Markdown, MarkdownElement, MarkdownFont, MarkdownStyle};
-use migrate::{MigrationBanner, MigrationEvent, MigrationNotification, MigrationType};
-use migrator::migrate_keymap;
 use onboarding::DOCS_URL;
 use onboarding::multibuffer_hint::MultibufferHint;
 pub use open_listener::*;
@@ -60,9 +57,8 @@ use rope::Rope;
 use search::project_search::ProjectSearchBar;
 use settings::{
     BaseKeymap, DEFAULT_KEYMAP_PATH, InvalidSettingsError, KeybindSource, KeymapFile,
-    KeymapFileLoadResult, MigrationStatus, Settings, SettingsFile, SettingsStore,
-    initial_local_debug_tasks_content, initial_project_settings_content, initial_tasks_content,
-    update_settings_file,
+    KeymapFileLoadResult, Settings, SettingsFile, SettingsStore, initial_local_debug_tasks_content,
+    initial_project_settings_content, initial_tasks_content, update_settings_file,
 };
 use sidebar::Sidebar;
 
@@ -543,19 +539,6 @@ pub fn initialize_workspace(app_state: Arc<AppState>, cx: &mut App) {
             let search_button = cx.new(|_| search::search_status_button::SearchButton::new());
             let diagnostic_summary =
                 cx.new(|cx| diagnostics::items::DiagnosticIndicator::new(workspace, cx));
-            let active_file_name = cx.new(|_| workspace::active_file_name::ActiveFileName::new());
-            let activity_indicator = activity_indicator::ActivityIndicator::new(
-                workspace,
-                workspace.project().read(cx).languages().clone(),
-                window,
-                cx,
-            );
-            let active_buffer_encoding =
-                cx.new(|_| encoding_selector::ActiveBufferEncoding::new(workspace));
-            let active_buffer_language =
-                cx.new(|_| language_selector::ActiveBufferLanguage::new(workspace));
-            let active_toolchain_language =
-                cx.new(|cx| toolchain_selector::ActiveToolchain::new(workspace, window, cx));
             let image_info = cx.new(|_cx| ImageInfo::new(workspace));
 
             let lsp_button_menu_handle = PopoverMenuHandle::default();
@@ -567,22 +550,14 @@ pub fn initialize_workspace(app_state: Arc<AppState>, cx: &mut App) {
                 }
             });
 
-            let line_ending_indicator =
-                cx.new(|_| line_ending_selector::LineEndingIndicator::default());
             let merge_conflict_indicator =
                 cx.new(|cx| git_ui::MergeConflictIndicator::new(workspace, cx));
             workspace.status_bar().update(cx, |status_bar, cx| {
                 status_bar.add_left_item(search_button, window, cx);
                 status_bar.add_left_item(lsp_button, window, cx);
                 status_bar.add_left_item(diagnostic_summary, window, cx);
-                status_bar.add_left_item(active_file_name, window, cx);
-                status_bar.add_left_item(activity_indicator, window, cx);
                 status_bar.add_left_item(merge_conflict_indicator, window, cx);
                 status_bar.add_right_item(edit_prediction_ui, window, cx);
-                status_bar.add_right_item(active_buffer_encoding, window, cx);
-                status_bar.add_right_item(active_buffer_language, window, cx);
-                status_bar.add_right_item(active_toolchain_language, window, cx);
-                status_bar.add_right_item(line_ending_indicator, window, cx);
                 status_bar.add_right_item(image_info, window, cx);
             });
         }
@@ -858,22 +833,6 @@ fn register_actions(
 ) {
     workspace
         .register_action(|_, _: &OpenDocs, _, cx| cx.open_url(DOCS_URL))
-        .register_action(
-            |workspace: &mut Workspace,
-             _: &input_latency_ui::DumpInputLatencyHistogram,
-             window: &mut Window,
-             cx: &mut Context<Workspace>| {
-                let report =
-                    input_latency_ui::format_input_latency_report(window, cx);
-                let project = workspace.project().clone();
-                let buffer = project.update(cx, |project, cx| {
-                    project.create_local_buffer(&report, None, true, cx)
-                });
-                let editor =
-                    cx.new(|cx| Editor::for_buffer(buffer, Some(project), window, cx));
-                workspace.add_item_to_active_pane(Box::new(editor), None, true, window, cx);
-            },
-        )
         .register_action(|_, _: &Minimize, window, _| {
             window.minimize_window();
         })
@@ -1287,7 +1246,6 @@ fn initialize_pane(
     window: &mut Window,
     cx: &mut Context<Workspace>,
 ) {
-    let workspace_handle = cx.weak_entity();
     pane.update(cx, |pane, cx| {
         pane.toolbar().update(cx, |toolbar, cx| {
             let multibuffer_hint = cx.new(|_| MultibufferHint::new());
@@ -1318,9 +1276,6 @@ fn initialize_pane(
             toolbar.add_item(telemetry_log_item, window, cx);
             let syntax_tree_item = cx.new(|_| language_tools::SyntaxTreeToolbarItemView::new());
             toolbar.add_item(syntax_tree_item, window, cx);
-            let migration_banner =
-                cx.new(|inner_cx| MigrationBanner::new(workspace_handle.clone(), inner_cx));
-            toolbar.add_item(migration_banner, window, cx);
             let highlights_tree_item =
                 cx.new(|_| language_tools::HighlightsTreeToolbarItemView::new());
             toolbar.add_item(highlights_tree_item, window, cx);
@@ -1790,7 +1745,7 @@ fn notify_settings_errors(result: settings::SettingsParseResult, is_user: bool, 
     };
     let id = NotificationId::Named(format!("failed-to-parse-settings-{is_user}").into());
 
-    let showed_parse_error = match error {
+    let _showed_parse_error = match error {
         Some(error) => {
             if let Some(InvalidSettingsError::LocalSettings { .. }) =
                 error.downcast_ref::<InvalidSettingsError>()
@@ -1820,53 +1775,13 @@ fn notify_settings_errors(result: settings::SettingsParseResult, is_user: bool, 
             false
         }
     };
-    let id = NotificationId::Named(format!("failed-to-migrate-settings-{is_user}").into());
-
-    match result.migration_status {
-        settings::MigrationStatus::Succeeded | settings::MigrationStatus::NotNeeded => {
-            dismiss_app_notification(&id, cx);
-        }
-        settings::MigrationStatus::Failed { error: err } => {
-            if !showed_parse_error {
-                show_app_notification(id, cx, move |cx| {
-                    cx.new(|cx| {
-                        MessageNotification::new(
-                            format!(
-                                "Failed to migrate settings\n\
-                                {err}"
-                            ),
-                            cx,
-                        )
-                        .primary_message("Open Settings File")
-                        .primary_icon(IconName::Settings)
-                        .primary_on_click(|window, cx| {
-                            window.dispatch_action(zed_actions::OpenSettingsFile.boxed_clone(), cx);
-                            cx.emit(DismissEvent);
-                        })
-                    })
-                });
-            }
-        }
-    };
 }
 
 pub fn watch_settings_files(fs: Arc<dyn fs::Fs>, cx: &mut App) {
-    MigrationNotification::set_global(cx.new(|_| MigrationNotification), cx);
-
     SettingsStore::update_global(cx, move |store, cx| {
-        store.watch_settings_files(fs, cx, |settings_file, result, cx| {
-            let is_user = matches!(settings_file, SettingsFile::User);
-            let migrating_in_memory =
-                matches!(&result.migration_status, MigrationStatus::Succeeded);
+        store.watch_settings_files(fs, cx, |_settings_file, result, cx| {
+            let is_user = matches!(_settings_file, SettingsFile::User);
             notify_settings_errors(result, is_user, cx);
-            if let Some(notifier) = MigrationNotification::try_global(cx) {
-                notifier.update(cx, |_, cx| {
-                    cx.emit(MigrationEvent::ContentChanged {
-                        migration_type: MigrationType::Settings,
-                        migrating_in_memory,
-                    });
-                });
-            }
         });
     });
 }
@@ -1925,9 +1840,8 @@ pub fn handle_keymap_file_changes(
     cx.spawn(async move |cx| {
         let _user_keymap_watcher = user_keymap_watcher;
         let mut user_keymap_file_rx = Some(user_keymap_file_rx);
-        let mut user_keymap_file_content = String::new();
+        let user_keymap_file_content = String::new();
         let mut user_keymap_content = String::new();
-        let mut migrating_in_memory = false;
         loop {
             let mut user_keymap_file_closed = false;
             let mut should_reload_keymap = true;
@@ -1940,14 +1854,7 @@ pub fn handle_keymap_file_changes(
                             if content == user_keymap_file_content {
                                 should_reload_keymap = false;
                             } else {
-                                user_keymap_file_content = content.clone();
-                                if let Ok(Some(migrated_content)) = migrate_keymap(&content) {
-                                    user_keymap_content = migrated_content;
-                                    migrating_in_memory = true;
-                                } else {
-                                    user_keymap_content = content;
-                                    migrating_in_memory = false;
-                                }
+                                user_keymap_file_content.clone_into(&mut user_keymap_content);
                             }
                         } else {
                             user_keymap_file_closed = true;
@@ -1971,14 +1878,6 @@ pub fn handle_keymap_file_changes(
             }
 
             cx.update(|cx| {
-                if let Some(notifier) = MigrationNotification::try_global(cx) {
-                    notifier.update(cx, |_, cx| {
-                        cx.emit(MigrationEvent::ContentChanged {
-                            migration_type: MigrationType::Keymap,
-                            migrating_in_memory,
-                        });
-                    });
-                }
                 let load_result = KeymapFile::load(&user_keymap_content, cx);
                 match load_result {
                     KeymapFileLoadResult::Success { key_bindings } => {
@@ -5188,7 +5087,6 @@ mod tests {
                 "diagnostics",
                 "edit_prediction",
                 "editor",
-                "encoding_selector",
                 "file_finder",
                 "git",
                 "git_onboarding",
@@ -5199,9 +5097,7 @@ mod tests {
                 "image_viewer",
                 "inline_assistant",
                 "keystroke_input",
-                "language_selector",
                 "welcome",
-                "line_ending_selector",
                 "lsp_tool",
                 "markdown",
                 "menu",
@@ -5222,7 +5118,6 @@ mod tests {
                 "rules_library",
                 "search",
                 "settings_editor",
-                "settings_profile_selector",
                 "stash_picker",
                 "svg",
                 "syntax_tree_view",
@@ -5434,8 +5329,6 @@ mod tests {
                 cx,
             );
             language_models::init(app_state.user_store.clone(), app_state.client.clone(), cx);
-            web_search::init(cx);
-            web_search_providers::init(app_state.client.clone(), app_state.user_store.clone(), cx);
             let prompt_builder = PromptBuilder::load(app_state.fs.clone(), false, cx);
             project::AgentRegistryStore::init_global(
                 cx,
@@ -5451,7 +5344,6 @@ mod tests {
                 cx,
             );
 
-            tasks_ui::init(cx);
             project::debugger::breakpoint_store::BreakpointStore::init(
                 &app_state.client.clone().into(),
             );

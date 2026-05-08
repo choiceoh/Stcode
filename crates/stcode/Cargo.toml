@@ -1,0 +1,23 @@
+[package]
+description = "Stcode native app entry point."
+edition.workspace = true
+name = "stcode"
+version = "0.1.0"
+publish.workspace = true
+license = "GPL-3.0-or-later"
+authors = ["Stcode Team"]
+default-run = "stcode"
+
+[lints]
+workspace = true
+
+[dependencies]
+zed.workspace = true
+
+[package.metadata.bundle]
+icon = ["../zed/resources/app-icon-stcode@2x.png", "../zed/resources/app-icon-stcode.png"]
+identifier = "dev.zed.Zed"
+name = "Stcode"
+osx_minimum_system_version = "10.15.7"
+osx_info_plist_exts = ["../zed/resources/info/*"]
+osx_url_schemes = ["zed"]

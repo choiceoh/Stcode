@@ -657,7 +657,6 @@
       "ctrl-shift-t": "pane::ReopenClosedItem",
       "ctrl-k ctrl-t": "theme_selector::Toggle",
       "ctrl-k ctrl-shift-t": "theme::ToggleMode",
-      "ctrl-alt-super-p": "settings_profile_selector::Toggle",
       "ctrl-t": "project_symbols::Toggle",
       "ctrl-p": "file_finder::Toggle",
       "ctrl-e": "file_finder::Toggle",
@@ -670,9 +669,6 @@
       "ctrl-shift-d": "debug_panel::ToggleFocus",
       "ctrl-shift-/": "agent::ToggleFocus",
       "ctrl-k s": "workspace::SaveAll",
-      "ctrl-k n": "encoding_selector::Toggle",
-      "ctrl-k m": "language_selector::Toggle",
-      "ctrl-m ctrl-m": "toolchain::AddToolchain",
       "escape": "workspace::Unfollow",
       "ctrl-k ctrl-left": "workspace::ActivatePaneLeft",
       "ctrl-k ctrl-right": "workspace::ActivatePaneRight",
@@ -1146,13 +1142,6 @@
     "use_key_equivalents": true,
     "bindings": {
       "tab": "channel_modal::ToggleMode",
-    },
-  },
-  {
-    "context": "ToolchainSelector",
-    "use_key_equivalents": true,
-    "bindings": {
-      "ctrl-shift-a": "toolchain::AddToolchain",
     },
   },
   {

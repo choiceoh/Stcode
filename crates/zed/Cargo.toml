@@ -28,13 +28,13 @@ test-support = [
     "title_bar/test-support",
 ]
 
+[lib]
+name = "zed"
+path = "src/lib.rs"
+
 [[bin]]
 name = "zed"
 path = "src/main.rs"
-
-[[bin]]
-name = "stcode"
-path = "src/stcode_main.rs"
 
 [dependencies]
 acp_tools.workspace = true
@@ -62,12 +62,12 @@ copilot.workspace = true
 copilot_chat.workspace = true
 copilot_ui.workspace = true
 crashes.workspace = true
-csv_preview.workspace = true
+# REMOVED csv_preview.workspace = true
 db.workspace = true
 debug_adapter_extension.workspace = true
 diagnostics.workspace = true
 editor.workspace = true
-encoding_selector.workspace = true
+# REMOVED encoding_selector.workspace = true
 env_logger.workspace = true
 extension.workspace = true
 extension_host.workspace = true
@@ -96,7 +96,7 @@ edit_prediction.workspace = true
 edit_prediction_ui.workspace = true
 http_client.workspace = true
 image_viewer.workspace = true
-input_latency_ui.workspace = true
+# REMOVED input_latency_ui.workspace = true
 install_cli.workspace = true
 json_schema_store.workspace = true
 language.workspace = true
@@ -104,10 +104,10 @@ language_extension.workspace = true
 language_model.workspace = true
 language_models.workspace = true
 language_onboarding.workspace = true
-language_selector.workspace = true
+# REMOVED language_selector.workspace = true
 language_tools.workspace = true
 languages = { workspace = true, features = ["load-grammars"] }
-line_ending_selector.workspace = true
+# REMOVED line_ending_selector.workspace = true
 log.workspace = true
 markdown.workspace = true
 markdown_preview.workspace = true
@@ -140,16 +140,16 @@ serde.workspace = true
 serde_json.workspace = true
 session.workspace = true
 settings.workspace = true
-settings_profile_selector.workspace = true
+# REMOVED settings_profile_selector.workspace = true
 settings_ui.workspace = true
 shellexpand.workspace = true
 sidebar.workspace = true
 smol.workspace = true
 snippet_provider.workspace = true
-svg_preview.workspace = true
+# REMOVED svg_preview.workspace = true
 sysinfo.workspace = true
 task.workspace = true
-tasks_ui.workspace = true
+# REMOVED tasks_ui.workspace = true
 telemetry.workspace = true
 telemetry_events.workspace = true
 terminal_view.workspace = true
@@ -162,16 +162,14 @@ time_format.workspace = true
 title_bar.workspace = true
 ztracing.workspace = true
 tracing.workspace = true
-toolchain_selector.workspace = true
+# REMOVED toolchain_selector.workspace = true
 ui.workspace = true
-ui_prompt.workspace = true
+# REMOVED ui_prompt.workspace = true
 url.workspace = true
 urlencoding.workspace = true
 util.workspace = true
 uuid.workspace = true
 watch.workspace = true
-web_search.workspace = true
-web_search_providers.workspace = true
 workspace.workspace = true
 zed_actions.workspace = true
 zed_env_vars.workspace = true
@@ -179,7 +177,7 @@ zlog.workspace = true
 zlog_settings.workspace = true
 
 [target.'cfg(target_os = "windows")'.dependencies]
-etw_tracing.workspace = true
+# REMOVED etw_tracing.workspace = true
 windows.workspace = true
 gpui = { workspace = true, features = [
     "input-latency-histogram",
@@ -232,14 +230,6 @@ osx_info_plist_exts = ["resources/info/*"]
 osx_url_schemes = ["zed"]
 
 [package.metadata.bundle]
-icon = ["resources/app-icon-stcode@2x.png", "resources/app-icon-stcode.png"]
-identifier = "dev.zed.Zed"
-name = "Stcode"
-osx_minimum_system_version = "10.15.7"
-osx_info_plist_exts = ["resources/info/*"]
-osx_url_schemes = ["zed"]
-
-[package.metadata.bundle.bin.stcode]
 icon = ["resources/app-icon-stcode@2x.png", "resources/app-icon-stcode.png"]
 identifier = "dev.zed.Zed"
 name = "Stcode"
