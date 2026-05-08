@@ -412,7 +412,7 @@ struct SmartWorklineSnapshot {
     detail: String,
     icon: IconName,
     tone: ActivityTone,
-    primary_action: Option<SmartWorklineAction>,
+    controls: Vec<SmartWorklineControl>,
     stages: Vec<SmartWorklineStage>,
 }
 
@@ -445,6 +445,21 @@ impl SmartWorklineSnapshot {
             smart_workline_review_stage(smart_panel, has_thread_entries, active_stage),
             smart_workline_merge_stage(smart_merge, has_thread_entries, active_stage),
         ];
+        let controls = smart_workline_controls(SmartWorklineControlState {
+            active_stage,
+            has_thread_entries,
+            has_start_gate: smart_start.is_some(),
+            activity_live: activity.tone.is_live(),
+            todo_live: smart_todo.is_some_and(|snapshot| snapshot.should_render_card()),
+            panel_needs_review: smart_panel.is_some_and(|snapshot| snapshot.should_render_card()),
+            parallel_needs_attention: smart_parallel
+                .is_some_and(|snapshot| snapshot.should_render_card()),
+            merge_available: smart_merge.is_some_and(|snapshot| {
+                snapshot.can_run_smart_merge
+                    || snapshot.can_create_pull_request
+                    || (has_thread_entries && snapshot.should_render_card())
+            }),
+        });
         let display_stage = stages
             .iter()
             .find(|stage| stage.active)
@@ -456,9 +471,17 @@ impl SmartWorklineSnapshot {
             detail: display_stage.detail.clone(),
             icon: display_stage.icon,
             tone: display_stage.tone,
-            primary_action: active_stage.map(SmartWorklineAction::from_stage),
+            controls,
             stages,
         }
+    }
+
+    fn primary_action(&self) -> Option<SmartWorklineAction> {
+        self.controls
+            .iter()
+            .find(|control| control.active)
+            .or_else(|| self.controls.first())
+            .map(|control| control.action)
     }
 }
 
@@ -496,12 +519,13 @@ impl SmartWorklineStageKind {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum SmartWorklineAction {
     Start,
     Panel,
     Parallel,
     Merge,
+    Logs,
 }
 
 impl SmartWorklineAction {
@@ -516,26 +540,118 @@ impl SmartWorklineAction {
         }
     }
 
+    fn label(self) -> &'static str {
+        match self {
+            Self::Start => "Start",
+            Self::Panel => "Review",
+            Self::Merge => "Merge",
+            Self::Parallel => "Parallel",
+            Self::Logs => "Logs",
+        }
+    }
+
+    fn status_bar_id(self) -> &'static str {
+        match self {
+            Self::Start => "stcode-status-start",
+            Self::Panel => "stcode-status-review",
+            Self::Merge => "stcode-status-merge",
+            Self::Parallel => "stcode-status-parallel",
+            Self::Logs => "stcode-status-logs",
+        }
+    }
+
+    fn order(self) -> usize {
+        match self {
+            Self::Start => 0,
+            Self::Panel => 1,
+            Self::Merge => 2,
+            Self::Parallel => 3,
+            Self::Logs => 4,
+        }
+    }
+
     fn boxed_action(self) -> Box<dyn Action> {
         match self {
             Self::Start => crate::StcodeSmartStart.boxed_clone(),
             Self::Panel => crate::StcodeSmartPanel.boxed_clone(),
             Self::Parallel => crate::StcodeSmartParallel.boxed_clone(),
             Self::Merge => crate::StcodeSmartMerge.boxed_clone(),
+            Self::Logs => OpenLog.boxed_clone(),
         }
     }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct SmartWorklineControl {
+    action: SmartWorklineAction,
+    active: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct SmartWorklineControlState {
+    active_stage: Option<SmartWorklineStageKind>,
+    has_thread_entries: bool,
+    has_start_gate: bool,
+    activity_live: bool,
+    todo_live: bool,
+    panel_needs_review: bool,
+    parallel_needs_attention: bool,
+    merge_available: bool,
+}
+
+fn smart_workline_controls(state: SmartWorklineControlState) -> Vec<SmartWorklineControl> {
+    let active_action = state.active_stage.map(SmartWorklineAction::from_stage);
+    let mut actions = Vec::new();
+
+    if state.has_start_gate
+        || !state.has_thread_entries
+        || active_action == Some(SmartWorklineAction::Start)
+    {
+        actions.push(SmartWorklineAction::Start);
+    }
+
+    if state.panel_needs_review
+        || state.todo_live
+        || state.activity_live
+        || state.has_thread_entries
+        || active_action == Some(SmartWorklineAction::Panel)
+    {
+        actions.push(SmartWorklineAction::Panel);
+    }
+
+    if state.merge_available || active_action == Some(SmartWorklineAction::Merge) {
+        actions.push(SmartWorklineAction::Merge);
+    }
+
+    if state.parallel_needs_attention || active_action == Some(SmartWorklineAction::Parallel) {
+        actions.push(SmartWorklineAction::Parallel);
+    }
+
+    if let Some(active_action) = active_action
+        && !actions.contains(&active_action)
+    {
+        actions.push(active_action);
+    }
+
+    actions.push(SmartWorklineAction::Logs);
+    actions.sort_by_key(|action| action.order());
+    actions.dedup();
+
+    actions
+        .into_iter()
+        .map(|action| SmartWorklineControl {
+            action,
+            active: Some(action) == active_action,
+        })
+        .collect()
 }
 
 fn render_smart_workline_status_bar(
     snapshot: SmartWorklineSnapshot,
     _cx: &mut App,
 ) -> gpui::AnyElement {
-    let active_action = snapshot
-        .stages
-        .iter()
-        .find(|stage| stage.active)
-        .map(|stage| SmartWorklineAction::from_stage(stage.kind));
     let detail = truncate_and_trailoff(&snapshot.detail, MAX_STATUS_WORKLINE_DETAIL_CHARS);
+    let controls = snapshot.controls;
 
     h_flex()
         .id("stcode-ai-workline-control-bar")
@@ -579,53 +695,22 @@ fn render_smart_workline_status_bar(
                 ),
         )
         .child(
-            h_flex()
-                .flex_none()
-                .gap_1()
-                .child(render_smart_workline_status_action(
-                    "stcode-status-start",
-                    "Start",
-                    SmartWorklineAction::Start.boxed_action(),
-                    active_action == Some(SmartWorklineAction::Start),
-                ))
-                .child(render_smart_workline_status_action(
-                    "stcode-status-review",
-                    "Review",
-                    SmartWorklineAction::Panel.boxed_action(),
-                    active_action == Some(SmartWorklineAction::Panel),
-                ))
-                .child(render_smart_workline_status_action(
-                    "stcode-status-merge",
-                    "Merge",
-                    SmartWorklineAction::Merge.boxed_action(),
-                    active_action == Some(SmartWorklineAction::Merge),
-                ))
-                .child(render_smart_workline_status_action(
-                    "stcode-status-parallel",
-                    "Parallel",
-                    SmartWorklineAction::Parallel.boxed_action(),
-                    active_action == Some(SmartWorklineAction::Parallel),
-                ))
-                .child(render_smart_workline_status_action(
-                    "stcode-status-logs",
-                    "Logs",
-                    OpenLog.boxed_clone(),
-                    false,
-                )),
+            h_flex().flex_none().gap_1().children(
+                controls
+                    .into_iter()
+                    .map(render_smart_workline_status_action),
+            ),
         )
         .into_any_element()
 }
 
-fn render_smart_workline_status_action(
-    id: &'static str,
-    label: &'static str,
-    action: Box<dyn Action>,
-    active: bool,
-) -> impl IntoElement {
-    Button::new(id, label)
+fn render_smart_workline_status_action(control: SmartWorklineControl) -> impl IntoElement {
+    let action = control.action.boxed_action();
+
+    Button::new(control.action.status_bar_id(), control.action.label())
         .size(ButtonSize::Default)
         .label_size(LabelSize::Small)
-        .style(if active {
+        .style(if control.active {
             ButtonStyle::Filled
         } else {
             ButtonStyle::Subtle
@@ -652,7 +737,7 @@ fn render_smart_workline_card(
     );
     let has_detail_rows = !detail_rows.is_empty();
     let primary_action = snapshot
-        .primary_action
+        .primary_action()
         .map(SmartWorklineAction::boxed_action);
     let start_review_repository = smart_start
         .as_ref()
@@ -3595,6 +3680,74 @@ mod tests {
     }
 
     #[test]
+    fn smart_workline_controls_keep_idle_bar_focused() {
+        let controls = smart_workline_controls(SmartWorklineControlState {
+            active_stage: None,
+            has_thread_entries: false,
+            has_start_gate: false,
+            activity_live: false,
+            todo_live: false,
+            panel_needs_review: false,
+            parallel_needs_attention: false,
+            merge_available: false,
+        });
+
+        assert_eq!(
+            workline_control_actions(&controls),
+            vec![
+                (SmartWorklineAction::Start, false),
+                (SmartWorklineAction::Logs, false),
+            ]
+        );
+    }
+
+    #[test]
+    fn smart_workline_controls_promote_active_start_gate() {
+        let controls = smart_workline_controls(SmartWorklineControlState {
+            active_stage: Some(SmartWorklineStageKind::Start),
+            has_thread_entries: false,
+            has_start_gate: true,
+            activity_live: false,
+            todo_live: false,
+            panel_needs_review: false,
+            parallel_needs_attention: false,
+            merge_available: false,
+        });
+
+        assert_eq!(
+            workline_control_actions(&controls),
+            vec![
+                (SmartWorklineAction::Start, true),
+                (SmartWorklineAction::Logs, false),
+            ]
+        );
+    }
+
+    #[test]
+    fn smart_workline_controls_share_review_merge_parallel_state() {
+        let controls = smart_workline_controls(SmartWorklineControlState {
+            active_stage: Some(SmartWorklineStageKind::Review),
+            has_thread_entries: true,
+            has_start_gate: false,
+            activity_live: false,
+            todo_live: false,
+            panel_needs_review: true,
+            parallel_needs_attention: true,
+            merge_available: true,
+        });
+
+        assert_eq!(
+            workline_control_actions(&controls),
+            vec![
+                (SmartWorklineAction::Panel, true),
+                (SmartWorklineAction::Merge, false),
+                (SmartWorklineAction::Parallel, false),
+                (SmartWorklineAction::Logs, false),
+            ]
+        );
+    }
+
+    #[test]
     fn smart_parallel_state_recommends_lane_for_main_checkout() {
         assert_eq!(
             smart_parallel_state(false, 0),
@@ -3787,5 +3940,14 @@ mod tests {
             status,
             diff_stat: Some(git::status::DiffStat { added, deleted }),
         }
+    }
+
+    fn workline_control_actions(
+        controls: &[SmartWorklineControl],
+    ) -> Vec<(SmartWorklineAction, bool)> {
+        controls
+            .iter()
+            .map(|control| (control.action, control.active))
+            .collect()
     }
 }
