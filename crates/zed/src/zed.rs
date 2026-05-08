@@ -2086,12 +2086,37 @@ pub fn load_default_keymap(cx: &mut App) {
         return;
     }
 
-    cx.bind_keys(
-        KeymapFile::load_asset(DEFAULT_KEYMAP_PATH, Some(KeybindSource::Default), cx).unwrap(),
-    );
+    cx.bind_keys(load_built_in_keymap_asset(
+        DEFAULT_KEYMAP_PATH,
+        KeybindSource::Default,
+        cx,
+    ));
 
     if let Some(asset_path) = base_keymap.asset_path() {
-        cx.bind_keys(KeymapFile::load_asset(asset_path, Some(KeybindSource::Base), cx).unwrap());
+        cx.bind_keys(load_built_in_keymap_asset(
+            asset_path,
+            KeybindSource::Base,
+            cx,
+        ));
+    }
+}
+
+fn load_built_in_keymap_asset(
+    asset_path: &str,
+    source: KeybindSource,
+    cx: &App,
+) -> Vec<KeyBinding> {
+    match KeymapFile::load_asset_allow_partial_failure(asset_path, cx) {
+        Ok(mut key_bindings) => {
+            for key_binding in &mut key_bindings {
+                key_binding.set_meta(source.meta());
+            }
+            key_bindings
+        }
+        Err(error) => {
+            log::error!("failed to load built-in keymap {asset_path}: {error:#}");
+            Vec::new()
+        }
     }
 }
 
