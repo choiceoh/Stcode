@@ -45,6 +45,7 @@ The `stcode` binary should:
 - suppress account, trial, upgrade, and reauthentication upsell surfaces in Stcode mode; missing model credentials should route to model/provider configuration, and quota blocks should route to model switching
 - use a dedicated Stcode app icon across bundled app metadata, runtime About surfaces, Linux launcher resources, and Windows icon resources
 - check Stcode GitHub Releases for bundled app updates so macOS users can install once and receive later Stcode releases through the in-app updater instead of manually downloading every new build
+- expose update checks from the bottom AI Workline control bar so users do not need to hunt through editor-style menus after installing Stcode
 - wire AI Smart Start, Panel, Parallel, and Merge buttons to auto-submitted agent prompts so those cards can start autonomous handoff, status review, lane cleanup, and merge-prep runs directly
 - include the live branch, lane isolation, branch overlap, change counts, conflict counts, diff stats, and changed-file links in AI Smart prompts so autonomous runs start with actionable workspace context
 - persist and render an AI Smart Run card that tracks the active smart workflow through snapshot capture, prompt submission, agent execution, blocker state, and the final checkpoint
@@ -59,7 +60,7 @@ Stcode's product surface should make Git, CI, worktrees, and parallel agent coor
 - AI Smart Parallel: keep parallel agents isolated so they do not edit the same worktree or overwrite each other's work
 - AI Smart Panel: show the current goal, todo state, lane isolation, changed files, checks, blockers, PR state, and merge readiness in a right-side work panel
 - AI Smart Merge: take a task through the full merge runbook automatically: checkpoint local work, run focused checks, push, create or update the PR, watch CI, fix failures, merge when clean, delete the remote branch when safe, and sync the local base branch
-- AI Smart Workline: provide one shared state model for the right-side detail board and the bottom summary actions, deriving Start, Review, Merge, Parallel, and Logs from the live stage/action model instead of maintaining separate button logic
+- AI Smart Workline: provide one shared state model for the right-side detail board and the bottom summary actions, deriving Start, Review, Merge, Parallel, Update, and Logs from the live stage/action model instead of maintaining separate button logic
 
 ## What Stays Shared
 

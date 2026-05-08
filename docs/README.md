@@ -26,7 +26,7 @@ Keep the pieces that make the experience high quality:
 
 The editor is kept because AI agents need it even when the user does not. Stcode should hide unnecessary editor complexity from the user, but retain real editing machinery for agent work, review, diagnostics, search, and diff context.
 
-The visible shell should treat AI work as the primary workflow. In Stcode mode, the bottom bar is an AI Workline control surface, not a manual editor status bar. Human-editor signals such as Plain Text, language server status, encoding, and line endings should stay hidden unless they are part of an agent review or debugging surface. The bottom Workline summary and the right AI Smart Panel must read the same state model so action readiness and blocker state stay consistent.
+The visible shell should treat AI work as the primary workflow. In Stcode mode, the bottom bar is an AI Workline control surface, not a manual editor status bar. Human-editor signals such as Plain Text, language server status, encoding, and line endings should stay hidden unless they are part of an agent review or debugging surface. The bottom Workline summary and the right AI Smart Panel must read the same state model so action readiness and blocker state stay consistent. App upkeep belongs there too: update checks should be reachable from the Workline instead of only from editor-style menus.
 
 AI Smart Merge is a one-click autonomous merge run, not a shortcut to a manual PR page. It should checkpoint local work, run focused checks, push, create or update a PR, watch CI, fix failures, merge when clean, delete the merged remote branch when safe, and sync the local base branch. The user should see the runbook state in the workline instead of babysitting Git, PR, and CI tools.
 

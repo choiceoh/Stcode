@@ -32,6 +32,8 @@ curl -fsSL https://raw.githubusercontent.com/choiceoh/Stcode/codex/stcode-trim-t
 
 Re-running the installer replaces `/Applications/Stcode.app` with the latest published release. The app also checks Stcode GitHub Releases through the in-app updater, so a user who installed once can receive later releases without manually downloading another DMG.
 
+Inside Stcode, use the bottom AI Workline `Update` control to check for a new release without opening a traditional editor menu.
+
 ## Options
 
 Install somewhere else:
