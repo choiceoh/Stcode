@@ -20,6 +20,8 @@ const MAX_SMART_PANEL_FILES: usize = 2;
 const MAX_SMART_TODO_ENTRIES: usize = 2;
 const MAX_TODO_LABEL_CHARS: usize = 56;
 const MAX_WORKLINE_DETAIL_CHARS: usize = 72;
+const STCODE_ACTIVITY_SIDE_PANEL_WIDTH: Pixels = px(420.);
+const STCODE_ACTIVITY_SIDE_PANEL_MIN_WIDTH: Pixels = px(360.);
 
 #[derive(IntoElement)]
 pub(crate) struct StcodeActivityTimeline {
@@ -238,8 +240,8 @@ fn render_activity_side_panel(
         .id("stcode-activity-side-panel")
         .flex_none()
         .h_full()
-        .w(px(320.))
-        .min_w(px(280.))
+        .w(STCODE_ACTIVITY_SIDE_PANEL_WIDTH)
+        .min_w(STCODE_ACTIVITY_SIDE_PANEL_MIN_WIDTH)
         .gap_1()
         .px_3()
         .py_2()

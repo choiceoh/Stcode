@@ -61,7 +61,10 @@ use util::ResultExt;
 use uuid::Uuid;
 use workspace::{
     AppState, MultiWorkspace, SerializedWorkspaceLocation, SessionWorkspace, Toast,
-    WorkspaceSettings, WorkspaceStore, notifications::NotificationId, restore_multiworkspace,
+    WorkspaceSettings, WorkspaceStore,
+    dock::{Panel as _, PanelSizeState},
+    notifications::NotificationId,
+    restore_multiworkspace,
 };
 
 #[cfg(feature = "mimalloc")]
@@ -69,6 +72,9 @@ use workspace::{
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 pub(crate) use workspace::AppLaunchMode as LaunchMode;
+
+const STCODE_AGENT_PANEL_CONSOLE_WIDTH: gpui::Pixels = gpui::px(1120.);
+const STCODE_AGENT_PANEL_CONSOLE_FLEX: f32 = 2.4;
 
 fn files_not_created_on_launch(errors: HashMap<io::ErrorKind, Vec<&Path>>) {
     let message = "Zed failed to launch";
@@ -212,6 +218,17 @@ fn apply_stcode_layout_to_workspace(
         // workspace layout, which would let a Stcode run rewrite Zed's restored panel state.
         workspace.open_panel::<AgentPanel>(window, cx);
         if let Some(panel) = workspace.panel::<AgentPanel>(cx) {
+            let dock = workspace.dock_at_position(panel.read(cx).position(window, cx));
+            dock.update(cx, |dock, cx| {
+                dock.set_panel_size_state(
+                    &panel,
+                    PanelSizeState {
+                        size: Some(STCODE_AGENT_PANEL_CONSOLE_WIDTH),
+                        flex: Some(STCODE_AGENT_PANEL_CONSOLE_FLEX),
+                    },
+                    cx,
+                );
+            });
             panel.read(cx).focus_handle(cx).focus(window, cx);
         }
     });

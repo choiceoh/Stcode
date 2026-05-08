@@ -25,6 +25,39 @@ use super::*;
 const STCODE_STARTUP_RULE_FILES: [&str; 2] = ["AGENTS.md", "CLAUDE.md"];
 const STCODE_STARTUP_RULE_MAX_BYTES: usize = 128 * 1024;
 const MAX_STCODE_STARTUP_SNAPSHOT_FILES: usize = 8;
+const STCODE_MESSAGE_EDITOR_MIN_LINES: usize = 5;
+const STCODE_MESSAGE_EDITOR_MAX_LINES: usize = 14;
+
+fn message_editor_auto_height_mode(cx: &App) -> editor::EditorMode {
+    let agent_settings = AgentSettings::get_global(cx);
+    let (min_lines, max_lines) = message_editor_auto_height_lines(
+        agent_settings.message_editor_min_lines,
+        agent_settings.set_message_editor_max_lines(),
+        AppLaunchMode::is_stcode(cx),
+    );
+    editor::EditorMode::AutoHeight {
+        min_lines,
+        max_lines: Some(max_lines),
+    }
+}
+
+fn message_editor_auto_height_lines(
+    configured_min_lines: usize,
+    configured_max_lines: usize,
+    is_stcode: bool,
+) -> (usize, usize) {
+    let min_lines = if is_stcode {
+        configured_min_lines.max(STCODE_MESSAGE_EDITOR_MIN_LINES)
+    } else {
+        configured_min_lines
+    };
+    let max_lines = if is_stcode {
+        configured_max_lines.max(STCODE_MESSAGE_EDITOR_MAX_LINES)
+    } else {
+        configured_max_lines
+    };
+    (min_lines, max_lines.max(min_lines))
+}
 
 #[derive(Default)]
 struct ThreadFeedbackState {
@@ -400,10 +433,7 @@ impl ThreadView {
                 session_capabilities.clone(),
                 agent_id.clone(),
                 &placeholder,
-                editor::EditorMode::AutoHeight {
-                    min_lines: AgentSettings::get_global(cx).message_editor_min_lines,
-                    max_lines: Some(AgentSettings::get_global(cx).set_message_editor_max_lines()),
-                },
+                message_editor_auto_height_mode(cx),
                 window,
                 cx,
             );
@@ -1715,14 +1745,7 @@ impl ThreadView {
                     cx,
                 )
             } else {
-                let agent_settings = AgentSettings::get_global(cx);
-                editor.set_mode(
-                    EditorMode::AutoHeight {
-                        min_lines: agent_settings.message_editor_min_lines,
-                        max_lines: Some(agent_settings.set_message_editor_max_lines()),
-                    },
-                    cx,
-                )
+                editor.set_mode(message_editor_auto_height_mode(cx), cx)
             }
         });
         cx.notify();
@@ -5478,10 +5501,7 @@ impl ThreadView {
                 sizing_behavior: SizingBehavior::Default,
             }
         } else {
-            EditorMode::AutoHeight {
-                min_lines: AgentSettings::get_global(cx).message_editor_min_lines,
-                max_lines: Some(AgentSettings::get_global(cx).set_message_editor_max_lines()),
-            }
+            message_editor_auto_height_mode(cx)
         };
         self.message_editor.update(cx, |editor, cx| {
             editor.set_mode(mode, cx);
@@ -9397,6 +9417,13 @@ mod tests {
             uri: uri.to_string(),
             text: text.to_string(),
         }
+    }
+
+    #[test]
+    fn test_stcode_message_editor_uses_console_sized_lines() {
+        assert_eq!(message_editor_auto_height_lines(2, 4, true), (5, 14));
+        assert_eq!(message_editor_auto_height_lines(8, 16, true), (8, 16));
+        assert_eq!(message_editor_auto_height_lines(2, 4, false), (2, 4));
     }
 
     #[test]

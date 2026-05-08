@@ -91,6 +91,8 @@ use workspace::{
 
 const AGENT_PANEL_KEY: &str = "agent_panel";
 const MIN_PANEL_WIDTH: Pixels = px(300.);
+const STCODE_AGENT_PANEL_MIN_WIDTH: Pixels = px(720.);
+const STCODE_AGENT_PANEL_DEFAULT_WIDTH: Pixels = px(1120.);
 const LAST_USED_AGENT_KEY: &str = "agent_panel__last_used_external_agent";
 
 /// Maximum number of idle threads kept in the agent panel's retained list.
@@ -3223,14 +3225,26 @@ impl Panel for AgentPanel {
     fn default_size(&self, window: &Window, cx: &App) -> Pixels {
         let settings = AgentSettings::get_global(cx);
         match self.position(window, cx) {
-            DockPosition::Left | DockPosition::Right => settings.default_width,
+            DockPosition::Left | DockPosition::Right => {
+                if AppLaunchMode::is_stcode(cx) {
+                    settings.default_width.max(STCODE_AGENT_PANEL_DEFAULT_WIDTH)
+                } else {
+                    settings.default_width
+                }
+            }
             DockPosition::Bottom => settings.default_height,
         }
     }
 
     fn min_size(&self, window: &Window, cx: &App) -> Option<Pixels> {
         match self.position(window, cx) {
-            DockPosition::Left | DockPosition::Right => Some(MIN_PANEL_WIDTH),
+            DockPosition::Left | DockPosition::Right => {
+                if AppLaunchMode::is_stcode(cx) {
+                    Some(STCODE_AGENT_PANEL_MIN_WIDTH)
+                } else {
+                    Some(MIN_PANEL_WIDTH)
+                }
+            }
             DockPosition::Bottom => None,
         }
     }
