@@ -666,7 +666,18 @@ fn render_smart_workline_card(
     let merge_review_repository = smart_merge
         .as_ref()
         .map(|snapshot| snapshot.repository.clone());
-    let can_start_handoff = smart_start.is_some();
+    let can_review_start_changes = smart_start
+        .as_ref()
+        .is_some_and(|snapshot| snapshot.can_review_changes);
+    let can_stash_start_changes = smart_start
+        .as_ref()
+        .is_some_and(|snapshot| snapshot.can_stash_changes);
+    let can_commit_start_changes = smart_start
+        .as_ref()
+        .is_some_and(|snapshot| snapshot.can_commit_changes);
+    let can_split_start_lane = smart_start
+        .as_ref()
+        .is_some_and(|snapshot| snapshot.can_split_lane);
     let can_review_files = smart_panel
         .as_ref()
         .is_some_and(|snapshot| snapshot.can_review);
@@ -785,7 +796,7 @@ fn render_smart_workline_card(
                             }),
                     )
                 })
-                .when(can_start_handoff, |this| {
+                .when(can_review_start_changes, |this| {
                     this.when_some(start_review_repository, |this, repository| {
                         this.child(
                             Button::new("stcode-smart-workline-start-review", "Review")
@@ -796,7 +807,9 @@ fn render_smart_workline_card(
                                 }),
                         )
                     })
-                    .child(
+                })
+                .when(can_split_start_lane, |this| {
+                    this.child(
                         Button::new("stcode-smart-workline-split", "Split Worktree")
                             .label_size(LabelSize::XSmall)
                             .style(ButtonStyle::Outlined)
@@ -804,7 +817,9 @@ fn render_smart_workline_card(
                                 window.dispatch_action(zed_git::Worktree.boxed_clone(), cx);
                             }),
                     )
-                    .when_some(start_stash_repository, |this, repository| {
+                })
+                .when(can_stash_start_changes, |this| {
+                    this.when_some(start_stash_repository, |this, repository| {
                         this.child(
                             Button::new("stcode-smart-workline-stash", "Stash")
                                 .label_size(LabelSize::XSmall)
@@ -814,7 +829,9 @@ fn render_smart_workline_card(
                                 }),
                         )
                     })
-                    .child(
+                })
+                .when(can_commit_start_changes, |this| {
+                    this.child(
                         Button::new("stcode-smart-workline-start-commit", "Commit")
                             .label_size(LabelSize::XSmall)
                             .style(ButtonStyle::Outlined)
@@ -1217,10 +1234,10 @@ fn smart_workline_start_stage(
     if let Some(snapshot) = smart_start {
         return smart_workline_stage(
             SmartWorklineStageKind::Start,
-            "Handoff",
+            snapshot.status,
             &snapshot.detail,
-            IconName::Warning,
-            ActivityTone::Waiting,
+            snapshot.icon,
+            snapshot.tone,
             active_stage,
         );
     }
@@ -1458,59 +1475,190 @@ fn render_activity_entry(entry: ActivityEntry) -> impl IntoElement {
 #[derive(Clone)]
 struct SmartStartSnapshot {
     repository: Entity<Repository>,
+    status: &'static str,
     detail: String,
+    icon: IconName,
+    tone: ActivityTone,
+    can_review_changes: bool,
+    can_stash_changes: bool,
+    can_commit_changes: bool,
+    can_split_lane: bool,
 }
 
 impl SmartStartSnapshot {
     fn from_project(project: &Entity<Project>, cx: &App) -> Option<Self> {
         let repository = project.read(cx).active_repository(cx)?;
         let repository_ref = repository.read(cx);
-        let entries = repository_ref
-            .cached_status()
-            .filter(|entry| entry.status.has_changes())
-            .collect::<Vec<_>>();
-
-        if entries.is_empty() {
-            return None;
-        }
-
         let branch_name = repository_ref
             .branch
             .as_ref()
             .map(|branch| branch.name().to_string());
-        let detail = smart_start_detail(branch_name.as_deref(), &entries);
+        let branch_ref = repository_ref
+            .branch
+            .as_ref()
+            .map(|branch| branch.ref_name.to_string());
+        let entries = repository_ref
+            .cached_status()
+            .filter(|entry| entry.status.has_changes())
+            .collect::<Vec<_>>();
+        let changed_count = entries.len();
+        let conflicted_count = entries
+            .iter()
+            .filter(|entry| entry.status.is_conflicted())
+            .count();
+        let staged_count = entries
+            .iter()
+            .filter(|entry| entry.status.staging().has_staged())
+            .count();
+        let unstaged_count = entries
+            .iter()
+            .filter(|entry| entry.status.staging().has_unstaged())
+            .count();
+        let linked_worktree_count = repository_ref.linked_worktrees().len();
+        let is_linked_worktree = repository_ref.is_linked_worktree();
+        let shared_branch_lane_count =
+            smart_shared_branch_lane_count(&repository_ref, branch_ref.as_deref());
+        let state = smart_start_state(
+            changed_count,
+            conflicted_count,
+            is_linked_worktree,
+            linked_worktree_count,
+            shared_branch_lane_count,
+        )?;
 
-        Some(Self { repository, detail })
+        Some(Self {
+            repository,
+            status: state.status(),
+            detail: smart_start_detail(
+                state,
+                branch_name.as_deref(),
+                changed_count,
+                conflicted_count,
+                staged_count,
+                unstaged_count,
+                linked_worktree_count,
+                shared_branch_lane_count,
+            ),
+            icon: state.icon(),
+            tone: state.tone(),
+            can_review_changes: changed_count > 0,
+            can_stash_changes: changed_count > 0,
+            can_commit_changes: changed_count > 0,
+            can_split_lane: state.can_split_lane(),
+        })
     }
 }
 
-fn smart_start_detail(branch_name: Option<&str>, entries: &[StatusEntry]) -> String {
-    let changed_count = entries.len();
-    let conflicted_count = entries
-        .iter()
-        .filter(|entry| entry.status.is_conflicted())
-        .count();
-    let staged_count = entries
-        .iter()
-        .filter(|entry| entry.status.staging().has_staged())
-        .count();
-    let unstaged_count = entries
-        .iter()
-        .filter(|entry| entry.status.staging().has_unstaged())
-        .count();
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SmartStartState {
+    Conflicts,
+    LeftoverChanges,
+    BranchShared,
+    NeedsLane,
+}
 
-    let branch = branch_name.unwrap_or("detached HEAD");
-    let file_label = if changed_count == 1 { "file" } else { "files" };
-
-    if conflicted_count > 0 {
-        return format!(
-            "{changed_count} changed {file_label} remain on {branch}, including {conflicted_count} conflict(s). Resolve or isolate them before starting the next session."
-        );
+impl SmartStartState {
+    fn status(self) -> &'static str {
+        match self {
+            Self::Conflicts => "Blocked",
+            Self::LeftoverChanges => "Handoff needed",
+            Self::BranchShared => "Branch overlap",
+            Self::NeedsLane => "Split recommended",
+        }
     }
 
-    format!(
-        "{changed_count} changed {file_label} remain on {branch}: {staged_count} staged, {unstaged_count} unstaged. Choose how to hand them off before starting clean."
-    )
+    fn icon(self) -> IconName {
+        match self {
+            Self::Conflicts | Self::BranchShared => IconName::GitMergeConflict,
+            Self::LeftoverChanges => IconName::GitCommit,
+            Self::NeedsLane => IconName::GitBranchPlus,
+        }
+    }
+
+    fn tone(self) -> ActivityTone {
+        match self {
+            Self::Conflicts | Self::BranchShared => ActivityTone::Failed,
+            Self::LeftoverChanges | Self::NeedsLane => ActivityTone::Waiting,
+        }
+    }
+
+    fn can_split_lane(self) -> bool {
+        matches!(self, Self::BranchShared | Self::NeedsLane)
+    }
+}
+
+fn smart_start_state(
+    changed_count: usize,
+    conflicted_count: usize,
+    is_linked_worktree: bool,
+    _linked_worktree_count: usize,
+    shared_branch_lane_count: usize,
+) -> Option<SmartStartState> {
+    if conflicted_count > 0 {
+        Some(SmartStartState::Conflicts)
+    } else if changed_count > 0 {
+        Some(SmartStartState::LeftoverChanges)
+    } else if shared_branch_lane_count > 0 {
+        Some(SmartStartState::BranchShared)
+    } else if !is_linked_worktree {
+        Some(SmartStartState::NeedsLane)
+    } else {
+        None
+    }
+}
+
+fn smart_start_detail(
+    state: SmartStartState,
+    branch_name: Option<&str>,
+    changed_count: usize,
+    conflicted_count: usize,
+    staged_count: usize,
+    unstaged_count: usize,
+    linked_worktree_count: usize,
+    shared_branch_lane_count: usize,
+) -> String {
+    let branch = branch_name.unwrap_or("detached HEAD");
+
+    match state {
+        SmartStartState::Conflicts => {
+            let file_label = if changed_count == 1 { "file" } else { "files" };
+            format!(
+                "{changed_count} changed {file_label} remain on {branch}, including {conflicted_count} conflict(s). Resolve or isolate them before starting the next session."
+            )
+        }
+        SmartStartState::LeftoverChanges => {
+            let file_label = if changed_count == 1 { "file" } else { "files" };
+            format!(
+                "{changed_count} changed {file_label} remain on {branch}: {staged_count} staged, {unstaged_count} unstaged. Preserve or stash them before starting clean."
+            )
+        }
+        SmartStartState::BranchShared => {
+            let lane_label = if shared_branch_lane_count == 1 {
+                "lane"
+            } else {
+                "lanes"
+            };
+            format!(
+                "{branch} is already used by {shared_branch_lane_count} linked {lane_label}. Start the next session in a fresh lane before another agent edits it."
+            )
+        }
+        SmartStartState::NeedsLane => {
+            if linked_worktree_count == 0 {
+                format!(
+                    "{branch} is still on the main checkout. Create an isolated lane before autonomous work starts."
+                )
+            } else {
+                let lane_label = if linked_worktree_count == 1 {
+                    "lane exists"
+                } else {
+                    "lanes exist"
+                };
+                format!(
+                    "{branch} is still on the main checkout while {linked_worktree_count} linked {lane_label}. Move this session into its own lane before starting."
+                )
+            }
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -3133,16 +3281,14 @@ mod tests {
     #[test]
     fn smart_start_detail_summarizes_clean_handoff_counts() {
         let detail = smart_start_detail(
+            SmartStartState::LeftoverChanges,
             Some("feature"),
-            &[
-                status_entry(git::status::FileStatus::index(
-                    git::status::StatusCode::Modified,
-                )),
-                status_entry(git::status::FileStatus::worktree(
-                    git::status::StatusCode::Modified,
-                )),
-                status_entry(git::status::FileStatus::Untracked),
-            ],
+            3,
+            0,
+            1,
+            2,
+            0,
+            0,
         );
 
         assert!(detail.contains("3 changed files remain on feature"));
@@ -3153,22 +3299,58 @@ mod tests {
     #[test]
     fn smart_start_detail_prioritizes_conflicts() {
         let detail = smart_start_detail(
+            SmartStartState::Conflicts,
             Some("feature"),
-            &[
-                status_entry(git::status::FileStatus::Unmerged(
-                    git::status::UnmergedStatus {
-                        first_head: git::status::UnmergedStatusCode::Updated,
-                        second_head: git::status::UnmergedStatusCode::Updated,
-                    },
-                )),
-                status_entry(git::status::FileStatus::worktree(
-                    git::status::StatusCode::Modified,
-                )),
-            ],
+            2,
+            1,
+            0,
+            1,
+            0,
+            0,
         );
 
         assert!(detail.contains("including 1 conflict"));
         assert!(detail.contains("Resolve or isolate them"));
+    }
+
+    #[test]
+    fn smart_start_state_surfaces_lane_risk_before_work_starts() {
+        assert_eq!(
+            smart_start_state(0, 0, false, 2, 0),
+            Some(SmartStartState::NeedsLane)
+        );
+        assert_eq!(
+            smart_start_state(0, 0, true, 2, 1),
+            Some(SmartStartState::BranchShared)
+        );
+        assert_eq!(smart_start_state(0, 0, true, 0, 0), None);
+    }
+
+    #[test]
+    fn smart_start_detail_explains_lane_start_gate() {
+        let split = smart_start_detail(
+            SmartStartState::NeedsLane,
+            Some("feature"),
+            0,
+            0,
+            0,
+            0,
+            2,
+            0,
+        );
+        let overlap = smart_start_detail(
+            SmartStartState::BranchShared,
+            Some("feature"),
+            0,
+            0,
+            0,
+            0,
+            2,
+            1,
+        );
+
+        assert!(split.contains("main checkout while 2 linked lanes exist"));
+        assert!(overlap.contains("feature is already used by 1 linked lane"));
     }
 
     #[test]

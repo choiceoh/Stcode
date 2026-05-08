@@ -1275,9 +1275,9 @@ fn build_stcode_smart_start_prompt(
         indoc::indoc!(
         "AI Smart Start: prepare this workspace for an autonomous coding session.
 
-         Inspect the current branch, worktree, and local changes. If leftover work exists, decide the safest path yourself: preserve useful changes in a commit, stash unrelated leftovers, resolve obvious conflicts, or split the next task into an isolated worktree lane. Do not ask the user to choose between routine Git/worktree options.
+         Inspect the current branch, worktree, lane inventory, branch overlap, and local changes. If leftover work exists, decide the safest path yourself: preserve useful changes in a commit, stash unrelated leftovers, resolve obvious conflicts, or split the next task into an isolated worktree lane. If this session is still on the main checkout or shares a branch with another linked lane, create or move to a fresh isolated lane before starting real implementation work. Do not ask the user to choose between routine Git/worktree options.
 
-         Continue until the session has a clean, understandable handoff state and the next coding lane cannot overwrite another agent's work. Summarize what you preserved, what lane/branch is active, and the next autonomous step."
+         Continue until the session has a clean, understandable handoff state and the next coding lane cannot overwrite another agent's work. Summarize what you preserved, what lane/branch is active, any lane you created or avoided, and the next autonomous step."
         ),
         context,
     )
