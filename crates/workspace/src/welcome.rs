@@ -20,7 +20,7 @@ use settings::Settings;
 use ui::{ButtonLike, Divider, DividerColor, KeyBinding, Vector, VectorName, prelude::*};
 use util::ResultExt;
 use zed_actions::{
-    Extensions, OpenKeymap, OpenOnboarding, OpenSettings, agent::OpenSettings as OpenAgentSettings,
+    Extensions, OpenKeymapFile, OpenOnboarding, OpenSettings, agent::OpenSettings as OpenAgentSettings,
     assistant::ToggleFocus, command_palette,
 };
 
@@ -276,7 +276,7 @@ fn zed_content() -> (Section<4>, Section<3>) {
                 SectionEntry {
                     icon: IconName::Keyboard,
                     title: "Customize Keymaps",
-                    action: &OpenKeymap,
+                    action: &OpenKeymapFile,
                     visibility_guard: SectionVisibility::Always,
                 },
                 SectionEntry {
@@ -336,7 +336,7 @@ fn stcode_content() -> (Section<4>, Section<3>) {
                 SectionEntry {
                     icon: IconName::Keyboard,
                     title: "Customize Keymaps",
-                    action: &OpenKeymap,
+                    action: &OpenKeymapFile,
                     visibility_guard: SectionVisibility::Always,
                 },
                 SectionEntry {

@@ -214,6 +214,9 @@ impl VsCodeSettings {
             workspace: self.workspace_settings_content(),
             modeline_lines: None,
             feature_flags: None,
+            calls: None,
+            journal: None,
+            repl: None,
         }
     }
 
