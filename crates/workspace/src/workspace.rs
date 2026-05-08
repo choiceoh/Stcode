@@ -117,7 +117,7 @@ use sqlez::{
     statement::Statement,
 };
 use status_bar::StatusBar;
-pub use status_bar::StatusItemView;
+pub use status_bar::{StatusItemView, status_bar_compact_icon_size, status_bar_icon_size};
 use std::{
     any::TypeId,
     borrow::Cow,
