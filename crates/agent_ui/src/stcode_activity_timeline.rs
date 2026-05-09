@@ -1,23 +1,22 @@
 use acp_thread::{AcpThread, AgentThreadEntry, ThreadStatus, ToolCall, ToolCallStatus};
 use agent_client_protocol as acp;
 use anyhow::Result;
-use auto_update::{AutoUpdateStatus, AutoUpdater};
 use git::{
     repository::{DiffType, UpstreamTrackingStatus},
     status::FileStatus,
 };
 use gpui::{
-    Action, Context, Entity, EntityId, IntoElement, Render, RenderOnce, Subscription, WeakEntity,
+    Context, Entity, EntityId, IntoElement, Render, RenderOnce, Subscription, WeakEntity,
 };
 use project::{
     Project,
     git_store::{Repository, StatusEntry},
 };
-use ui::{Button, ButtonStyle, Icon, IconName, Label, LabelSize, prelude::*};
+use ui::{Icon, IconName, Label, LabelSize, prelude::*};
 use util::{paths::PathStyle, truncate_and_trailoff};
-use workspace::{ItemHandle, OpenLog, StatusItemView, Workspace};
+use workspace::{ItemHandle, StatusItemView, Workspace};
 use zed_actions::{
-    CreateWorktree, NewWorktreeBranchTarget, agent::ReviewBranchDiff, git as zed_git,
+    agent::ReviewBranchDiff,
 };
 
 const MAX_TIMELINE_ENTRIES: usize = 2;
@@ -84,7 +83,6 @@ struct ActivityTimelineSnapshots {
     smart_todo: Option<SmartTodoSnapshot>,
     smart_parallel: Option<SmartParallelSnapshot>,
     smart_merge: Option<SmartMergeSnapshot>,
-    update_state: SmartWorklineUpdateState,
 }
 
 impl ActivityTimelineSnapshots {
@@ -92,7 +90,6 @@ impl ActivityTimelineSnapshots {
         thread: Option<&AcpThread>,
         project: &Entity<Project>,
         smart_run: Option<StcodeSmartRunSnapshot>,
-        update_status: Option<&AutoUpdateStatus>,
         cx: &App,
     ) -> Self {
         let has_thread_entries = thread.is_some_and(|thread| !thread.entries().is_empty());
@@ -112,7 +109,6 @@ impl ActivityTimelineSnapshots {
             smart_todo,
             smart_parallel: SmartParallelSnapshot::from_project(project, cx),
             smart_merge: SmartMergeSnapshot::from_project(project, cx),
-            update_state: SmartWorklineUpdateState::from_status(update_status),
         }
     }
 
@@ -126,7 +122,6 @@ impl ActivityTimelineSnapshots {
             self.smart_todo.as_ref(),
             self.smart_parallel.as_ref(),
             self.smart_merge.as_ref(),
-            self.update_state,
         )
     }
 }
@@ -136,12 +131,10 @@ pub struct StcodeWorklineStatusItem {
     project: Entity<Project>,
     observed_agent_panel_id: Option<EntityId>,
     observed_thread_id: Option<EntityId>,
-    observed_auto_updater_id: Option<EntityId>,
     _workspace_subscription: Subscription,
     _project_subscription: Subscription,
     _agent_panel_subscription: Option<Subscription>,
     _thread_subscription: Option<Subscription>,
-    _auto_update_subscription: Option<Subscription>,
 }
 
 impl StcodeWorklineStatusItem {
@@ -158,12 +151,10 @@ impl StcodeWorklineStatusItem {
             project,
             observed_agent_panel_id: None,
             observed_thread_id: None,
-            observed_auto_updater_id: None,
             _workspace_subscription,
             _project_subscription,
             _agent_panel_subscription: None,
             _thread_subscription: None,
-            _auto_update_subscription: None,
         }
     }
 
@@ -192,21 +183,6 @@ impl StcodeWorklineStatusItem {
         self._thread_subscription =
             thread.map(|thread| cx.observe(thread, |_this, _thread, cx| cx.notify()));
     }
-
-    fn observe_auto_updater(
-        &mut self,
-        auto_updater: Option<&Entity<AutoUpdater>>,
-        cx: &mut Context<Self>,
-    ) {
-        let auto_updater_id = auto_updater.map(|auto_updater| auto_updater.entity_id());
-        if self.observed_auto_updater_id == auto_updater_id {
-            return;
-        }
-
-        self.observed_auto_updater_id = auto_updater_id;
-        self._auto_update_subscription = auto_updater
-            .map(|auto_updater| cx.observe(auto_updater, |_this, _auto_updater, cx| cx.notify()));
-    }
 }
 
 impl Render for StcodeWorklineStatusItem {
@@ -229,17 +205,11 @@ impl Render for StcodeWorklineStatusItem {
             .unwrap_or((None, None));
         self.observe_thread(thread.as_ref(), cx);
 
-        let auto_updater = AutoUpdater::get(cx);
-        self.observe_auto_updater(auto_updater.as_ref(), cx);
-        let update_status = auto_updater
-            .as_ref()
-            .map(|auto_updater| auto_updater.read(cx).status());
         let thread = thread.as_ref().map(|thread| thread.read(cx));
         let snapshots = ActivityTimelineSnapshots::from_parts(
             thread,
             &self.project,
             smart_run,
-            update_status.as_ref(),
             cx,
         );
         render_smart_workline_status_bar(snapshots.workline(), cx)
@@ -288,13 +258,11 @@ impl StcodeSmartRunSnapshot {
 
 impl RenderOnce for StcodeActivityTimeline {
     fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
-        let update_status = AutoUpdater::get(cx).map(|auto_updater| auto_updater.read(cx).status());
         let thread = self.thread.as_ref().map(|thread| thread.read(cx));
         let snapshots = ActivityTimelineSnapshots::from_parts(
             thread,
             &self.project,
             self.smart_run,
-            update_status.as_ref(),
             cx,
         );
 
@@ -436,11 +404,6 @@ fn render_activity_side_panel(
         )
         .child(render_smart_workline_card(
             workline,
-            smart_start,
-            smart_panel,
-            smart_todo,
-            smart_parallel,
-            smart_merge,
             cx,
         ))
         .children(activity.entries.into_iter().map(render_activity_entry))
@@ -453,7 +416,6 @@ struct SmartWorklineSnapshot {
     detail: String,
     icon: IconName,
     tone: ActivityTone,
-    controls: Vec<SmartWorklineControl>,
     stages: Vec<SmartWorklineStage>,
 }
 
@@ -467,7 +429,6 @@ impl SmartWorklineSnapshot {
         smart_todo: Option<&SmartTodoSnapshot>,
         smart_parallel: Option<&SmartParallelSnapshot>,
         smart_merge: Option<&SmartMergeSnapshot>,
-        update_state: SmartWorklineUpdateState,
     ) -> Self {
         let active_stage = smart_workline_active_stage(
             has_thread_entries,
@@ -487,22 +448,6 @@ impl SmartWorklineSnapshot {
             smart_workline_review_stage(smart_panel, has_thread_entries, active_stage),
             smart_workline_merge_stage(smart_merge, has_thread_entries, active_stage),
         ];
-        let controls = smart_workline_controls(SmartWorklineControlState {
-            active_stage,
-            has_thread_entries,
-            has_start_gate: smart_start.is_some(),
-            activity_live: activity.tone.is_live(),
-            todo_live: smart_todo.is_some_and(|snapshot| snapshot.should_render_card()),
-            panel_needs_review: smart_panel.is_some_and(|snapshot| snapshot.should_render_card()),
-            parallel_needs_attention: smart_parallel
-                .is_some_and(|snapshot| snapshot.should_render_card()),
-            merge_available: smart_merge.is_some_and(|snapshot| {
-                snapshot.can_run_smart_merge
-                    || snapshot.can_create_pull_request
-                    || (has_thread_entries && snapshot.should_render_card())
-            }),
-            update_state,
-        });
         let display_stage = stages
             .iter()
             .find(|stage| stage.active)
@@ -514,17 +459,8 @@ impl SmartWorklineSnapshot {
             detail: display_stage.detail.clone(),
             icon: display_stage.icon,
             tone: display_stage.tone,
-            controls,
             stages,
         }
-    }
-
-    fn primary_action(&self) -> Option<SmartWorklineAction> {
-        self.controls
-            .iter()
-            .find(|control| control.active)
-            .or_else(|| self.controls.first())
-            .map(|control| control.action)
     }
 }
 
@@ -562,224 +498,11 @@ impl SmartWorklineStageKind {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum SmartWorklineAction {
-    Start,
-    Panel,
-    Parallel,
-    Merge,
-    Update,
-    Logs,
-}
-
-impl SmartWorklineAction {
-    fn from_stage(stage: SmartWorklineStageKind) -> Self {
-        match stage {
-            SmartWorklineStageKind::Start => Self::Start,
-            SmartWorklineStageKind::Plan
-            | SmartWorklineStageKind::Execute
-            | SmartWorklineStageKind::Review => Self::Panel,
-            SmartWorklineStageKind::Parallel => Self::Parallel,
-            SmartWorklineStageKind::Merge => Self::Merge,
-        }
-    }
-
-    fn label(self) -> &'static str {
-        match self {
-            Self::Start => "Start",
-            Self::Panel => "Review",
-            Self::Merge => "Merge",
-            Self::Parallel => "Parallel",
-            Self::Update => "Update",
-            Self::Logs => "Logs",
-        }
-    }
-
-    fn status_bar_id(self) -> &'static str {
-        match self {
-            Self::Start => "stcode-status-start",
-            Self::Panel => "stcode-status-review",
-            Self::Merge => "stcode-status-merge",
-            Self::Parallel => "stcode-status-parallel",
-            Self::Update => "stcode-status-update",
-            Self::Logs => "stcode-status-logs",
-        }
-    }
-
-    fn order(self) -> usize {
-        match self {
-            Self::Start => 0,
-            Self::Panel => 1,
-            Self::Merge => 2,
-            Self::Parallel => 3,
-            Self::Update => 4,
-            Self::Logs => 5,
-        }
-    }
-
-    fn boxed_action(self) -> Box<dyn Action> {
-        match self {
-            Self::Start => crate::StcodeSmartStart.boxed_clone(),
-            Self::Panel => crate::StcodeSmartPanel.boxed_clone(),
-            Self::Parallel => crate::StcodeSmartParallel.boxed_clone(),
-            Self::Merge => crate::StcodeSmartMerge.boxed_clone(),
-            Self::Update => auto_update::Check.boxed_clone(),
-            Self::Logs => OpenLog.boxed_clone(),
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum SmartWorklineUpdateState {
-    Idle,
-    Checking,
-    Downloading,
-    Installing,
-    Updated,
-    Errored,
-}
-
-impl SmartWorklineUpdateState {
-    fn from_status(status: Option<&AutoUpdateStatus>) -> Self {
-        match status {
-            Some(AutoUpdateStatus::Checking) => Self::Checking,
-            Some(AutoUpdateStatus::Downloading { .. }) => Self::Downloading,
-            Some(AutoUpdateStatus::Installing { .. }) => Self::Installing,
-            Some(AutoUpdateStatus::Updated { .. }) => Self::Updated,
-            Some(AutoUpdateStatus::Errored { .. }) => Self::Errored,
-            Some(AutoUpdateStatus::Idle) | None => Self::Idle,
-        }
-    }
-
-    fn label(self) -> &'static str {
-        match self {
-            Self::Idle => "Update",
-            Self::Checking => "Checking",
-            Self::Downloading => "Downloading",
-            Self::Installing => "Installing",
-            Self::Updated => "Restart",
-            Self::Errored => "Retry",
-        }
-    }
-
-    fn is_busy(self) -> bool {
-        matches!(self, Self::Checking | Self::Downloading | Self::Installing)
-    }
-
-    fn should_highlight(self) -> bool {
-        self != Self::Idle
-    }
-
-    fn should_restart(self) -> bool {
-        self == Self::Updated
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct SmartWorklineControl {
-    action: SmartWorklineAction,
-    active: bool,
-    update_state: Option<SmartWorklineUpdateState>,
-}
-
-impl SmartWorklineControl {
-    fn label(&self) -> &'static str {
-        self.update_state
-            .map(SmartWorklineUpdateState::label)
-            .unwrap_or_else(|| self.action.label())
-    }
-
-    fn is_visually_active(&self) -> bool {
-        self.active
-            || self
-                .update_state
-                .is_some_and(SmartWorklineUpdateState::should_highlight)
-    }
-
-    fn is_disabled(&self) -> bool {
-        self.update_state
-            .is_some_and(SmartWorklineUpdateState::is_busy)
-    }
-
-    fn is_loading(&self) -> bool {
-        self.update_state
-            .is_some_and(SmartWorklineUpdateState::is_busy)
-    }
-
-    fn should_restart(&self) -> bool {
-        self.update_state
-            .is_some_and(SmartWorklineUpdateState::should_restart)
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct SmartWorklineControlState {
-    active_stage: Option<SmartWorklineStageKind>,
-    has_thread_entries: bool,
-    has_start_gate: bool,
-    activity_live: bool,
-    todo_live: bool,
-    panel_needs_review: bool,
-    parallel_needs_attention: bool,
-    merge_available: bool,
-    update_state: SmartWorklineUpdateState,
-}
-
-fn smart_workline_controls(state: SmartWorklineControlState) -> Vec<SmartWorklineControl> {
-    let active_action = state.active_stage.map(SmartWorklineAction::from_stage);
-    let mut actions = Vec::new();
-
-    if state.has_start_gate
-        || !state.has_thread_entries
-        || active_action == Some(SmartWorklineAction::Start)
-    {
-        actions.push(SmartWorklineAction::Start);
-    }
-
-    if state.panel_needs_review
-        || state.todo_live
-        || state.activity_live
-        || state.has_thread_entries
-        || active_action == Some(SmartWorklineAction::Panel)
-    {
-        actions.push(SmartWorklineAction::Panel);
-    }
-
-    if state.merge_available || active_action == Some(SmartWorklineAction::Merge) {
-        actions.push(SmartWorklineAction::Merge);
-    }
-
-    if state.parallel_needs_attention || active_action == Some(SmartWorklineAction::Parallel) {
-        actions.push(SmartWorklineAction::Parallel);
-    }
-
-    if let Some(active_action) = active_action
-        && !actions.contains(&active_action)
-    {
-        actions.push(active_action);
-    }
-
-    actions.push(SmartWorklineAction::Update);
-    actions.push(SmartWorklineAction::Logs);
-    actions.sort_by_key(|action| action.order());
-    actions.dedup();
-
-    actions
-        .into_iter()
-        .map(|action| SmartWorklineControl {
-            action,
-            active: Some(action) == active_action,
-            update_state: (action == SmartWorklineAction::Update).then_some(state.update_state),
-        })
-        .collect()
-}
-
 fn render_smart_workline_status_bar(
     snapshot: SmartWorklineSnapshot,
     _cx: &mut App,
 ) -> gpui::AnyElement {
     let detail = truncate_and_trailoff(&snapshot.detail, MAX_STATUS_WORKLINE_DETAIL_CHARS);
-    let controls = snapshot.controls;
 
     h_flex()
         .id("stcode-ai-workline-control-bar")
@@ -787,138 +510,43 @@ fn render_smart_workline_status_bar(
         .gap_2()
         .overflow_hidden()
         .child(
-            h_flex()
-                .min_w_0()
-                .gap_2()
-                .child(
-                    Icon::new(snapshot.icon)
-                        .size(IconSize::Medium)
-                        .color(snapshot.tone.color()),
-                )
-                .child(
-                    v_flex()
-                        .min_w_0()
-                        .gap_0p5()
-                        .child(
-                            h_flex()
-                                .min_w_0()
-                                .gap_1()
-                                .child(
-                                    Label::new("AI Workline")
-                                        .size(LabelSize::Small)
-                                        .color(Color::Default),
-                                )
-                                .child(
-                                    Label::new(snapshot.status)
-                                        .size(LabelSize::XSmall)
-                                        .color(snapshot.tone.color()),
-                                ),
-                        )
-                        .child(
-                            Label::new(detail)
-                                .size(LabelSize::XSmall)
-                                .color(Color::Muted)
-                                .truncate(),
-                        ),
-                ),
+            Icon::new(snapshot.icon)
+                .size(IconSize::Medium)
+                .color(snapshot.tone.color()),
         )
         .child(
-            h_flex().flex_none().gap_1().children(
-                controls
-                    .into_iter()
-                    .map(render_smart_workline_status_action),
-            ),
+            v_flex()
+                .min_w_0()
+                .gap_0p5()
+                .child(
+                    h_flex()
+                        .min_w_0()
+                        .gap_1()
+                        .child(
+                            Label::new("AI Workline")
+                                .size(LabelSize::Small)
+                                .color(Color::Default),
+                        )
+                        .child(
+                            Label::new(snapshot.status)
+                                .size(LabelSize::XSmall)
+                                .color(snapshot.tone.color()),
+                        ),
+                )
+                .child(
+                    Label::new(detail)
+                        .size(LabelSize::XSmall)
+                        .color(Color::Muted)
+                        .truncate(),
+                ),
         )
         .into_any_element()
 }
 
-fn render_smart_workline_status_action(control: SmartWorklineControl) -> impl IntoElement {
-    let action = control.action.boxed_action();
-    let should_restart = control.should_restart();
-
-    Button::new(control.action.status_bar_id(), control.label())
-        .size(ButtonSize::Default)
-        .label_size(LabelSize::Small)
-        .style(if control.is_visually_active() {
-            ButtonStyle::Filled
-        } else {
-            ButtonStyle::Subtle
-        })
-        .loading(control.is_loading())
-        .disabled(control.is_disabled())
-        .on_click(move |_, window, cx| {
-            if should_restart {
-                workspace::reload(cx);
-            } else {
-                window.dispatch_action(action.boxed_clone(), cx);
-            }
-        })
-}
-
 fn render_smart_workline_card(
     snapshot: SmartWorklineSnapshot,
-    smart_start: Option<SmartStartSnapshot>,
-    smart_panel: Option<SmartPanelSnapshot>,
-    smart_todo: Option<SmartTodoSnapshot>,
-    smart_parallel: Option<SmartParallelSnapshot>,
-    smart_merge: Option<SmartMergeSnapshot>,
     cx: &mut App,
 ) -> impl IntoElement {
-    let detail_rows = smart_workline_detail_rows(
-        smart_panel.as_ref(),
-        smart_todo.as_ref(),
-        smart_parallel.as_ref(),
-        smart_merge.as_ref(),
-    );
-    let has_detail_rows = !detail_rows.is_empty();
-    let primary_action = snapshot
-        .primary_action()
-        .map(SmartWorklineAction::boxed_action);
-    let start_review_repository = smart_start
-        .as_ref()
-        .map(|snapshot| snapshot.repository.clone());
-    let start_stash_repository = smart_start
-        .as_ref()
-        .map(|snapshot| snapshot.repository.clone());
-    let panel_review_repository = smart_panel
-        .as_ref()
-        .map(|snapshot| snapshot.repository.clone());
-    let merge_review_repository = smart_merge
-        .as_ref()
-        .map(|snapshot| snapshot.repository.clone());
-    let can_review_start_changes = smart_start
-        .as_ref()
-        .is_some_and(|snapshot| snapshot.can_review_changes);
-    let can_stash_start_changes = smart_start
-        .as_ref()
-        .is_some_and(|snapshot| snapshot.can_stash_changes);
-    let can_commit_start_changes = smart_start
-        .as_ref()
-        .is_some_and(|snapshot| snapshot.can_commit_changes);
-    let can_split_start_lane = smart_start
-        .as_ref()
-        .is_some_and(|snapshot| snapshot.can_split_lane);
-    let can_review_files = smart_panel
-        .as_ref()
-        .is_some_and(|snapshot| snapshot.can_review);
-    let can_commit_panel = smart_panel
-        .as_ref()
-        .is_some_and(|snapshot| snapshot.can_commit);
-    let can_manage_parallel = smart_parallel
-        .as_ref()
-        .is_some_and(|snapshot| snapshot.should_render_card());
-    let can_review_merge = smart_merge
-        .as_ref()
-        .is_some_and(|snapshot| snapshot.can_review);
-    let can_open_pull_request = smart_merge
-        .as_ref()
-        .is_some_and(|snapshot| snapshot.can_create_pull_request);
-    let can_run_smart_merge = smart_merge
-        .as_ref()
-        .is_some_and(|snapshot| snapshot.can_run_smart_merge);
-    let can_commit_merge = smart_merge
-        .as_ref()
-        .is_some_and(|snapshot| snapshot.can_commit);
     let (border_color, background_color) = match snapshot.tone {
         ActivityTone::Done => (
             cx.theme().status().success_border,
@@ -987,337 +615,6 @@ fn render_smart_workline_card(
                 .w_full()
                 .gap_1()
                 .children(snapshot.stages.into_iter().map(render_smart_workline_stage)),
-        )
-        .when(has_detail_rows, |this| {
-            this.child(
-                v_flex()
-                    .id("stcode-smart-workline-details")
-                    .w_full()
-                    .gap_0p5()
-                    .children(
-                        detail_rows
-                            .into_iter()
-                            .map(render_smart_workline_detail_row),
-                    ),
-            )
-        })
-        .child(
-            h_flex()
-                .w_full()
-                .gap_1()
-                .flex_wrap()
-                .when_some(primary_action, |this, action| {
-                    this.child(
-                        Button::new("stcode-smart-workline-continue", "Continue")
-                            .label_size(LabelSize::XSmall)
-                            .style(ButtonStyle::Outlined)
-                            .on_click(move |_, window, cx| {
-                                window.dispatch_action(action.boxed_clone(), cx);
-                            }),
-                    )
-                })
-                .when(can_review_start_changes, |this| {
-                    this.when_some(start_review_repository, |this, repository| {
-                        this.child(
-                            Button::new("stcode-smart-workline-start-review", "Review")
-                                .label_size(LabelSize::XSmall)
-                                .style(ButtonStyle::Outlined)
-                                .on_click(move |_, window, cx| {
-                                    review_leftover_changes(repository.clone(), window, cx);
-                                }),
-                        )
-                    })
-                })
-                .when(can_split_start_lane, |this| {
-                    this.child(
-                        Button::new("stcode-smart-workline-split", "Split Worktree")
-                            .label_size(LabelSize::XSmall)
-                            .style(ButtonStyle::Outlined)
-                            .on_click(move |_, window, cx| {
-                                window.dispatch_action(zed_git::Worktree.boxed_clone(), cx);
-                            }),
-                    )
-                })
-                .when(can_stash_start_changes, |this| {
-                    this.when_some(start_stash_repository, |this, repository| {
-                        this.child(
-                            Button::new("stcode-smart-workline-stash", "Stash")
-                                .label_size(LabelSize::XSmall)
-                                .style(ButtonStyle::Outlined)
-                                .on_click(move |_, _window, cx| {
-                                    stash_leftover_changes(repository.clone(), cx);
-                                }),
-                        )
-                    })
-                })
-                .when(can_commit_start_changes, |this| {
-                    this.child(
-                        Button::new("stcode-smart-workline-start-commit", "Commit")
-                            .label_size(LabelSize::XSmall)
-                            .style(ButtonStyle::Outlined)
-                            .on_click(move |_, window, cx| {
-                                window.dispatch_action(git::ExpandCommitEditor.boxed_clone(), cx);
-                            }),
-                    )
-                })
-                .when(can_manage_parallel, |this| {
-                    this.child(
-                        Button::new("stcode-smart-workline-create-lane", "Create Lane")
-                            .label_size(LabelSize::XSmall)
-                            .style(ButtonStyle::Outlined)
-                            .on_click(move |_, window, cx| {
-                                window.dispatch_action(
-                                    CreateWorktree {
-                                        worktree_name: None,
-                                        branch_target: NewWorktreeBranchTarget::CurrentBranch,
-                                    }
-                                    .boxed_clone(),
-                                    cx,
-                                );
-                            }),
-                    )
-                    .child(
-                        Button::new("stcode-smart-workline-manage-lanes", "Manage Lanes")
-                            .label_size(LabelSize::XSmall)
-                            .style(ButtonStyle::Outlined)
-                            .on_click(move |_, window, cx| {
-                                window.dispatch_action(zed_git::Worktree.boxed_clone(), cx);
-                            }),
-                    )
-                })
-                .when(can_review_files, |this| {
-                    this.when_some(panel_review_repository, |this, repository| {
-                        this.child(
-                            Button::new("stcode-smart-workline-review-files", "Review Files")
-                                .label_size(LabelSize::XSmall)
-                                .style(ButtonStyle::Outlined)
-                                .on_click(move |_, window, cx| {
-                                    review_leftover_changes(repository.clone(), window, cx);
-                                }),
-                        )
-                    })
-                })
-                .when(can_commit_panel, |this| {
-                    this.child(
-                        Button::new("stcode-smart-workline-panel-commit", "Commit")
-                            .label_size(LabelSize::XSmall)
-                            .style(ButtonStyle::Outlined)
-                            .on_click(move |_, window, cx| {
-                                window.dispatch_action(git::ExpandCommitEditor.boxed_clone(), cx);
-                            }),
-                    )
-                })
-                .when(can_review_merge, |this| {
-                    this.when_some(merge_review_repository, |this, repository| {
-                        this.child(
-                            Button::new("stcode-smart-workline-review-merge", "Review Merge")
-                                .label_size(LabelSize::XSmall)
-                                .style(ButtonStyle::Outlined)
-                                .on_click(move |_, window, cx| {
-                                    review_merge_readiness(repository.clone(), window, cx);
-                                }),
-                        )
-                    })
-                })
-                .when(can_run_smart_merge, |this| {
-                    this.child(
-                        Button::new("stcode-smart-workline-ai-merge", "AI Merge")
-                            .label_size(LabelSize::XSmall)
-                            .style(ButtonStyle::Outlined)
-                            .on_click(move |_, window, cx| {
-                                window.dispatch_action(crate::StcodeSmartMerge.boxed_clone(), cx);
-                            }),
-                    )
-                })
-                .when(can_open_pull_request, |this| {
-                    this.child(
-                        Button::new("stcode-smart-workline-open-pr", "Create PR Link")
-                            .label_size(LabelSize::XSmall)
-                            .style(ButtonStyle::Outlined)
-                            .on_click(move |_, window, cx| {
-                                window
-                                    .dispatch_action(zed_git::CreatePullRequest.boxed_clone(), cx);
-                            }),
-                    )
-                })
-                .when(can_commit_merge, |this| {
-                    this.child(
-                        Button::new("stcode-smart-workline-merge-commit", "Commit")
-                            .label_size(LabelSize::XSmall)
-                            .style(ButtonStyle::Outlined)
-                            .on_click(move |_, window, cx| {
-                                window.dispatch_action(git::ExpandCommitEditor.boxed_clone(), cx);
-                            }),
-                    )
-                }),
-        )
-}
-
-#[derive(Clone)]
-struct SmartWorklineDetailRow {
-    id: String,
-    label: String,
-    detail: String,
-    status: &'static str,
-    icon: IconName,
-    tone: ActivityTone,
-}
-
-fn smart_workline_detail_rows(
-    smart_panel: Option<&SmartPanelSnapshot>,
-    smart_todo: Option<&SmartTodoSnapshot>,
-    smart_parallel: Option<&SmartParallelSnapshot>,
-    smart_merge: Option<&SmartMergeSnapshot>,
-) -> Vec<SmartWorklineDetailRow> {
-    let mut rows = Vec::new();
-
-    if let Some(todo) = smart_todo {
-        rows.push(SmartWorklineDetailRow {
-            id: "todo-progress".to_string(),
-            label: "Plan".to_string(),
-            detail: format!("{} · {}", todo.progress_label, todo.left_label),
-            status: todo.status,
-            icon: todo.icon,
-            tone: todo.tone,
-        });
-
-        if let Some(item) = todo
-            .items
-            .iter()
-            .find(|item| item.tone.is_live())
-            .or_else(|| todo.items.first())
-        {
-            rows.push(SmartWorklineDetailRow {
-                id: format!("todo-item-{}", item.id),
-                label: "Todo".to_string(),
-                detail: smart_panel_compact_label(&item.label, MAX_WORKLINE_DETAIL_CHARS),
-                status: item.status,
-                icon: item.icon,
-                tone: item.tone,
-            });
-        }
-    }
-
-    if let Some(parallel) = smart_parallel.filter(|snapshot| snapshot.should_render_card()) {
-        let detail = parallel
-            .lanes
-            .iter()
-            .find(|lane| lane.overlaps_active_branch)
-            .or_else(|| parallel.lanes.first())
-            .map(|lane| {
-                format!(
-                    "{} · {} · {}",
-                    lane.label,
-                    lane.branch_label(),
-                    lane.path_label
-                )
-            })
-            .unwrap_or_else(|| parallel.detail.clone());
-
-        rows.push(SmartWorklineDetailRow {
-            id: "parallel-lane".to_string(),
-            label: "Lane".to_string(),
-            detail: smart_panel_compact_label(detail, MAX_WORKLINE_DETAIL_CHARS),
-            status: parallel.status,
-            icon: parallel.icon,
-            tone: parallel.tone,
-        });
-    }
-
-    if let Some(panel) = smart_panel {
-        rows.push(SmartWorklineDetailRow {
-            id: "workspace".to_string(),
-            label: "Workspace".to_string(),
-            detail: smart_panel_compact_label(&panel.detail, MAX_WORKLINE_DETAIL_CHARS),
-            status: panel.status,
-            icon: panel.icon,
-            tone: panel.tone,
-        });
-
-        if let Some(merge) = smart_merge.filter(|snapshot| snapshot.should_render_card()) {
-            rows.push(SmartWorklineDetailRow {
-                id: "merge".to_string(),
-                label: "Merge".to_string(),
-                detail: smart_panel_compact_label(&merge.detail, MAX_WORKLINE_DETAIL_CHARS),
-                status: merge.status,
-                icon: merge.icon,
-                tone: merge.tone,
-            });
-        }
-
-        if let Some(item) = panel
-            .work_items
-            .iter()
-            .find(|item| item.tone.needs_attention())
-            .or_else(|| panel.work_items.iter().find(|item| item.tone.is_live()))
-            .or_else(|| panel.work_items.iter().find(|item| item.id == "goal"))
-        {
-            rows.push(SmartWorklineDetailRow {
-                id: format!("work-item-{}", item.id),
-                label: item.label.to_string(),
-                detail: smart_panel_compact_label(&item.detail, MAX_WORKLINE_DETAIL_CHARS),
-                status: item.status,
-                icon: item.icon,
-                tone: item.tone,
-            });
-        }
-
-        if let Some(file) = panel.files.first() {
-            rows.push(SmartWorklineDetailRow {
-                id: format!("file-{}", file.id),
-                label: "File".to_string(),
-                detail: smart_panel_compact_label(&file.path, MAX_WORKLINE_DETAIL_CHARS),
-                status: file.status,
-                icon: file.icon,
-                tone: file.tone,
-            });
-        }
-    }
-
-    if rows.is_empty()
-        && let Some(merge) = smart_merge
-    {
-        rows.push(SmartWorklineDetailRow {
-            id: "merge".to_string(),
-            label: "Merge".to_string(),
-            detail: smart_panel_compact_label(&merge.detail, MAX_WORKLINE_DETAIL_CHARS),
-            status: merge.status,
-            icon: merge.icon,
-            tone: merge.tone,
-        });
-    }
-
-    rows.truncate(4);
-    rows
-}
-
-fn render_smart_workline_detail_row(row: SmartWorklineDetailRow) -> impl IntoElement {
-    h_flex()
-        .id(format!("stcode-smart-workline-detail-{}", row.id))
-        .w_full()
-        .min_w_0()
-        .gap_1p5()
-        .px_1p5()
-        .child(
-            Icon::new(row.icon)
-                .size(IconSize::XSmall)
-                .color(row.tone.color()),
-        )
-        .child(
-            Label::new(row.label)
-                .size(LabelSize::XSmall)
-                .color(Color::Muted),
-        )
-        .child(
-            Label::new(row.detail)
-                .size(LabelSize::XSmall)
-                .color(Color::Default)
-                .truncate(),
-        )
-        .child(
-            Label::new(row.status)
-                .size(LabelSize::XSmall)
-                .color(row.tone.color()),
         )
 }
 
@@ -2687,11 +1984,12 @@ struct SmartParallelLane {
 }
 
 impl SmartParallelLane {
-    fn branch_label(&self) -> &str {
-        self.branch_ref
-            .as_deref()
-            .map(smart_branch_ref_label)
-            .unwrap_or("detached HEAD")
+    fn path_label_str(&self) -> &str {
+        if self.path_label.is_empty() {
+            "?"
+        } else {
+            &self.path_label
+        }
     }
 }
 
@@ -2878,13 +2176,6 @@ fn smart_lane_label(path: &std::path::Path) -> String {
         .filter(|name| !name.is_empty())
         .unwrap_or("workspace")
         .to_string()
-}
-
-fn smart_branch_ref_label(ref_name: &str) -> &str {
-    ref_name
-        .strip_prefix("refs/heads/")
-        .or_else(|| ref_name.strip_prefix("refs/remotes/"))
-        .unwrap_or(ref_name)
 }
 
 #[derive(Clone)]
@@ -3106,85 +2397,6 @@ fn smart_merge_detail(
 fn is_merge_base_branch(branch_name: &str) -> bool {
     let branch_name = branch_name.rsplit('/').next().unwrap_or(branch_name);
     matches!(branch_name, "main" | "master" | "trunk")
-}
-
-fn review_leftover_changes(repository: Entity<Repository>, window: &mut Window, cx: &mut App) {
-    let branch_name = repository
-        .read(cx)
-        .branch
-        .as_ref()
-        .map(|branch| branch.name().to_string())
-        .unwrap_or_else(|| "working tree".to_string());
-    let diff_receiver = repository.update(cx, |repository, cx| {
-        repository.diff(DiffType::HeadToWorktree, cx)
-    });
-
-    window
-        .spawn(cx, async move |cx| -> Result<()> {
-            let diff_text = diff_receiver.await??;
-            if diff_text.trim().is_empty() {
-                return Ok(());
-            }
-
-            cx.update(|window, cx| {
-                window.dispatch_action(
-                    Box::new(ReviewBranchDiff {
-                        diff_text: diff_text.into(),
-                        base_ref: branch_name.into(),
-                    }),
-                    cx,
-                );
-            })?;
-
-            Ok(())
-        })
-        .detach_and_log_err(cx);
-}
-
-fn review_merge_readiness(repository: Entity<Repository>, window: &mut Window, cx: &mut App) {
-    let default_branch_receiver =
-        repository.update(cx, |repository, _| repository.default_branch(true));
-
-    window
-        .spawn(cx, async move |cx| -> Result<()> {
-            let base_ref = default_branch_receiver
-                .await??
-                .unwrap_or_else(|| "main".into());
-            let diff_base_ref = base_ref.clone();
-            let diff_receiver = cx.update(|_, cx| {
-                repository.update(cx, |repository, cx| {
-                    repository.diff(
-                        DiffType::MergeBase {
-                            base_ref: diff_base_ref,
-                        },
-                        cx,
-                    )
-                })
-            })?;
-            let diff_text = diff_receiver.await??;
-            if diff_text.trim().is_empty() {
-                return Ok(());
-            }
-
-            cx.update(|window, cx| {
-                window.dispatch_action(
-                    Box::new(ReviewBranchDiff {
-                        diff_text: diff_text.into(),
-                        base_ref,
-                    }),
-                    cx,
-                );
-            })?;
-
-            Ok(())
-        })
-        .detach_and_log_err(cx);
-}
-
-fn stash_leftover_changes(repository: Entity<Repository>, cx: &mut App) {
-    repository
-        .update(cx, |repository, cx| repository.stash_all(cx))
-        .detach_and_log_err(cx);
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
