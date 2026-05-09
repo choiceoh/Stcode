@@ -19,6 +19,7 @@ use crate::provider::anthropic::AnthropicLanguageModelProvider;
 use crate::provider::bedrock::BedrockLanguageModelProvider;
 use crate::provider::cloud::CloudLanguageModelProvider;
 use crate::provider::copilot_chat::CopilotChatLanguageModelProvider;
+use crate::provider::deepseek::DeepSeekLanguageModelProvider;
 use crate::provider::google::GoogleLanguageModelProvider;
 use crate::provider::open_ai::OpenAiLanguageModelProvider;
 use crate::provider::open_ai_compatible::OpenAiCompatibleLanguageModelProvider;
@@ -270,6 +271,14 @@ fn register_language_model_providers(
     );
     registry.register_provider(
         Arc::new(XAiLanguageModelProvider::new(
+            client.http_client(),
+            credentials_provider.clone(),
+            cx,
+        )),
+        cx,
+    );
+    registry.register_provider(
+        Arc::new(DeepSeekLanguageModelProvider::new(
             client.http_client(),
             credentials_provider.clone(),
             cx,

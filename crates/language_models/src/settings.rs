@@ -5,7 +5,7 @@ use settings::RegisterSetting;
 
 use crate::provider::{
     anthropic::AnthropicSettings, bedrock::AmazonBedrockSettings, cloud::ZedDotDevSettings,
-    google::GoogleSettings, open_ai::OpenAiSettings,
+    deepseek::DeepSeekSettings, google::GoogleSettings, open_ai::OpenAiSettings,
     open_ai_compatible::OpenAiCompatibleSettings, opencode::OpenCodeSettings,
     vercel_ai_gateway::VercelAiGatewaySettings, x_ai::XAiSettings,
 };
@@ -14,6 +14,7 @@ use crate::provider::{
 pub struct AllLanguageModelSettings {
     pub anthropic: AnthropicSettings,
     pub bedrock: AmazonBedrockSettings,
+    pub deepseek: DeepSeekSettings,
     pub google: GoogleSettings,
     pub opencode: OpenCodeSettings,
     pub openai: OpenAiSettings,
@@ -30,6 +31,7 @@ impl settings::Settings for AllLanguageModelSettings {
         let language_models = content.language_models.clone().unwrap();
         let anthropic = language_models.anthropic.unwrap();
         let bedrock = language_models.bedrock.unwrap();
+        let deepseek = language_models.deepseek.unwrap();
         let google = language_models.google.unwrap();
         let opencode = language_models.opencode.unwrap();
         let openai = language_models.openai.unwrap();
@@ -51,6 +53,10 @@ impl settings::Settings for AllLanguageModelSettings {
                 authentication_method: bedrock.authentication_method.map(Into::into),
                 allow_global: bedrock.allow_global,
                 allow_extended_context: bedrock.allow_extended_context,
+            },
+            deepseek: DeepSeekSettings {
+                api_url: deepseek.api_url.unwrap_or_default(),
+                available_models: deepseek.available_models.unwrap_or_default(),
             },
             google: GoogleSettings {
                 api_url: google.api_url.unwrap(),

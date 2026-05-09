@@ -103,7 +103,8 @@ impl Model {
 
     pub fn max_output_tokens(&self) -> Option<u64> {
         match self {
-            Self::V4Flash | Self::V4Pro => Some(384_000),
+            Self::V4Flash => Some(32_768),
+            Self::V4Pro => Some(65_536),
             Self::Custom {
                 max_output_tokens, ..
             } => *max_output_tokens,

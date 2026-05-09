@@ -11,6 +11,7 @@ use std::sync::Arc;
 pub struct AllLanguageModelSettingsContent {
     pub anthropic: Option<AnthropicSettingsContent>,
     pub bedrock: Option<AmazonBedrockSettingsContent>,
+    pub deepseek: Option<DeepSeekSettingsContent>,
     pub google: Option<GoogleSettingsContent>,
     pub opencode: Option<OpenCodeSettingsContent>,
     pub openai: Option<OpenAiSettingsContent>,
@@ -236,6 +237,22 @@ pub struct GoogleAvailableModel {
 pub struct XAiSettingsContent {
     pub api_url: Option<String>,
     pub available_models: Option<Vec<XaiAvailableModel>>,
+}
+
+#[with_fallible_options]
+#[derive(Default, Clone, Debug, Serialize, Deserialize, PartialEq, JsonSchema, MergeFrom)]
+pub struct DeepSeekSettingsContent {
+    pub api_url: Option<String>,
+    pub available_models: Option<Vec<DeepSeekAvailableModel>>,
+}
+
+#[with_fallible_options]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema, MergeFrom)]
+pub struct DeepSeekAvailableModel {
+    pub name: String,
+    pub display_name: Option<String>,
+    pub max_tokens: u64,
+    pub max_output_tokens: Option<u64>,
 }
 
 #[with_fallible_options]
