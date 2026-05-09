@@ -38,3 +38,14 @@ For repository-shape changes, also run:
 ```sh
 cargo metadata --no-deps --format-version 1
 ```
+
+## Upstream Sync
+
+When you need to pull newer source from upstream Zed, prefer the helper script over ad-hoc fetch and merge steps:
+
+```sh
+script/stcode-sync-upstream setup
+script/stcode-sync-upstream sync
+```
+
+The script adds the `upstream` remote for `zed-industries/zed`, enables repo-local `git rerere`, and prepares a dedicated `sync/upstream-*` branch before merging the chosen upstream ref. See [docs/upstream-sync.md](docs/upstream-sync.md) for the full flow and the available options.
