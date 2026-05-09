@@ -12,7 +12,8 @@ use feature_flags::{FeatureFlagAppExt as _, UpdatePlanToolFeatureFlag};
 
 use agent_client_protocol as acp;
 use agent_settings::{
-    AgentProfileId, AgentSettings, SUMMARIZE_THREAD_DETAILED_PROMPT, SUMMARIZE_THREAD_PROMPT,
+    AUTO_COMPACT_PROMPT, AgentProfileId, AgentSettings, SUMMARIZE_THREAD_DETAILED_PROMPT,
+    SUMMARIZE_THREAD_PROMPT,
 };
 use anyhow::{Context as _, Result, anyhow};
 use chrono::{DateTime, Utc};
@@ -61,6 +62,14 @@ use uuid::Uuid;
 const TOOL_CANCELED_MESSAGE: &str = "Tool canceled by user";
 pub const MAX_TOOL_NAME_LENGTH: usize = 64;
 pub const MAX_SUBAGENT_DEPTH: u8 = 1;
+
+/// Fraction of the model's context window that, once reached by the most
+/// recent request, triggers automatic thread compaction.
+const AUTO_COMPACT_THRESHOLD: f32 = 0.80;
+/// Number of trailing user turns kept verbatim during auto-compaction. A
+/// "turn" starts at a `Message::User` and includes any following agent and
+/// resume messages until the next user message.
+const AUTO_COMPACT_PRESERVED_TURNS: usize = 5;
 
 /// Returned when a turn is attempted but no language model has been selected.
 #[derive(Debug)]
@@ -940,6 +949,7 @@ pub struct Thread {
     title_generation_failed: bool,
     pending_summary_generation: Option<Shared<Task<Option<SharedString>>>>,
     summary: Option<SharedString>,
+    pending_auto_compaction: Option<Task<()>>,
     messages: Vec<Message>,
     user_store: Entity<UserStore>,
     /// Holds the task that handles agent interaction until the end of the turn.
@@ -1078,6 +1088,7 @@ impl Thread {
             title_generation_failed: false,
             pending_summary_generation: None,
             summary: None,
+            pending_auto_compaction: None,
             messages: Vec::new(),
             user_store: project.read(cx).user_store(),
             running_turn: None,
@@ -1323,6 +1334,7 @@ impl Thread {
             title_generation_failed: false,
             pending_summary_generation: None,
             summary: db_thread.detailed_summary,
+            pending_auto_compaction: None,
             messages: db_thread.messages,
             user_store: project.read(cx).user_store(),
             running_turn: None,
@@ -1682,11 +1694,144 @@ impl Thread {
         cx.notify();
     }
 
+    /// Returns the index in `self.messages` of the first message in the
+    /// preserved tail (the boundary at which compaction stops). Returns
+    /// `None` if there are not strictly more than `preserved_turns` user
+    /// messages, i.e. there is nothing safe to compact.
+    fn auto_compaction_boundary(&self, preserved_turns: usize) -> Option<usize> {
+        let user_indices: Vec<usize> = self
+            .messages
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, msg)| matches!(msg, Message::User(_)).then_some(idx))
+            .collect();
+        if user_indices.len() <= preserved_turns {
+            return None;
+        }
+        user_indices
+            .get(user_indices.len() - preserved_turns)
+            .copied()
+    }
+
+    fn maybe_trigger_auto_compaction(&mut self, cx: &mut Context<Self>) {
+        if self.pending_auto_compaction.is_some() {
+            return;
+        }
+        if self.running_turn.is_some() || self.pending_message.is_some() {
+            return;
+        }
+        if self.summarization_model.is_none() {
+            return;
+        }
+        let Some(usage) = self.latest_token_usage() else {
+            return;
+        };
+        if usage.max_tokens == 0 {
+            return;
+        }
+        let ratio = usage.used_tokens as f32 / usage.max_tokens as f32;
+        if ratio < AUTO_COMPACT_THRESHOLD {
+            return;
+        }
+        let Some(boundary) = self.auto_compaction_boundary(AUTO_COMPACT_PRESERVED_TURNS) else {
+            return;
+        };
+        let task = self.compact_thread(boundary, cx);
+        self.pending_auto_compaction = Some(task);
+    }
+
+    /// Replace the older portion of `self.messages` with a single synthetic
+    /// `UserMessage` that summarizes them. `boundary` is the message index at
+    /// which the preserved tail begins, as computed by
+    /// [`Self::auto_compaction_boundary`]. The returned task drives the
+    /// summarization to completion.
+    fn compact_thread(&mut self, boundary: usize, cx: &mut Context<Self>) -> Task<()> {
+        let Some(model) = self.summarization_model.clone() else {
+            return Task::ready(());
+        };
+
+        let mut request = LanguageModelRequest {
+            intent: Some(CompletionIntent::ThreadContextSummarization),
+            temperature: AgentSettings::temperature_for_model(&model, cx),
+            ..Default::default()
+        };
+        for message in &self.messages[..boundary] {
+            request.messages.extend(message.to_request());
+        }
+        request.messages.push(LanguageModelRequestMessage {
+            role: Role::User,
+            content: vec![AUTO_COMPACT_PROMPT.into()],
+            cache: false,
+            reasoning_details: None,
+        });
+
+        cx.spawn(async move |this, cx| {
+            let mut summary = String::new();
+            let stream_result = async {
+                let mut events = model.stream_completion(request, cx).await?;
+                while let Some(event) = events.next().await {
+                    if let LanguageModelCompletionEvent::Text(text) = event? {
+                        summary.push_str(&text);
+                    }
+                }
+                anyhow::Ok(())
+            }
+            .await;
+
+            let trimmed = summary.trim().to_string();
+            this.update(cx, |this, cx| {
+                this.pending_auto_compaction = None;
+                if stream_result.is_err() || trimmed.is_empty() {
+                    if let Err(error) = stream_result {
+                        log::error!("Auto-compaction summarization failed: {error:#}");
+                    } else {
+                        log::warn!("Auto-compaction produced an empty summary; skipping");
+                    }
+                    return;
+                }
+                this.apply_compaction_summary(boundary, trimmed, cx);
+            })
+            .ok();
+        })
+    }
+
+    fn apply_compaction_summary(
+        &mut self,
+        boundary: usize,
+        summary: String,
+        cx: &mut Context<Self>,
+    ) {
+        if boundary > self.messages.len() {
+            return;
+        }
+        let drained: Vec<Message> = self.messages.drain(..boundary).collect();
+        for message in drained {
+            if let Message::User(user_message) = message {
+                self.request_token_usage.remove(&user_message.id);
+            }
+        }
+        // Defang any close tag the model may have echoed in the summary so it
+        // cannot terminate our wrapper early.
+        let safe_summary = summary.replace("</thread-summary>", "<\\/thread-summary>");
+        let summary_message = UserMessage {
+            id: UserMessageId::new(),
+            content: vec![UserMessageContent::Text(format!(
+                "<thread-summary>\n{safe_summary}\n</thread-summary>"
+            ))],
+        };
+        self.messages.insert(0, Message::User(summary_message));
+        cx.emit(ThreadAutoCompacted);
+        cx.notify();
+    }
+
     pub fn truncate(&mut self, message_id: UserMessageId, cx: &mut Context<Self>) -> Result<()> {
         self.cancel(cx).detach();
         // Clear pending message since cancel will try to flush it asynchronously,
         // and we don't want that content to be added after we truncate
         self.pending_message.take();
+        // Drop any in-flight auto-compaction so it cannot rewrite the truncated
+        // message list out from under us.
+        self.pending_auto_compaction.take();
         let Some(position) = self.messages.iter().position(
             |msg| matches!(msg, Message::User(UserMessage { id, .. }) if id == &message_id),
         ) else {
@@ -1929,7 +2074,10 @@ impl Thread {
                     }
                 }
 
-                _ = this.update(cx, |this, _| this.running_turn.take());
+                _ = this.update(cx, |this, cx| {
+                    this.running_turn.take();
+                    this.maybe_trigger_auto_compaction(cx);
+                });
             }),
         });
         Ok(events_rx)
@@ -3216,6 +3364,13 @@ pub struct TitleUpdated;
 
 impl EventEmitter<TitleUpdated> for Thread {}
 
+/// Emitted after the thread has rewritten the older portion of its message
+/// list into a single summary message. Subscribers may use this to refresh
+/// any cached views of the message list.
+pub struct ThreadAutoCompacted;
+
+impl EventEmitter<ThreadAutoCompacted> for Thread {}
+
 /// A channel-based wrapper that delivers tool input to a running tool.
 ///
 /// For non-streaming tools, created via `ToolInput::ready()` so `.recv()` resolves immediately.
@@ -4444,6 +4599,144 @@ mod tests {
                 );
             }
         });
+    }
+
+    #[gpui::test]
+    async fn test_auto_compaction_boundary_skips_when_few_messages(cx: &mut TestAppContext) {
+        let (thread, _event_stream) = setup_thread_for_test(cx).await;
+
+        cx.update(|cx| {
+            thread.update(cx, |thread, _cx| {
+                assert_eq!(
+                    thread.auto_compaction_boundary(5),
+                    None,
+                    "no messages -> nothing to compact"
+                );
+                push_user_turn(thread, "u0");
+                push_user_turn(thread, "u1");
+                push_user_turn(thread, "u2");
+                assert_eq!(
+                    thread.auto_compaction_boundary(5),
+                    None,
+                    "3 user turns is not strictly more than preserved=5"
+                );
+                push_user_turn(thread, "u3");
+                push_user_turn(thread, "u4");
+                assert_eq!(
+                    thread.auto_compaction_boundary(5),
+                    None,
+                    "exactly preserved=5 user turns must not trigger compaction"
+                );
+            });
+        });
+    }
+
+    #[gpui::test]
+    async fn test_auto_compaction_boundary_keeps_last_n_user_turns(cx: &mut TestAppContext) {
+        let (thread, _event_stream) = setup_thread_for_test(cx).await;
+
+        cx.update(|cx| {
+            thread.update(cx, |thread, _cx| {
+                for i in 0..7 {
+                    push_user_turn(thread, &format!("u{i}"));
+                }
+                let boundary = thread
+                    .auto_compaction_boundary(5)
+                    .expect("7 user turns with preserved=5 must compact");
+                let preserved_user_count = thread.messages[boundary..]
+                    .iter()
+                    .filter(|m| matches!(m, Message::User(_)))
+                    .count();
+                assert_eq!(
+                    preserved_user_count, 5,
+                    "exactly the last 5 user turns must be preserved"
+                );
+                assert!(
+                    matches!(thread.messages[boundary], Message::User(_)),
+                    "boundary must point at a user message"
+                );
+            });
+        });
+    }
+
+    #[gpui::test]
+    async fn test_apply_compaction_summary_replaces_old_messages(cx: &mut TestAppContext) {
+        let (thread, _event_stream) = setup_thread_for_test(cx).await;
+
+        cx.update(|cx| {
+            thread.update(cx, |thread, cx| {
+                for i in 0..7 {
+                    push_user_turn(thread, &format!("u{i}"));
+                }
+                let original_len = thread.messages.len();
+                let boundary = thread.auto_compaction_boundary(5).unwrap();
+                let preserved_tail: Vec<String> = thread.messages[boundary..]
+                    .iter()
+                    .filter_map(|m| match m {
+                        Message::User(user) => Some(user.to_markdown()),
+                        _ => None,
+                    })
+                    .collect();
+                thread.apply_compaction_summary(boundary, "Older work summary".into(), cx);
+
+                assert!(
+                    thread.messages.len() < original_len,
+                    "compaction must shrink the message list"
+                );
+                let Message::User(first) = &thread.messages[0] else {
+                    panic!("first message after compaction must be the synthetic summary user message");
+                };
+                assert!(
+                    first.to_markdown().contains("Older work summary"),
+                    "synthetic summary must contain the summary text"
+                );
+                let new_tail: Vec<String> = thread.messages[1..]
+                    .iter()
+                    .filter_map(|m| match m {
+                        Message::User(user) => Some(user.to_markdown()),
+                        _ => None,
+                    })
+                    .collect();
+                assert_eq!(
+                    new_tail, preserved_tail,
+                    "preserved user turns must remain identical after compaction"
+                );
+            });
+        });
+    }
+
+    #[gpui::test]
+    async fn test_maybe_trigger_auto_compaction_no_op_without_summary_model(
+        cx: &mut TestAppContext,
+    ) {
+        let (thread, _event_stream) = setup_thread_for_test(cx).await;
+
+        cx.update(|cx| {
+            thread.update(cx, |thread, cx| {
+                for i in 0..7 {
+                    push_user_turn(thread, &format!("u{i}"));
+                }
+                let before = thread.messages.len();
+                thread.maybe_trigger_auto_compaction(cx);
+                assert!(
+                    thread.pending_auto_compaction.is_none(),
+                    "must not start compaction without a summarization model"
+                );
+                assert_eq!(
+                    thread.messages.len(),
+                    before,
+                    "messages must not be touched without a summarization model"
+                );
+            });
+        });
+    }
+
+    fn push_user_turn(thread: &mut Thread, text: &str) {
+        thread.messages.push(Message::User(UserMessage {
+            id: UserMessageId::new(),
+            content: vec![UserMessageContent::Text(text.into())],
+        }));
+        thread.messages.push(Message::Agent(AgentMessage::default()));
     }
 
     #[gpui::test]
