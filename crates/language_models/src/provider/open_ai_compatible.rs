@@ -22,7 +22,7 @@ use ui::{ElevationIndex, Tooltip, prelude::*};
 use ui_input::InputField;
 use util::ResultExt;
 
-use crate::provider::open_ai::{
+use open_ai::completion::{
     OpenAiEventMapper, OpenAiResponseEventMapper, into_open_ai, into_open_ai_response,
 };
 pub use settings::OpenAiCompatibleAvailableModel as AvailableModel;

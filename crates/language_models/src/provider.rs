@@ -1,11 +1,5 @@
 pub mod anthropic;
-pub mod bedrock;
 pub mod cloud;
 pub mod copilot_chat;
 pub mod deepseek;
-pub mod google;
-pub mod open_ai;
 pub mod open_ai_compatible;
-pub mod opencode;
-pub mod vercel_ai_gateway;
-pub mod x_ai;

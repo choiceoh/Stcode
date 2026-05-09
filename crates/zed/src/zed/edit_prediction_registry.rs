@@ -1,5 +1,4 @@
 use client::{Client, UserStore};
-use codestral::{CodestralEditPredictionDelegate, load_codestral_api_key};
 use collections::HashMap;
 use copilot::CopilotEditPredictionDelegate;
 use edit_prediction::{EditPredictionModel, ZedEditPredictionDelegate};
@@ -114,20 +113,14 @@ fn edit_prediction_provider_config_for_settings(cx: &App) -> Option<EditPredicti
         EditPredictionProvider::Zed => {
             Some(EditPredictionProviderConfig::Zed(EditPredictionModel::Zeta))
         }
-        EditPredictionProvider::Codestral => Some(EditPredictionProviderConfig::Codestral),
-        EditPredictionProvider::Ollama | EditPredictionProvider::OpenAiCompatibleApi => {
-            let custom_settings = if provider == EditPredictionProvider::Ollama {
-                settings.ollama.as_ref()?
-            } else {
-                settings.open_ai_compatible_api.as_ref()?
-            };
+        EditPredictionProvider::OpenAiCompatibleApi => {
+            let custom_settings = settings.open_ai_compatible_api.as_ref()?;
 
             let mut format = custom_settings.prompt_format;
             if format == EditPredictionPromptFormat::Infer {
                 if let Some(inferred_format) = infer_prompt_format(&custom_settings.model) {
                     format = inferred_format;
                 } else {
-                    // todo: notify user that prompt format inference failed
                     return None;
                 }
             }
@@ -171,7 +164,6 @@ fn infer_prompt_format(model: &str) -> Option<EditPredictionPromptFormat> {
 #[derive(Copy, Clone, PartialEq, Eq)]
 enum EditPredictionProviderConfig {
     Copilot,
-    Codestral,
     Zed(EditPredictionModel),
 }
 
@@ -179,7 +171,6 @@ impl EditPredictionProviderConfig {
     fn name(&self) -> &'static str {
         match self {
             EditPredictionProviderConfig::Copilot => "Copilot",
-            EditPredictionProviderConfig::Codestral => "Codestral",
             EditPredictionProviderConfig::Zed(model) => match model {
                 EditPredictionModel::Zeta => "Zeta",
                 EditPredictionModel::Fim { .. } => "FIM",
@@ -202,9 +193,6 @@ fn assign_edit_prediction_providers(
     user_store: Entity<UserStore>,
     cx: &mut App,
 ) {
-    if provider_config == Some(EditPredictionProviderConfig::Codestral) {
-        load_codestral_api_key(cx).detach();
-    }
     for (editor, window) in editors.borrow().iter() {
         _ = window.update(cx, |_window, window, cx| {
             _ = editor.update(cx, |editor, cx| {
@@ -269,11 +257,6 @@ fn assign_edit_prediction_provider(
                 editor.set_edit_prediction_provider(Some(provider), window, cx);
             }
         }
-        Some(EditPredictionProviderConfig::Codestral) => {
-            let http_client = client.http_client();
-            let provider = cx.new(|_| CodestralEditPredictionDelegate::new(http_client));
-            editor.set_edit_prediction_provider(Some(provider), window, cx);
-        }
         Some(EditPredictionProviderConfig::Zed(model)) => {
             let ep_store = edit_prediction::EditPredictionStore::global(client, &user_store, cx);
 
@@ -309,108 +292,5 @@ fn assign_edit_prediction_provider(
                 editor.set_edit_prediction_provider(Some(provider), window, cx);
             }
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use editor::MultiBuffer;
-    use gpui::{BorrowAppContext, TestAppContext};
-    use settings::{EditPredictionProvider, SettingsStore};
-    use workspace::AppState;
-
-    #[gpui::test]
-    async fn test_subscribe_uses_stale_provider_config_after_settings_change(
-        cx: &mut TestAppContext,
-    ) {
-        let app_state = cx.update(|cx| {
-            let app_state = AppState::test(cx);
-            client::init(&app_state.client, cx);
-            language_model::init(cx);
-            client::RefreshLlmTokenListener::register(
-                app_state.client.clone(),
-                app_state.user_store.clone(),
-                cx,
-            );
-            editor::init(cx);
-            app_state
-        });
-
-        // Override the default provider to None so the subscribe closure
-        // captures None at init time. (The test default is Zed/Zeta1, which
-        // is a no-op on project-less editors and would mask the bug.)
-        cx.update(|cx| {
-            cx.update_global::<SettingsStore, _>(|store: &mut SettingsStore, cx| {
-                store.update_user_settings(cx, |settings| {
-                    settings.project.all_languages.edit_predictions =
-                        Some(settings::EditPredictionSettingsContent {
-                            provider: Some(EditPredictionProvider::None),
-                            ..Default::default()
-                        });
-                });
-            });
-        });
-
-        cx.update(|cx| {
-            init(app_state.client.clone(), app_state.user_store.clone(), cx);
-        });
-
-        // Create an editor in a window so observe_new registers it.
-        let editor = cx.add_window(|window, cx| {
-            let buffer = cx.new(|_cx| MultiBuffer::new(language::Capability::ReadWrite));
-            Editor::new(editor::EditorMode::full(), buffer, None, window, cx)
-        });
-
-        editor
-            .update(cx, |editor, _window, _cx| {
-                assert!(
-                    editor.edit_prediction_provider().is_none(),
-                    "editor should start with no provider when settings = None"
-                );
-            })
-            .unwrap();
-
-        // Change settings to Codestral. The observe_global closure updates its
-        // own copy of provider_config and assigns Codestral to all editors.
-        cx.update(|cx| {
-            cx.update_global::<SettingsStore, _>(|store: &mut SettingsStore, cx| {
-                store.update_user_settings(cx, |settings| {
-                    settings.project.all_languages.edit_predictions =
-                        Some(settings::EditPredictionSettingsContent {
-                            provider: Some(EditPredictionProvider::Codestral),
-                            ..Default::default()
-                        });
-                });
-            });
-        });
-
-        editor
-            .update(cx, |editor, _window, _cx| {
-                assert!(
-                    editor.edit_prediction_provider().is_some(),
-                    "editor should have a provider after changing settings to Codestral"
-                );
-            })
-            .unwrap();
-
-        // Emit PrivateUserInfoUpdated. The subscribe closure should use the
-        // CURRENT provider config (Codestral), but due to the bug it uses the
-        // stale init-time value (None) and clears the provider.
-        cx.update(|cx| {
-            app_state.user_store.update(cx, |_, cx| {
-                cx.emit(client::user::Event::PrivateUserInfoUpdated);
-            });
-        });
-        cx.run_until_parked();
-
-        editor
-            .update(cx, |editor, _window, _cx| {
-                assert!(
-                    editor.edit_prediction_provider().is_some(),
-                    "BUG: subscribe closure used stale provider_config (None) instead of current (Codestral)"
-                );
-            })
-            .unwrap();
     }
 }

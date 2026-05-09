@@ -54,7 +54,6 @@ chrono.workspace = true
 clap.workspace = true
 cli.workspace = true
 client.workspace = true
-codestral.workspace = true
 collections.workspace = true
 command_palette.workspace = true
 component.workspace = true

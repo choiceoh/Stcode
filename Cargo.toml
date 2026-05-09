@@ -17,8 +17,6 @@ members = [
     "crates/auto_update",
     # REMOVED "crates/auto_update_helper",
     "crates/auto_update_ui",
-    "crates/aws_http_client",
-    "crates/bedrock",
     "crates/breadcrumbs",
     "crates/buffer_diff",
     "crates/cli",
@@ -27,7 +25,6 @@ members = [
     "crates/cloud_api_client",
     "crates/cloud_api_types",
     "crates/cloud_llm_client",
-    "crates/codestral",
     "crates/collections",
     "crates/command_palette",
     "crates/command_palette_hooks",
@@ -109,18 +106,14 @@ members = [
     "crates/media",
     "crates/menu",
     "crates/migrator",
-    "crates/mistral",
     "crates/multi_buffer",
     "crates/nc",
     "crates/net",
     "crates/node_runtime",
     "crates/notifications",
-    "crates/ollama",
     "crates/onboarding",
-    "crates/opencode",
     "crates/open_ai",
     "crates/open_path_prompt",
-    "crates/open_router",
     "crates/outline",
     "crates/outline_panel",
     "crates/panel",
@@ -185,11 +178,9 @@ members = [
     # REMOVED "crates/ui_prompt",
     "crates/util",
     "crates/util_macros",
-    "crates/vercel",
     "crates/watch",
     "crates/workspace",
     "crates/worktree",
-    "crates/x_ai",
     "crates/zed",
     "crates/zed_actions",
     "crates/zed_credentials_provider",
@@ -233,8 +224,6 @@ assets = { path = "crates/assets" }
 audio = { path = "crates/audio" }
 auto_update = { path = "crates/auto_update" }
 auto_update_ui = { path = "crates/auto_update_ui" }
-aws_http_client = { path = "crates/aws_http_client" }
-bedrock = { path = "crates/bedrock" }
 breadcrumbs = { path = "crates/breadcrumbs" }
 buffer_diff = { path = "crates/buffer_diff" }
 cli = { path = "crates/cli" }
@@ -327,18 +316,14 @@ media = { path = "crates/media" }
 menu = { path = "crates/menu" }
 mermaid-rs-renderer = { git = "https://github.com/zed-industries/mermaid-rs-renderer", rev = "374db9ead5426697c6c2111151d9f246899bc638", default-features = false }
 migrator = { path = "crates/migrator" }
-mistral = { path = "crates/mistral" }
 multi_buffer = { path = "crates/multi_buffer" }
 nc = { path = "crates/nc" }
 net = { path = "crates/net" }
 node_runtime = { path = "crates/node_runtime" }
 notifications = { path = "crates/notifications" }
-ollama = { path = "crates/ollama" }
 onboarding = { path = "crates/onboarding" }
-opencode = { path = "crates/opencode" }
 open_ai = { path = "crates/open_ai" }
 open_path_prompt = { path = "crates/open_path_prompt" }
-open_router = { path = "crates/open_router", features = ["schemars"] }
 outline = { path = "crates/outline" }
 outline_panel = { path = "crates/outline_panel" }
 panel = { path = "crates/panel" }
@@ -379,7 +364,6 @@ sqlez = { path = "crates/sqlez" }
 sqlez_macros = { path = "crates/sqlez_macros" }
 streaming_diff = { path = "crates/streaming_diff" }
 sum_tree = { path = "crates/sum_tree" }
-codestral = { path = "crates/codestral" }
 system_specs = { path = "crates/system_specs" }
 syntax_theme = { path = "crates/syntax_theme" }
 task = { path = "crates/task" }
@@ -403,12 +387,10 @@ ui_macros = { path = "crates/ui_macros" }
 # REMOVED ui_prompt = { path = "crates/ui_prompt" }
 util = { path = "crates/util" }
 util_macros = { path = "crates/util_macros" }
-vercel = { path = "crates/vercel" }
 
 watch = { path = "crates/watch" }
 workspace = { path = "crates/workspace" }
 worktree = { path = "crates/worktree" }
-x_ai = { path = "crates/x_ai" }
 zed = { path = "crates/zed" }
 zed_actions = { path = "crates/zed_actions" }
 zed_credentials_provider = { path = "crates/zed_credentials_provider" }
@@ -451,15 +433,6 @@ async-task = "4.7"
 async-trait = "0.1"
 async-tungstenite = "0.31.0"
 async_zip = { version = "0.0.18", features = ["deflate", "deflate64"] }
-aws-config = { version = "1.8.10", features = ["behavior-version-latest"] }
-aws-credential-types = { version = "1.2.8", features = [
-    "hardcoded-credentials",
-] }
-aws-sdk-bedrockruntime = { version = "1.112.0", features = [
-    "behavior-version-latest",
-] }
-aws-smithy-runtime-api = { version = "1.9.2", features = ["http-1x", "client"] }
-aws-smithy-types = { version = "1.3.4", features = ["http-body-1-x"] }
 backtrace = "0.3"
 base64 = "0.22"
 bitflags = "2.6.0"
@@ -855,7 +828,6 @@ json_schema_store = { codegen-units = 1 }
 lmstudio = { codegen-units = 1 }
 menu = { codegen-units = 1 }
 notifications = { codegen-units = 1 }
-ollama = { codegen-units = 1 }
 outline = { codegen-units = 1 }
 paths = { codegen-units = 1 }
 prettier = { codegen-units = 1 }

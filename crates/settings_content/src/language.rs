@@ -82,8 +82,6 @@ pub enum EditPredictionProvider {
     #[default]
     Copilot,
     Zed,
-    Codestral,
-    Ollama,
     OpenAiCompatibleApi,
     Mercury,
     Experimental(&'static str),
@@ -102,8 +100,6 @@ impl<'de> Deserialize<'de> for EditPredictionProvider {
             None,
             Copilot,
             Zed,
-            Codestral,
-            Ollama,
             OpenAiCompatibleApi,
             Mercury,
             Experimental(String),
@@ -113,8 +109,6 @@ impl<'de> Deserialize<'de> for EditPredictionProvider {
             Content::None => EditPredictionProvider::None,
             Content::Copilot => EditPredictionProvider::Copilot,
             Content::Zed => EditPredictionProvider::Zed,
-            Content::Codestral => EditPredictionProvider::Codestral,
-            Content::Ollama => EditPredictionProvider::Ollama,
             Content::OpenAiCompatibleApi => EditPredictionProvider::OpenAiCompatibleApi,
             Content::Mercury => EditPredictionProvider::Mercury,
             Content::Experimental(name)
@@ -138,8 +132,6 @@ impl EditPredictionProvider {
             EditPredictionProvider::Zed => true,
             EditPredictionProvider::None
             | EditPredictionProvider::Copilot
-            | EditPredictionProvider::Codestral
-            | EditPredictionProvider::Ollama
             | EditPredictionProvider::OpenAiCompatibleApi
             | EditPredictionProvider::Mercury
             | EditPredictionProvider::Experimental(_) => false,
@@ -150,10 +142,8 @@ impl EditPredictionProvider {
         match self {
             EditPredictionProvider::Zed => Some("Zed AI"),
             EditPredictionProvider::Copilot => Some("GitHub Copilot"),
-            EditPredictionProvider::Codestral => Some("Codestral"),
             EditPredictionProvider::Mercury => Some("Mercury"),
             EditPredictionProvider::Experimental(_) | EditPredictionProvider::None => None,
-            EditPredictionProvider::Ollama => Some("Ollama"),
             EditPredictionProvider::OpenAiCompatibleApi => Some("OpenAI-Compatible API"),
         }
     }
@@ -174,10 +164,6 @@ pub struct EditPredictionSettingsContent {
     pub mode: Option<EditPredictionsMode>,
     /// Settings specific to GitHub Copilot.
     pub copilot: Option<CopilotSettingsContent>,
-    /// Settings specific to Codestral.
-    pub codestral: Option<CodestralSettingsContent>,
-    /// Settings specific to Ollama.
-    pub ollama: Option<OllamaEditPredictionSettingsContent>,
     /// Settings specific to using custom OpenAI-compatible servers for edit prediction.
     pub open_ai_compatible_api: Option<CustomEditPredictionProviderSettingsContent>,
     /// The directory where manually captured edit prediction examples are stored.
@@ -253,69 +239,6 @@ pub struct CopilotSettingsContent {
     ///
     /// Default: true
     pub enable_next_edit_suggestions: Option<bool>,
-}
-
-#[with_fallible_options]
-#[derive(Clone, Debug, Default, Serialize, Deserialize, JsonSchema, MergeFrom, PartialEq)]
-pub struct CodestralSettingsContent {
-    /// Model to use for completions.
-    ///
-    /// Default: "codestral-latest"
-    pub model: Option<String>,
-    /// Maximum tokens to generate.
-    ///
-    /// Default: 150
-    pub max_tokens: Option<u32>,
-    /// Api URL to use for completions.
-    ///
-    /// Default: "https://codestral.mistral.ai"
-    pub api_url: Option<String>,
-}
-
-/// Ollama model name for edit predictions.
-#[with_fallible_options]
-#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema, MergeFrom, PartialEq, Eq)]
-#[serde(transparent)]
-pub struct OllamaModelName(pub String);
-
-impl AsRef<str> for OllamaModelName {
-    fn as_ref(&self) -> &str {
-        &self.0
-    }
-}
-
-impl From<String> for OllamaModelName {
-    fn from(value: String) -> Self {
-        Self(value)
-    }
-}
-
-impl From<OllamaModelName> for String {
-    fn from(value: OllamaModelName) -> Self {
-        value.0
-    }
-}
-
-#[with_fallible_options]
-#[derive(Clone, Debug, Default, Serialize, Deserialize, JsonSchema, MergeFrom, PartialEq)]
-pub struct OllamaEditPredictionSettingsContent {
-    /// Model to use for completions.
-    ///
-    /// Default: none
-    pub model: Option<OllamaModelName>,
-    /// Maximum tokens to generate for FIM models.
-    ///
-    /// Default: 256
-    pub max_output_tokens: Option<u32>,
-    /// Api URL to use for completions.
-    ///
-    /// Default: "http://localhost:11434"
-    pub api_url: Option<String>,
-
-    /// The prompt format to use for completions. Set to `""` to have the format be derived from the model name.
-    ///
-    /// Default: ""
-    pub prompt_format: Option<EditPredictionPromptFormat>,
 }
 
 /// The mode in which edit predictions should be displayed.
