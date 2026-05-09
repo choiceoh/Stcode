@@ -7,7 +7,6 @@ use futures::{
 use http_client::{AsyncBody, HttpClient, Method, Request as HttpRequest};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::convert::TryFrom;
 
 pub const DEEPSEEK_API_URL: &str = "https://api.deepseek.com/v1";
 
@@ -20,39 +19,16 @@ pub enum Role {
     Tool,
 }
 
-impl TryFrom<String> for Role {
-    type Error = anyhow::Error;
-
-    fn try_from(value: String) -> Result<Self> {
-        match value.as_str() {
-            "user" => Ok(Self::User),
-            "assistant" => Ok(Self::Assistant),
-            "system" => Ok(Self::System),
-            "tool" => Ok(Self::Tool),
-            _ => anyhow::bail!("invalid role '{value}'"),
-        }
-    }
-}
-
-impl From<Role> for String {
-    fn from(val: Role) -> Self {
-        match val {
-            Role::User => "user".to_owned(),
-            Role::Assistant => "assistant".to_owned(),
-            Role::System => "system".to_owned(),
-            Role::Tool => "tool".to_owned(),
-        }
-    }
-}
-
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
 pub enum Model {
-    #[serde(rename = "deepseek-v4-flash")]
-    V4Flash,
-    #[serde(rename = "deepseek-v4-pro")]
+    /// DeepSeek-V3 based chat model.
+    #[serde(rename = "deepseek-chat")]
     #[default]
-    V4Pro,
+    Chat,
+    /// DeepSeek-R1 reasoning model with thinking tokens.
+    #[serde(rename = "deepseek-reasoner")]
+    Reasoner,
     #[serde(rename = "custom")]
     Custom {
         name: String,
@@ -65,29 +41,29 @@ pub enum Model {
 
 impl Model {
     pub fn default_fast() -> Self {
-        Model::V4Flash
+        Model::Chat
     }
 
     pub fn from_id(id: &str) -> Result<Self> {
         match id {
-            "deepseek-v4-flash" => Ok(Self::V4Flash),
-            "deepseek-v4-pro" => Ok(Self::V4Pro),
+            "deepseek-chat" => Ok(Self::Chat),
+            "deepseek-reasoner" => Ok(Self::Reasoner),
             _ => anyhow::bail!("invalid model id {id}"),
         }
     }
 
     pub fn id(&self) -> &str {
         match self {
-            Self::V4Flash => "deepseek-v4-flash",
-            Self::V4Pro => "deepseek-v4-pro",
+            Self::Chat => "deepseek-chat",
+            Self::Reasoner => "deepseek-reasoner",
             Self::Custom { name, .. } => name,
         }
     }
 
     pub fn display_name(&self) -> &str {
         match self {
-            Self::V4Flash => "DeepSeek V4 Flash",
-            Self::V4Pro => "DeepSeek V4 Pro",
+            Self::Chat => "DeepSeek Chat",
+            Self::Reasoner => "DeepSeek Reasoner",
             Self::Custom {
                 name, display_name, ..
             } => display_name.as_ref().unwrap_or(name).as_str(),
@@ -96,18 +72,27 @@ impl Model {
 
     pub fn max_token_count(&self) -> u64 {
         match self {
-            Self::V4Flash | Self::V4Pro => 1_000_000,
+            Self::Chat | Self::Reasoner => 65_536,
             Self::Custom { max_tokens, .. } => *max_tokens,
         }
     }
 
     pub fn max_output_tokens(&self) -> Option<u64> {
         match self {
-            Self::V4Flash | Self::V4Pro => Some(384_000),
+            Self::Chat => Some(8_192),
+            Self::Reasoner => Some(64_000),
             Self::Custom {
                 max_output_tokens, ..
             } => *max_output_tokens,
         }
+    }
+
+    pub fn supports_thinking(&self) -> bool {
+        matches!(self, Self::Reasoner)
+    }
+
+    pub fn supports_tools(&self) -> bool {
+        matches!(self, Self::Chat | Self::Custom { .. })
     }
 }
 
