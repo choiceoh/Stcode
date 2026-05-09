@@ -1,6 +1,7 @@
 [build]
 # v0 mangling scheme provides more detailed backtraces around closures
 rustflags = ["-C", "symbol-mangling-version=v0", "--cfg", "tokio_unstable"]
+rustc-wrapper = "sccache"
 
 [alias]
 perf-test = ["test", "--profile", "release-fast", "--lib", "--bins", "--tests", "--all-features", "--config", "target.'cfg(true)'.runner='cargo run -p perf --release'", "--config", "target.'cfg(true)'.rustflags=[\"--cfg\", \"perf_enabled\"]"]
@@ -19,5 +20,10 @@ rustflags = [
 [target.aarch64-unknown-linux-gnu]
 rustflags = ["-C", "link-arg=-fuse-ld=lld"]
 
+[target.aarch64-apple-darwin]
+rustflags = ["-C", "link-arg=-ld_new"]
+
 [env]
 MACOSX_DEPLOYMENT_TARGET = "10.15.7"
+# ~5-10GB for a cold cache on a workspace this size; increase to reduce evictions
+SCCACHE_CACHE_SIZE = "50G"
