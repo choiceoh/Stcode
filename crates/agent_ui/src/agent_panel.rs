@@ -67,7 +67,7 @@ use fs::Fs;
 use gpui::{
     Action, Anchor, Animation, AnimationExt, AnyElement, App, AsyncWindowContext, ClipboardItem,
     Entity, EventEmitter, ExternalPaths, FocusHandle, Focusable, KeyContext, Pixels, Subscription,
-    Task, UpdateGlobal, WeakEntity, prelude::*, pulsating_between,
+    Task, UpdateGlobal, WeakEntity, bounce, ease_out_quint, prelude::*, pulsating_between,
 };
 use language::LanguageRegistry;
 use language_model::LanguageModelRegistry;
@@ -3837,10 +3837,10 @@ impl AgentPanel {
                             .truncate()
                             .with_animation(
                                 "generating_title",
-                                Animation::new(Duration::from_secs(2))
+                                Animation::new(Duration::from_millis(2500))
                                     .repeat()
-                                    .with_easing(pulsating_between(0.4, 0.8)),
-                                |label, delta| label.alpha(delta),
+                                    .with_easing(bounce(ease_out_quint())),
+                                |label, delta| label.alpha(0.45 + delta * 0.4),
                             )
                             .into_any_element()
                     } else {
@@ -4304,10 +4304,10 @@ impl AgentPanel {
             selected_agent
                 .with_animation(
                     "pulsating-icon",
-                    Animation::new(Duration::from_secs(1))
+                    Animation::new(Duration::from_millis(1500))
                         .repeat()
-                        .with_easing(pulsating_between(0.2, 0.6)),
-                    |icon, delta| icon.opacity(delta),
+                        .with_easing(bounce(ease_out_quint())),
+                    |icon, delta| icon.opacity(0.25 + delta * 0.35),
                 )
                 .into_any_element()
         } else {
@@ -4967,7 +4967,13 @@ impl Render for AgentPanel {
                             .child(conversation_view.clone())
                             .child(self.render_drag_target(cx)),
                         VisibleSurface::Configuration(configuration) => {
-                            parent.children(configuration.cloned())
+                            parent.child(
+                                div()
+                                    .id("agent-configuration-overlay")
+                                    .size_full()
+                                    .children(configuration.cloned())
+                                    .animate_in_from_right(true),
+                            )
                         }
                     })
                     .children(self.render_trial_end_upsell(window, cx)),

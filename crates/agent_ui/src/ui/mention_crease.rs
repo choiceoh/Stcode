@@ -4,7 +4,7 @@ use acp_thread::MentionUri;
 use agent_client_protocol as acp;
 use editor::{Editor, SelectionEffects, scroll::Autoscroll};
 use gpui::{
-    Animation, AnimationExt, AnyView, Context, IntoElement, WeakEntity, Window, pulsating_between,
+    Animation, AnimationExt, AnyView, Context, IntoElement, WeakEntity, Window, bounce, ease_out_quint, pulsating_between,
 };
 use prompt_store::PromptId;
 use rope::Point;
@@ -124,10 +124,10 @@ impl RenderOnce for MentionCrease {
                         if is_loading {
                             this.with_animation(
                                 "loading-context-crease",
-                                Animation::new(Duration::from_secs(2))
+                                Animation::new(Duration::from_millis(2500))
                                     .repeat()
-                                    .with_easing(pulsating_between(0.4, 0.8)),
-                                |label, delta| label.opacity(delta),
+                                    .with_easing(bounce(ease_out_quint())),
+                                |label, delta| label.opacity(0.35 + delta * 0.45),
                             )
                             .into_any()
                         } else {

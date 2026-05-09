@@ -33,7 +33,7 @@ use gpui::{
     Action, Animation, AnimationExt, AnyView, App, ClickEvent, ClipboardItem, CursorStyle,
     ElementId, Empty, Entity, EventEmitter, FocusHandle, Focusable, Hsla, ListOffset, ListState,
     ObjectFit, PlatformDisplay, ScrollHandle, SharedString, Subscription, Task, TextStyle,
-    WeakEntity, Window, WindowHandle, div, ease_in_out, img, linear_color_stop, linear_gradient,
+    WeakEntity, Window, WindowHandle, bounce, div, ease_in_out, ease_out_quint, img, linear_color_stop, linear_gradient,
     list, point, pulsating_between,
 };
 use language::Buffer;
@@ -2835,10 +2835,10 @@ impl Render for ConversationView {
                     .child(
                         Label::new("Loading…").color(Color::Muted).with_animation(
                             "loading-agent-label",
-                            Animation::new(Duration::from_secs(2))
+                            Animation::new(Duration::from_millis(2500))
                                 .repeat()
-                                .with_easing(pulsating_between(0.3, 0.7)),
-                            |label, delta| label.alpha(delta),
+                                .with_easing(bounce(ease_out_quint())),
+                            |label, delta| label.alpha(0.3 + delta * 0.45),
                         ),
                     )
                     .into_any(),
