@@ -3300,11 +3300,7 @@ impl ToOffset for usize {
     #[track_caller]
     fn to_offset(&self, snapshot: &BufferSnapshot) -> usize {
         // IME / platform input handlers may pass byte offsets inside a multi-byte char; clip silently rather than panic.
-        if snapshot.as_rope().is_char_boundary(*self) {
-            *self
-        } else {
-            snapshot.as_rope().floor_char_boundary(*self)
-        }
+        snapshot.as_rope().floor_char_boundary(*self)
     }
 }
 
@@ -3710,7 +3706,7 @@ mod tests {
 
     #[test]
     fn test_anchor_at_non_char_boundary_in_korean_text() {
-        // "aㅣb": 'ㅣ' spans bytes 1..4, so offsets 2 and 3 land inside it. Pre-fix this panicked.
+        // "aㅣb": 'ㅣ' spans bytes 1..4, so offsets 2 and 3 land inside it.
         let buffer = Buffer::new(ReplicaId::LOCAL, BufferId::new(1).unwrap(), "aㅣb");
         let snapshot = buffer.snapshot();
 
