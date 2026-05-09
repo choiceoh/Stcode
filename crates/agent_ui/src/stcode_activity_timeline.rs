@@ -1917,12 +1917,13 @@ fn latest_tool_snapshot(thread: &AcpThread, cx: &App) -> Option<LatestToolSnapsh
 }
 
 #[derive(Clone)]
-struct SmartParallelSnapshot {
+pub(crate) struct SmartParallelSnapshot {
     status: &'static str,
     detail: String,
     icon: IconName,
     tone: ActivityTone,
     lanes: Vec<SmartParallelLane>,
+    pub(crate) state: SmartParallelState,
 }
 
 #[derive(Clone)]
@@ -1944,7 +1945,7 @@ impl SmartParallelLane {
 }
 
 impl SmartParallelSnapshot {
-    fn from_project(project: &Entity<Project>, cx: &App) -> Option<Self> {
+    pub(crate) fn from_project(project: &Entity<Project>, cx: &App) -> Option<Self> {
         let repository = project.read(cx).active_repository(cx)?;
         let repository_ref = repository.read(cx);
         let branch_name = repository_ref
@@ -1976,6 +1977,7 @@ impl SmartParallelSnapshot {
             icon: state.icon(),
             tone: state.tone(),
             lanes,
+            state,
         })
     }
 
@@ -1985,7 +1987,7 @@ impl SmartParallelSnapshot {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum SmartParallelState {
+pub(crate) enum SmartParallelState {
     Isolated,
     NeedsLane,
     BranchShared,

@@ -44,7 +44,8 @@ use crate::{
     agent_configuration::{AgentConfiguration, AssistantConfigurationEvent},
     conversation_view::{AcpThreadViewEvent, ThreadView},
     stcode_activity_timeline::{
-        StcodeActivityTimeline, StcodeSmartRunPhase, StcodeSmartRunSnapshot, StcodeSmartRunStep,
+        SmartParallelSnapshot, SmartParallelState, StcodeActivityTimeline, StcodeSmartRunPhase,
+        StcodeSmartRunSnapshot, StcodeSmartRunStep,
     },
     ui::EndTrialUpsell,
 };
@@ -185,7 +186,11 @@ struct StcodeSmartRunState {
     kind: StcodeSmartRunKind,
     session_id: Option<String>,
     context_summary: String,
+    #[serde(default)]
+    retry_count: u8,
 }
+
+const STCODE_SMART_MAX_AUTO_RETRIES: u8 = 1;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -1556,6 +1561,10 @@ pub struct AgentPanel {
     agent_panel_menu_handle: PopoverMenuHandle<ContextMenu>,
     pending_stcode_worktree_thread_transfer: bool,
     stcode_smart_run: Option<StcodeSmartRunState>,
+    /// Tracks the branch ref for which we already auto-dispatched a Smart Parallel
+    /// run, so we do not re-fire the same recommendation while the user is still
+    /// on the same branch.
+    auto_parallel_dispatched_for: Option<String>,
     _extension_subscription: Option<Subscription>,
     _project_subscription: Subscription,
     zoomed: bool,
@@ -1934,6 +1943,7 @@ impl AgentPanel {
             agent_panel_menu_handle: PopoverMenuHandle::default(),
             pending_stcode_worktree_thread_transfer: false,
             stcode_smart_run: None,
+            auto_parallel_dispatched_for: None,
 
             _extension_subscription: extension_subscription,
             _project_subscription,
@@ -3412,12 +3422,73 @@ impl AgentPanel {
                                 kind: StcodeSmartRunKind::Panel,
                                 session_id,
                                 context_summary,
+                                retry_count: 0,
                             });
                             this.set_base_view(thread.into(), true, window, cx);
                             this.serialize(cx);
                         }
                     }
+                } else if phase == StcodeSmartRunPhase::Blocked
+                    && thread_status.is_some_and(|status| status.had_error)
+                {
+                    // Gap 1: Auto-recover on error by restarting the same Smart
+                    // workflow up to STCODE_SMART_MAX_AUTO_RETRIES times. The
+                    // session id changes, so subsequent observe ticks see the
+                    // retry as a new run and the dedup naturally kicks in.
+                    if let Some(run) = smart_run.as_ref() {
+                        let next_retry = run.retry_count.saturating_add(1);
+                        if run.retry_count < STCODE_SMART_MAX_AUTO_RETRIES {
+                            let kind = run.kind;
+                            this.stcode_smart_run = None;
+                            match kind {
+                                StcodeSmartRunKind::Start => {
+                                    this.start_stcode_smart_start(&StcodeSmartStart, window, cx)
+                                }
+                                StcodeSmartRunKind::Panel => {
+                                    this.start_stcode_smart_panel(&StcodeSmartPanel, window, cx)
+                                }
+                                StcodeSmartRunKind::Parallel => this
+                                    .start_stcode_smart_parallel(
+                                        &StcodeSmartParallel,
+                                        window,
+                                        cx,
+                                    ),
+                                StcodeSmartRunKind::Merge => {
+                                    this.start_stcode_smart_merge(&StcodeSmartMerge, window, cx)
+                                }
+                            }
+                            if let Some(new_run) = this.stcode_smart_run.as_mut() {
+                                new_run.retry_count = next_retry;
+                            }
+                            this.serialize(cx);
+                        }
+                    }
                 }
+            }
+
+            // Gap 2: When the project enters a state that recommends a parallel
+            // lane (the "분할 권장" hint) and the user is not currently inside
+            // any Smart workflow, automatically spawn a Smart Parallel run. The
+            // dispatched-for branch ref deduplicates the trigger so we do not
+            // re-fire while the user is still on the same branch.
+            let active_branch_ref = this
+                .project
+                .read(cx)
+                .active_repository(cx)
+                .and_then(|repo| {
+                    repo.read(cx)
+                        .branch
+                        .as_ref()
+                        .map(|branch| branch.ref_name.to_string())
+                });
+            if this.stcode_smart_run.is_none()
+                && this.auto_parallel_dispatched_for.as_deref()
+                    != active_branch_ref.as_deref()
+                && SmartParallelSnapshot::from_project(&this.project, cx)
+                    .is_some_and(|snapshot| snapshot.state == SmartParallelState::NeedsLane)
+            {
+                this.auto_parallel_dispatched_for = active_branch_ref;
+                this.start_stcode_smart_parallel(&StcodeSmartParallel, window, cx);
             }
 
             cx.notify();
@@ -4746,6 +4817,19 @@ impl AgentPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let active_branch_ref = self
+            .project
+            .read(cx)
+            .active_repository(cx)
+            .and_then(|repo| {
+                repo.read(cx)
+                    .branch
+                    .as_ref()
+                    .map(|branch| branch.ref_name.to_string())
+            });
+        if active_branch_ref.is_some() {
+            self.auto_parallel_dispatched_for = active_branch_ref;
+        }
         let context = StcodeSmartPromptContext::from_project(&self.project, cx);
         self.start_stcode_smart_thread(
             StcodeSmartRunKind::Parallel,
@@ -4808,6 +4892,7 @@ impl AgentPanel {
             kind,
             session_id,
             context_summary,
+            retry_count: 0,
         });
         self.set_base_view(thread.into(), true, window, cx);
         self.serialize(cx);
@@ -5679,6 +5764,7 @@ mod tests {
             session_id: Some("session-1".to_string()),
             context_summary:
                 "feature: isolated lane, 0 changed, 0 conflict(s), 0 branch overlap(s).".to_string(),
+            retry_count: 0,
         };
         let snapshot = run.snapshot(Some(StcodeSmartRunThreadStatus {
             has_entries: true,
