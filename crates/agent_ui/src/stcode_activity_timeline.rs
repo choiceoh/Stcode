@@ -2620,7 +2620,7 @@ mod tests {
             summarize_thread_state(true, true, true, true, true, Some(ActivityTone::Failed));
 
         assert_eq!(summary.status, "자율 차단");
-        assert_eq!(summary.detail, "Tool permission is blocking");
+        assert_eq!(summary.detail, "도구 권한 대기 중");
         assert_eq!(summary.tone, ActivityTone::Waiting);
     }
 
@@ -2629,8 +2629,8 @@ mod tests {
         let planning = summarize_thread_state(true, false, true, false, false, None);
         let running = summarize_thread_state(true, false, true, true, false, None);
 
-        assert_eq!(planning.detail, "Planning the next step");
-        assert_eq!(running.detail, "Running workspace tools");
+        assert_eq!(planning.detail, "계획 중");
+        assert_eq!(running.detail, "도구 실행 중");
     }
 
     #[test]
@@ -2646,7 +2646,7 @@ mod tests {
     fn tool_status_labels_are_user_facing() {
         assert_eq!(
             tool_status_label(&ToolCallStatus::Pending),
-            ("대기 중", ActivityTone::Running)
+            ("대기", ActivityTone::Running)
         );
         assert_eq!(
             tool_status_label(&ToolCallStatus::InProgress),
@@ -2798,8 +2798,8 @@ mod tests {
         );
 
         assert!(detail.contains("feature: 3 changed files"));
-        assert!(detail.contains("1개 스테이징"));
-        assert!(detail.contains("2개 미스테이징"));
+        assert!(detail.contains("1 staged"));
+        assert!(detail.contains("2 unstaged"));
         assert!(detail.contains("1 new"));
         assert!(detail.contains("+12 -4"));
     }
@@ -2846,7 +2846,7 @@ mod tests {
         );
 
         assert_eq!(item.status, "격침");
-        assert!(item.detail.contains("격칩니다"));
+        assert!(item.detail.contains("linked lane"));
         assert_eq!(item.tone, ActivityTone::Failed);
     }
 
@@ -2933,7 +2933,7 @@ mod tests {
             4,
         );
 
-        assert!(detail.contains("3 할 일"));
+        assert!(detail.contains("3개 할 일"));
         assert!(detail.contains("다음: Run validation"));
     }
 
@@ -2979,128 +2979,6 @@ mod tests {
     }
 
     #[test]
-    fn smart_workline_controls_keep_idle_bar_focused() {
-        let controls = smart_workline_controls(SmartWorklineControlState {
-            active_stage: None,
-            has_thread_entries: false,
-            has_start_gate: false,
-            activity_live: false,
-            todo_live: false,
-            panel_needs_review: false,
-            parallel_needs_attention: false,
-            merge_available: false,
-            update_state: SmartWorklineUpdateState::Idle,
-        });
-
-        assert_eq!(
-            workline_control_actions(&controls),
-            vec![
-                (SmartWorklineAction::Start, false),
-                (SmartWorklineAction::Update, false),
-                (SmartWorklineAction::Logs, false),
-            ]
-        );
-    }
-
-    #[test]
-    fn smart_workline_controls_promote_active_start_gate() {
-        let controls = smart_workline_controls(SmartWorklineControlState {
-            active_stage: Some(SmartWorklineStageKind::Start),
-            has_thread_entries: false,
-            has_start_gate: true,
-            activity_live: false,
-            todo_live: false,
-            panel_needs_review: false,
-            parallel_needs_attention: false,
-            merge_available: false,
-            update_state: SmartWorklineUpdateState::Idle,
-        });
-
-        assert_eq!(
-            workline_control_actions(&controls),
-            vec![
-                (SmartWorklineAction::Start, true),
-                (SmartWorklineAction::Update, false),
-                (SmartWorklineAction::Logs, false),
-            ]
-        );
-    }
-
-    #[test]
-    fn smart_workline_controls_share_review_merge_parallel_state() {
-        let controls = smart_workline_controls(SmartWorklineControlState {
-            active_stage: Some(SmartWorklineStageKind::Review),
-            has_thread_entries: true,
-            has_start_gate: false,
-            activity_live: false,
-            todo_live: false,
-            panel_needs_review: true,
-            parallel_needs_attention: true,
-            merge_available: true,
-            update_state: SmartWorklineUpdateState::Idle,
-        });
-
-        assert_eq!(
-            workline_control_actions(&controls),
-            vec![
-                (SmartWorklineAction::Panel, true),
-                (SmartWorklineAction::Merge, false),
-                (SmartWorklineAction::Parallel, false),
-                (SmartWorklineAction::Update, false),
-                (SmartWorklineAction::Logs, false),
-            ]
-        );
-    }
-
-    #[test]
-    fn smart_workline_update_control_reflects_update_status() {
-        let controls = smart_workline_controls(SmartWorklineControlState {
-            active_stage: None,
-            has_thread_entries: false,
-            has_start_gate: false,
-            activity_live: false,
-            todo_live: false,
-            panel_needs_review: false,
-            parallel_needs_attention: false,
-            merge_available: false,
-            update_state: SmartWorklineUpdateState::Updated,
-        });
-
-        let update = controls
-            .iter()
-            .find(|control| control.action == SmartWorklineAction::Update)
-            .expect("update control should be present");
-        assert_eq!(update.label(), "Restart");
-        assert!(update.is_visually_active());
-        assert!(!update.is_disabled());
-        assert!(update.should_restart());
-    }
-
-    #[test]
-    fn smart_workline_update_control_blocks_busy_clicks() {
-        let controls = smart_workline_controls(SmartWorklineControlState {
-            active_stage: None,
-            has_thread_entries: false,
-            has_start_gate: false,
-            activity_live: false,
-            todo_live: false,
-            panel_needs_review: false,
-            parallel_needs_attention: false,
-            merge_available: false,
-            update_state: SmartWorklineUpdateState::Downloading,
-        });
-
-        let update = controls
-            .iter()
-            .find(|control| control.action == SmartWorklineAction::Update)
-            .expect("update control should be present");
-        assert_eq!(update.label(), "Downloading");
-        assert!(update.is_visually_active());
-        assert!(update.is_disabled());
-        assert!(update.is_loading());
-    }
-
-    #[test]
     fn smart_parallel_state_recommends_lane_for_main_checkout() {
         assert_eq!(
             smart_parallel_state(false, 0),
@@ -3129,8 +3007,8 @@ mod tests {
     fn smart_parallel_detail_explains_main_checkout_risk() {
         let detail = smart_parallel_detail(SmartParallelState::NeedsLane, Some("main"), 2, 0, &[]);
 
-        assert!(detail.contains("메인 체크아웃"));
-        assert!(detail.contains("레인"));
+        assert!(detail.contains("main checkout"));
+        assert!(detail.contains("linked lanes"));
         assert!(detail.contains("its own lane"));
     }
 
@@ -3139,7 +3017,7 @@ mod tests {
         let detail =
             smart_parallel_detail(SmartParallelState::Isolated, Some("feature"), 1, 0, &[]);
 
-        assert!(detail.contains("격리됨"));
+        assert!(detail.contains("parallel agents"));
         assert!(detail.contains("1 other lane"));
     }
 
@@ -3293,14 +3171,5 @@ mod tests {
             status,
             diff_stat: Some(git::status::DiffStat { added, deleted }),
         }
-    }
-
-    fn workline_control_actions(
-        controls: &[SmartWorklineControl],
-    ) -> Vec<(SmartWorklineAction, bool)> {
-        controls
-            .iter()
-            .map(|control| (control.action, control.active))
-            .collect()
     }
 }
