@@ -1,0 +1,363 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  cat >&2 <<'EOF'
+usage: script/stcode-sync-upstream <setup|sync> [options]
+
+Adds and uses a dedicated upstream remote for syncing Stcode with upstream Zed.
+
+Commands:
+  setup                  Add the upstream remote if needed and enable repo-local rerere.
+  sync                   Fetch origin and upstream, switch to a dedicated sync branch,
+                         merge the chosen upstream ref, then run smoke checks.
+
+Options:
+  --upstream-remote <name>   Git remote name. Defaults to $STCODE_UPSTREAM_REMOTE or upstream.
+  --upstream-url <url>       Upstream repository URL. Defaults to
+                             $STCODE_UPSTREAM_URL or https://github.com/zed-industries/zed.git.
+  --base <branch>            Stcode base branch. Defaults to $STCODE_UPSTREAM_BASE or main.
+  --upstream-ref <ref>       Upstream branch, tag, or commit. Defaults to
+                             $STCODE_UPSTREAM_REF or main.
+  --branch <name>            Target sync branch. Defaults to sync/upstream-<ref>.
+  --post-sync <command>      Command to run after a successful upstream merge.
+                             May be passed more than once.
+  --check <command>          Extra check command to run after the default checks.
+                             May be passed more than once.
+  --fetch-only               Stop after fetching origin and upstream.
+  --no-check                 Skip the default smoke checks.
+  --dry-run                  Print commands without running them.
+  -h, --help                 Show this help.
+
+Default checks:
+  cargo metadata --no-deps --format-version 1
+  cargo check -p agent_ui
+EOF
+}
+
+fail() {
+  echo "stcode-sync-upstream: $*" >&2
+  exit 1
+}
+
+warn() {
+  echo "stcode-sync-upstream: $*" >&2
+}
+
+info() {
+  echo "stcode-sync-upstream: $*"
+}
+
+run() {
+  printf '+'
+  for argument in "$@"; do
+    printf ' %q' "$argument"
+  done
+  printf '\n'
+
+  if ! $dry_run; then
+    "$@"
+  fi
+}
+
+run_shell() {
+  local command="$1"
+  echo "+ $command"
+
+  if ! $dry_run; then
+    bash -lc "$command"
+  fi
+}
+
+ensure_repo_root() {
+  local repo_root
+  repo_root="$(git rev-parse --show-toplevel 2>/dev/null || true)"
+  [ -n "$repo_root" ] || fail "run this script from inside the Stcode repository"
+  cd "$repo_root"
+}
+
+ensure_clean_worktree() {
+  local status
+  status="$(git status --short)"
+  if [ -n "$status" ]; then
+    printf '%s\n' "stcode-sync-upstream: worktree must be clean before syncing upstream." >&2
+    printf '%s\n' "Stash, commit, or discard these changes first:" >&2
+    printf '%s\n' "$status" >&2
+    exit 1
+  fi
+}
+
+remote_url() {
+  git remote get-url "$1" 2>/dev/null || true
+}
+
+ensure_upstream_remote() {
+  local existing_url
+  existing_url="$(remote_url "$upstream_remote")"
+
+  if [ -n "$existing_url" ]; then
+    if [ "$existing_url" != "$upstream_url" ]; then
+      fail "remote '$upstream_remote' already points to $existing_url, not $upstream_url"
+    fi
+    info "using existing upstream remote '$upstream_remote' -> $existing_url"
+    return
+  fi
+
+  run git remote add "$upstream_remote" "$upstream_url"
+  info "added upstream remote '$upstream_remote' -> $upstream_url"
+}
+
+configure_rerere() {
+  run git config --local rerere.enabled true
+  run git config --local rerere.autoupdate true
+  info "enabled repo-local rerere and rerere.autoupdate"
+}
+
+fetch_remotes() {
+  if git remote get-url origin >/dev/null 2>&1; then
+    run git fetch origin --prune
+  else
+    warn "origin remote is not configured; base branch will come from the local repository"
+  fi
+
+  run git fetch "$upstream_remote" --tags --prune
+}
+
+resolve_base_start() {
+  if git rev-parse --verify --quiet "refs/remotes/origin/$base_branch" >/dev/null; then
+    printf '%s\n' "refs/remotes/origin/$base_branch"
+    return
+  fi
+
+  if git rev-parse --verify --quiet "refs/heads/$base_branch" >/dev/null; then
+    printf '%s\n' "refs/heads/$base_branch"
+    return
+  fi
+
+  fail "could not resolve base branch '$base_branch' from origin or the local repository"
+}
+
+resolve_upstream_ref() {
+  if git rev-parse --verify --quiet "refs/remotes/$upstream_remote/$upstream_ref" >/dev/null; then
+    printf '%s\n' "refs/remotes/$upstream_remote/$upstream_ref"
+    return
+  fi
+
+  if git rev-parse --verify --quiet "refs/tags/$upstream_ref" >/dev/null; then
+    printf '%s\n' "refs/tags/$upstream_ref"
+    return
+  fi
+
+  if git rev-parse --verify --quiet "$upstream_ref^{commit}" >/dev/null; then
+    printf '%s\n' "$upstream_ref"
+    return
+  fi
+
+  fail "could not resolve upstream ref '$upstream_ref' after fetching '$upstream_remote'"
+}
+
+sanitize_ref() {
+  printf '%s' "$1" \
+    | tr '/:@ ' '-' \
+    | tr -cs '[:alnum:]._-\n' '-'
+}
+
+default_target_branch() {
+  local current_branch
+  local ref_slug
+
+  current_branch="$(git branch --show-current)"
+  if [[ "$current_branch" == sync/upstream-* ]]; then
+    printf '%s\n' "$current_branch"
+    return
+  fi
+
+  ref_slug="$(sanitize_ref "$upstream_ref")"
+  ref_slug="${ref_slug#-}"
+  ref_slug="${ref_slug%-}"
+  [ -n "$ref_slug" ] || ref_slug="upstream"
+  printf '%s\n' "sync/upstream-$ref_slug"
+}
+
+switch_target_branch() {
+  if git show-ref --verify --quiet "refs/heads/$target_branch"; then
+    local current_branch
+    current_branch="$(git branch --show-current)"
+    if [ "$current_branch" != "$target_branch" ]; then
+      run git switch "$target_branch"
+    fi
+    return
+  fi
+
+  run git switch -c "$target_branch" "$base_start"
+}
+
+merge_ref_into_target() {
+  local merge_target="$1"
+  local description="$2"
+
+  if git merge-base --is-ancestor "$merge_target" HEAD; then
+    info "current branch already contains $description ($merge_target)"
+    return
+  fi
+
+  if ! run git merge --no-ff --log --no-edit "$merge_target"; then
+    cat >&2 <<EOF
+stcode-sync-upstream: merge stopped while bringing in $description.
+Resolve the conflicts once, commit the merge, and rerun later; rerere will
+replay repeated conflict resolutions when it can.
+
+Helpful commands:
+  git status
+  git rerere status
+EOF
+    exit 1
+  fi
+}
+
+run_default_checks() {
+  run cargo metadata --no-deps --format-version 1
+  run cargo check -p agent_ui
+}
+
+command="${1:-}"
+if [ -z "$command" ]; then
+  usage
+  exit 1
+fi
+shift || true
+
+upstream_remote="${STCODE_UPSTREAM_REMOTE:-upstream}"
+upstream_url="${STCODE_UPSTREAM_URL:-https://github.com/zed-industries/zed.git}"
+base_branch="${STCODE_UPSTREAM_BASE:-main}"
+upstream_ref="${STCODE_UPSTREAM_REF:-main}"
+target_branch=""
+dry_run=false
+fetch_only=false
+run_checks=true
+post_sync_commands=()
+extra_check_commands=()
+
+while (($#)); do
+  case "$1" in
+    --upstream-remote)
+      upstream_remote="${2:-}"
+      [ -n "$upstream_remote" ] || fail "--upstream-remote requires a value"
+      shift 2
+      ;;
+    --upstream-url)
+      upstream_url="${2:-}"
+      [ -n "$upstream_url" ] || fail "--upstream-url requires a value"
+      shift 2
+      ;;
+    --base)
+      base_branch="${2:-}"
+      [ -n "$base_branch" ] || fail "--base requires a branch name"
+      shift 2
+      ;;
+    --upstream-ref)
+      upstream_ref="${2:-}"
+      [ -n "$upstream_ref" ] || fail "--upstream-ref requires a ref"
+      shift 2
+      ;;
+    --branch)
+      target_branch="${2:-}"
+      [ -n "$target_branch" ] || fail "--branch requires a branch name"
+      shift 2
+      ;;
+    --post-sync)
+      post_sync_commands+=("${2:-}")
+      [ -n "${post_sync_commands[${#post_sync_commands[@]}-1]}" ] || fail "--post-sync requires a command"
+      shift 2
+      ;;
+    --check)
+      extra_check_commands+=("${2:-}")
+      [ -n "${extra_check_commands[${#extra_check_commands[@]}-1]}" ] || fail "--check requires a command"
+      shift 2
+      ;;
+    --fetch-only)
+      fetch_only=true
+      shift
+      ;;
+    --no-check)
+      run_checks=false
+      shift
+      ;;
+    --dry-run)
+      dry_run=true
+      shift
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      fail "unknown option: $1"
+      ;;
+  esac
+done
+
+case "$command" in
+  setup)
+    if $fetch_only; then
+      fail "--fetch-only only works with the sync command"
+    fi
+    if [ -n "$target_branch" ] || [ ${#post_sync_commands[@]} -gt 0 ] || [ ${#extra_check_commands[@]} -gt 0 ]; then
+      fail "setup only accepts remote and dry-run options"
+    fi
+    ;;
+  sync)
+    ;;
+  *)
+    fail "unknown command: $command"
+    ;;
+esac
+
+ensure_repo_root
+
+case "$command" in
+  setup)
+    ensure_upstream_remote
+    configure_rerere
+    ;;
+  sync)
+    ensure_clean_worktree
+    ensure_upstream_remote
+    configure_rerere
+    fetch_remotes
+
+    if $fetch_only; then
+      info "fetched origin and $upstream_remote"
+      exit 0
+    fi
+
+    base_start="$(resolve_base_start)"
+    upstream_target="$(resolve_upstream_ref)"
+
+    if [ -z "$target_branch" ]; then
+      target_branch="$(default_target_branch)"
+    fi
+
+    info "base branch: $base_branch ($base_start)"
+    info "upstream ref: $upstream_ref ($upstream_target)"
+    info "target branch: $target_branch"
+
+    switch_target_branch
+    merge_ref_into_target "$base_start" "latest $base_branch"
+    merge_ref_into_target "$upstream_target" "upstream $upstream_ref"
+
+    for command_text in "${post_sync_commands[@]}"; do
+      run_shell "$command_text"
+    done
+
+    if $run_checks; then
+      run_default_checks
+    fi
+
+    for command_text in "${extra_check_commands[@]}"; do
+      run_shell "$command_text"
+    done
+
+    info "upstream sync branch is ready on '$target_branch'"
+    ;;
+esac
