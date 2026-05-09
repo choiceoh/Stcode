@@ -110,6 +110,14 @@ impl Model {
             } => *max_output_tokens,
         }
     }
+
+    pub fn supports_thinking(&self) -> bool {
+        true
+    }
+
+    pub fn supports_tools(&self) -> bool {
+        true
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
