@@ -65,7 +65,6 @@ pub mod fim;
 mod license_detection;
 pub mod mercury;
 pub mod metrics;
-pub mod ollama;
 mod onboarding_modal;
 pub mod open_ai_response;
 mod prediction;
@@ -921,7 +920,7 @@ impl EditPredictionStore {
         .detach_and_log_err(cx);
     }
 
-    pub fn icons(&self, cx: &App) -> edit_prediction_types::EditPredictionIconSet {
+    pub fn icons(&self, _cx: &App) -> edit_prediction_types::EditPredictionIconSet {
         use ui::IconName;
         match self.edit_prediction_model {
             EditPredictionModel::Mercury => {
@@ -935,15 +934,7 @@ impl EditPredictionStore {
                     .with_error(IconName::ZedPredictError)
             }
             EditPredictionModel::Fim { .. } => {
-                let settings = &all_language_settings(None, cx).edit_predictions;
-                match settings.provider {
-                    EditPredictionProvider::Ollama => {
-                        edit_prediction_types::EditPredictionIconSet::new(IconName::AiOllama)
-                    }
-                    _ => {
-                        edit_prediction_types::EditPredictionIconSet::new(IconName::AiOpenAiCompat)
-                    }
-                }
+                edit_prediction_types::EditPredictionIconSet::new(IconName::AiOpenAiCompat)
             }
         }
     }
@@ -1511,7 +1502,7 @@ impl EditPredictionStore {
             EditPredictionModel::Zeta => {
                 let is_cloud = !matches!(
                     all_language_settings(None, cx).edit_predictions.provider,
-                    EditPredictionProvider::Ollama | EditPredictionProvider::OpenAiCompatibleApi
+                    EditPredictionProvider::OpenAiCompatibleApi
                 );
                 if is_cloud {
                     zeta::edit_prediction_accepted(self, current_prediction, cx)
@@ -1845,7 +1836,7 @@ impl EditPredictionStore {
             EditPredictionModel::Zeta => {
                 let is_cloud = !matches!(
                     all_language_settings(None, cx).edit_predictions.provider,
-                    EditPredictionProvider::Ollama | EditPredictionProvider::OpenAiCompatibleApi
+                    EditPredictionProvider::OpenAiCompatibleApi
                 );
 
                 if is_cloud {
@@ -2105,12 +2096,9 @@ fn is_ep_store_provider(provider: EditPredictionProvider) -> bool {
     match provider {
         EditPredictionProvider::Zed
         | EditPredictionProvider::Mercury
-        | EditPredictionProvider::Ollama
         | EditPredictionProvider::OpenAiCompatibleApi
         | EditPredictionProvider::Experimental(_) => true,
-        EditPredictionProvider::None
-        | EditPredictionProvider::Copilot
-        | EditPredictionProvider::Codestral => false,
+        EditPredictionProvider::None | EditPredictionProvider::Copilot => false,
     }
 }
 
@@ -2145,11 +2133,8 @@ impl EditPredictionStore {
                 EditPredictionProvider::Zed
                 | EditPredictionProvider::Mercury
                 | EditPredictionProvider::Experimental(_) => (true, 2),
-                EditPredictionProvider::Ollama => (false, 1),
                 EditPredictionProvider::OpenAiCompatibleApi => (false, 2),
-                EditPredictionProvider::None
-                | EditPredictionProvider::Copilot
-                | EditPredictionProvider::Codestral => {
+                EditPredictionProvider::None | EditPredictionProvider::Copilot => {
                     log::error!("queue_prediction_refresh called with non-store provider");
                     return;
                 }

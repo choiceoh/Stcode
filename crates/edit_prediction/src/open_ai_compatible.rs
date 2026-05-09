@@ -62,7 +62,7 @@ pub fn load_open_ai_compatible_api_key_if_needed(
 }
 
 pub(crate) async fn send_custom_server_request(
-    provider: settings::EditPredictionProvider,
+    _provider: settings::EditPredictionProvider,
     settings: &OpenAiCompatibleEditPredictionSettings,
     prompt: String,
     max_tokens: u32,
@@ -70,65 +70,50 @@ pub(crate) async fn send_custom_server_request(
     api_key: Option<Arc<str>>,
     http_client: &Arc<dyn http_client::HttpClient>,
 ) -> Result<(String, String)> {
-    match provider {
-        settings::EditPredictionProvider::Ollama => {
-            let response = crate::ollama::make_request(
-                settings.clone(),
-                prompt,
-                stop_tokens,
-                http_client.clone(),
-            )
-            .await?;
-            Ok((response.response, response.created_at))
-        }
-        _ => {
-            let request = RawCompletionRequest {
-                model: settings.model.clone(),
-                prompt,
-                max_tokens: Some(max_tokens),
-                temperature: None,
-                stop: stop_tokens
-                    .into_iter()
-                    .map(std::borrow::Cow::Owned)
-                    .collect(),
-                environment: None,
-            };
+    let request = RawCompletionRequest {
+        model: settings.model.clone(),
+        prompt,
+        max_tokens: Some(max_tokens),
+        temperature: None,
+        stop: stop_tokens
+            .into_iter()
+            .map(std::borrow::Cow::Owned)
+            .collect(),
+        environment: None,
+    };
 
-            let request_body = serde_json::to_string(&request)?;
-            let mut http_request_builder = http_client::Request::builder()
-                .method(http_client::Method::POST)
-                .uri(settings.api_url.as_ref())
-                .header("Content-Type", "application/json");
+    let request_body = serde_json::to_string(&request)?;
+    let mut http_request_builder = http_client::Request::builder()
+        .method(http_client::Method::POST)
+        .uri(settings.api_url.as_ref())
+        .header("Content-Type", "application/json");
 
-            if let Some(api_key) = api_key {
-                http_request_builder =
-                    http_request_builder.header("Authorization", format!("Bearer {}", api_key));
-            }
-
-            let http_request =
-                http_request_builder.body(http_client::AsyncBody::from(request_body))?;
-
-            let mut response = http_client.send(http_request).await?;
-            let status = response.status();
-
-            if !status.is_success() {
-                let mut body = String::new();
-                response.body_mut().read_to_string(&mut body).await?;
-                anyhow::bail!("custom server error: {} - {}", status, body);
-            }
-
-            let mut body = String::new();
-            response.body_mut().read_to_string(&mut body).await?;
-
-            let parsed: RawCompletionResponse =
-                serde_json::from_str(&body).context("Failed to parse completion response")?;
-            let text = parsed
-                .choices
-                .into_iter()
-                .next()
-                .map(|choice| choice.text)
-                .unwrap_or_default();
-            Ok((text, parsed.id))
-        }
+    if let Some(api_key) = api_key {
+        http_request_builder =
+            http_request_builder.header("Authorization", format!("Bearer {}", api_key));
     }
+
+    let http_request = http_request_builder.body(http_client::AsyncBody::from(request_body))?;
+
+    let mut response = http_client.send(http_request).await?;
+    let status = response.status();
+
+    if !status.is_success() {
+        let mut body = String::new();
+        response.body_mut().read_to_string(&mut body).await?;
+        anyhow::bail!("custom server error: {} - {}", status, body);
+    }
+
+    let mut body = String::new();
+    response.body_mut().read_to_string(&mut body).await?;
+
+    let parsed: RawCompletionResponse =
+        serde_json::from_str(&body).context("Failed to parse completion response")?;
+    let text = parsed
+        .choices
+        .into_iter()
+        .next()
+        .map(|choice| choice.text)
+        .unwrap_or_default();
+    Ok((text, parsed.id))
 }

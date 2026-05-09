@@ -48,7 +48,6 @@ pub fn request_prediction(
     let request_start = cx.background_executor().now();
 
     let Some(settings) = (match provider {
-        settings::EditPredictionProvider::Ollama => settings.ollama.clone(),
         settings::EditPredictionProvider::OpenAiCompatibleApi => {
             settings.open_ai_compatible_api.clone()
         }

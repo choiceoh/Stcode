@@ -323,7 +323,7 @@ impl LanguageModel for DeepSeekLanguageModel {
             LanguageModelCompletionError,
         >,
     > {
-        let request = crate::provider::open_ai::into_open_ai(
+        let request = open_ai::completion::into_open_ai(
             request,
             self.model.id(),
             false,
@@ -334,7 +334,7 @@ impl LanguageModel for DeepSeekLanguageModel {
         );
         let completions = self.stream_completion(request, cx);
         async move {
-            let mapper = crate::provider::open_ai::OpenAiEventMapper::new();
+            let mapper = open_ai::completion::OpenAiEventMapper::new();
             Ok(mapper.map_stream(completions.await?).boxed())
         }
         .boxed()

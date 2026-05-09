@@ -56,7 +56,6 @@ pub fn request_prediction_with_zeta(
     let settings = &all_language_settings(None, cx).edit_predictions;
     let provider = settings.provider;
     let custom_server_settings = match provider {
-        settings::EditPredictionProvider::Ollama => settings.ollama.clone(),
         settings::EditPredictionProvider::OpenAiCompatibleApi => {
             settings.open_ai_compatible_api.clone()
         }

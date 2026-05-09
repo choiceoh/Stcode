@@ -1,7 +1,6 @@
 use anyhow::Result;
 use client::{Client, UserStore, zed_urls};
 use cloud_llm_client::UsageLimit;
-use codestral::{self, CodestralEditPredictionDelegate};
 use copilot::Status;
 use edit_prediction::EditPredictionStore;
 use edit_prediction_types::EditPredictionDelegateHandle;
@@ -180,70 +179,6 @@ impl Render for EditPredictionButton {
                         .with_handle(self.popover_menu_handle.clone()),
                 )
             }
-            EditPredictionProvider::Codestral => {
-                let enabled = self.editor_enabled.unwrap_or(true);
-                let has_api_key = codestral::codestral_api_key(cx).is_some();
-                let this = cx.weak_entity();
-                let file = self.file.clone();
-                let language = self.language.clone();
-                let project = self.project.clone();
-
-                let tooltip_meta = if has_api_key {
-                    "Powered by Codestral"
-                } else {
-                    "Missing API key for Codestral"
-                };
-
-                div().child(
-                    PopoverMenu::new("codestral")
-                        .on_open({
-                            let file = file.clone();
-                            let language = language;
-                            let project = project;
-                            Rc::new(move |_window, cx| {
-                                emit_edit_prediction_menu_opened(
-                                    "codestral",
-                                    &file,
-                                    &language,
-                                    &project,
-                                    cx,
-                                );
-                            })
-                        })
-                        .menu(move |window, cx| {
-                            this.update(cx, |this, cx| {
-                                this.build_codestral_context_menu(window, cx)
-                            })
-                            .ok()
-                        })
-                        .anchor(Anchor::BottomRight)
-                        .trigger_with_tooltip(
-                            IconButton::new("codestral-icon", IconName::AiMistral)
-                                .shape(IconButtonShape::Square)
-                                .when(!has_api_key, |this| {
-                                    this.indicator(Indicator::dot().color(Color::Error))
-                                        .indicator_border_color(Some(
-                                            cx.theme().colors().status_bar_background,
-                                        ))
-                                })
-                                .when(has_api_key && !enabled, |this| {
-                                    this.indicator(Indicator::dot().color(Color::Ignored))
-                                        .indicator_border_color(Some(
-                                            cx.theme().colors().status_bar_background,
-                                        ))
-                                }),
-                            move |_window, cx| {
-                                Tooltip::with_meta(
-                                    "Edit Prediction",
-                                    Some(&ToggleMenu),
-                                    tooltip_meta,
-                                    cx,
-                                )
-                            },
-                        )
-                        .with_handle(self.popover_menu_handle.clone()),
-                )
-            }
             EditPredictionProvider::OpenAiCompatibleApi => {
                 let enabled = self.editor_enabled.unwrap_or(true);
                 let this = cx.weak_entity();
@@ -270,55 +205,6 @@ impl Render for EditPredictionButton {
                                             cx.theme().colors().status_bar_background,
                                         ))
                                 }),
-                        )
-                        .with_handle(self.popover_menu_handle.clone()),
-                )
-            }
-            EditPredictionProvider::Ollama => {
-                let enabled = self.editor_enabled.unwrap_or(true);
-                let this = cx.weak_entity();
-
-                div().child(
-                    PopoverMenu::new("ollama")
-                        .menu(move |window, cx| {
-                            this.update(cx, |this, cx| {
-                                this.build_edit_prediction_context_menu(
-                                    EditPredictionProvider::Ollama,
-                                    window,
-                                    cx,
-                                )
-                            })
-                            .ok()
-                        })
-                        .anchor(Anchor::BottomRight)
-                        .trigger_with_tooltip(
-                            IconButton::new("ollama-icon", IconName::AiOllama)
-                                .shape(IconButtonShape::Square)
-                                .when(!enabled, |this| {
-                                    this.indicator(Indicator::dot().color(Color::Ignored))
-                                        .indicator_border_color(Some(
-                                            cx.theme().colors().status_bar_background,
-                                        ))
-                                }),
-                            move |_window, cx| {
-                                let settings = all_language_settings(None, cx);
-                                let tooltip_meta = match settings.edit_predictions.ollama.as_ref() {
-                                    Some(settings) if !settings.model.trim().is_empty() => {
-                                        format!("Powered by Ollama ({})", settings.model)
-                                    }
-                                    _ => {
-                                        "Ollama model not configured — configure a model before use"
-                                            .to_string()
-                                    }
-                                };
-
-                                Tooltip::with_meta(
-                                    "Edit Prediction",
-                                    Some(&ToggleMenu),
-                                    tooltip_meta,
-                                    cx,
-                                )
-                            },
                         )
                         .with_handle(self.popover_menu_handle.clone()),
                 )
@@ -536,7 +422,6 @@ impl EditPredictionButton {
         cx.observe_global::<EditPredictionStore>(move |_, cx| cx.notify())
             .detach();
 
-        edit_prediction::ollama::ensure_authenticated(cx);
         let mercury_api_token_task = edit_prediction::mercury::load_mercury_api_token(cx);
         let open_ai_compatible_api_token_task =
             edit_prediction::open_ai_compatible::load_open_ai_compatible_api_token(cx);
@@ -549,8 +434,6 @@ impl EditPredictionButton {
             .ok();
         })
         .detach();
-
-        CodestralEditPredictionDelegate::ensure_api_key_loaded(cx);
 
         Self {
             editor_subscription: None,
@@ -1062,21 +945,6 @@ impl EditPredictionButton {
         })
     }
 
-    fn build_codestral_context_menu(
-        &self,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Entity<ContextMenu> {
-        ContextMenu::build(window, cx, |menu, window, cx| {
-            let menu = self.build_language_settings_menu(menu, window, cx);
-            let menu =
-                self.add_provider_switching_section(menu, EditPredictionProvider::Codestral, cx);
-
-            let menu = self.add_configure_providers_item(menu);
-            menu
-        })
-    }
-
     fn build_edit_prediction_context_menu(
         &self,
         provider: EditPredictionProvider,
@@ -1462,14 +1330,6 @@ pub fn get_available_providers(cx: &mut App) -> Vec<EditPredictionProvider> {
     {
         providers.push(EditPredictionProvider::Copilot);
     };
-
-    if codestral::codestral_api_key(cx).is_some() {
-        providers.push(EditPredictionProvider::Codestral);
-    }
-
-    if edit_prediction::ollama::is_available(cx) {
-        providers.push(EditPredictionProvider::Ollama);
-    }
 
     if all_language_settings(None, cx)
         .edit_predictions
