@@ -312,8 +312,8 @@ fn render_activity_summary(snapshots: ActivityTimelineSnapshots, cx: &mut App) -
                 .gap_2()
                 .child(Icon::new(icon).size(IconSize::Small).color(tone.color()))
                 .child(
-                    Label::new("Workspace Activity")
-                        .size(LabelSize::Default)
+                    Label::new("작업 공간")
+                        .size(LabelSize::Large)
                         .color(Color::Muted),
                 ),
         )
@@ -323,12 +323,12 @@ fn render_activity_summary(snapshots: ActivityTimelineSnapshots, cx: &mut App) -
                 .gap_1()
                 .child(
                     Label::new(status)
-                        .size(LabelSize::Small)
+                        .size(LabelSize::Default)
                         .color(tone.color()),
                 )
                 .child(
                     Label::new(detail)
-                        .size(LabelSize::Small)
+                        .size(LabelSize::Default)
                         .color(Color::Muted)
                         .truncate(),
                 ),
@@ -341,16 +341,9 @@ fn render_activity_side_panel(
     cx: &mut App,
 ) -> gpui::AnyElement {
     let workline = snapshots.workline();
-    let ActivityTimelineSnapshots {
-        activity,
-        smart_run: _,
-        smart_start,
-        smart_panel,
-        smart_todo,
-        smart_parallel,
-        smart_merge,
-        ..
-    } = snapshots;
+    let activity = snapshots.activity;
+
+    let active_stage = workline.stages.iter().find(|stage| stage.active);
 
     v_flex()
         .id("stcode-activity-side-panel")
@@ -358,54 +351,86 @@ fn render_activity_side_panel(
         .h_full()
         .w(STCODE_ACTIVITY_SIDE_PANEL_WIDTH)
         .min_w(STCODE_ACTIVITY_SIDE_PANEL_MIN_WIDTH)
-        .gap_1()
-        .px_3()
-        .py_2()
+        .gap_4()
+        .px_4()
+        .py_3()
         .bg(cx.theme().colors().panel_background)
         .border_l_1()
         .border_color(cx.theme().colors().border)
         .overflow_y_scroll()
         .child(
-            h_flex()
+            v_flex()
                 .w_full()
-                .justify_between()
-                .gap_2()
+                .gap_1()
                 .child(
                     h_flex()
-                        .min_w_0()
+                        .w_full()
                         .gap_2()
                         .child(
-                            Icon::new(activity.icon)
-                                .size(IconSize::Small)
-                                .color(activity.tone.color()),
+                            Icon::new(workline.icon)
+                                .size(IconSize::Medium)
+                                .color(workline.tone.color()),
                         )
                         .child(
-                            Label::new("AI Smart Panel")
-                                .size(LabelSize::Default)
-                                .color(Color::Muted),
+                            Label::new(workline.status)
+                                .size(LabelSize::Large)
+                                .color(workline.tone.color()),
                         ),
                 )
                 .child(
-                    h_flex()
-                        .min_w_0()
-                        .gap_1()
-                        .child(
-                            Label::new(activity.status)
-                                .size(LabelSize::Small)
-                                .color(activity.tone.color()),
-                        )
-                        .child(
-                            Label::new(activity.detail)
-                                .size(LabelSize::Small)
-                                .color(Color::Muted)
-                                .truncate(),
-                        ),
+                    Label::new(workline.detail.clone())
+                        .size(LabelSize::Default)
+                        .color(Color::Muted)
+                        .truncate(),
                 ),
         )
-        .child(render_smart_workline_card(
-            workline,
-            cx,
-        ))
+        .when_some(active_stage, |this, stage| {
+            this.child(
+                h_flex()
+                    .id(format!("stcode-active-stage-{}", stage.kind.label()))
+                    .w_full()
+                    .gap_2()
+                    .px_2()
+                    .py_2()
+                    .rounded_md()
+                    .border_1()
+                    .border_color(cx.theme().colors().border)
+                    .bg(cx.theme().colors().editor_background)
+                    .child(
+                        Icon::new(stage.icon)
+                            .size(IconSize::Medium)
+                            .color(stage.tone.color()),
+                    )
+                    .child(
+                        v_flex()
+                            .min_w_0()
+                            .flex_1()
+                            .gap_1()
+                            .child(
+                                h_flex()
+                                    .w_full()
+                                    .justify_between()
+                                    .gap_2()
+                                    .child(
+                                        Label::new(stage.label)
+                                            .size(LabelSize::Default)
+                                            .color(Color::Default),
+                                    )
+                                    .child(
+                                        Label::new(stage.status)
+                                            .size(LabelSize::Small)
+                                            .color(stage.tone.color()),
+                                    ),
+                            )
+                            .child(
+                                Label::new(stage.detail.clone())
+                                    .size(LabelSize::Small)
+                                    .color(Color::Muted)
+                                    .truncate(),
+                            ),
+                    ),
+            )
+        })
         .children(activity.entries.into_iter().map(render_activity_entry))
         .into_any_element()
 }
@@ -488,12 +513,12 @@ enum SmartWorklineStageKind {
 impl SmartWorklineStageKind {
     fn label(self) -> &'static str {
         match self {
-            Self::Start => "Start",
-            Self::Plan => "Plan",
-            Self::Parallel => "Parallel",
-            Self::Execute => "Execute",
-            Self::Review => "Review",
-            Self::Merge => "Merge",
+            Self::Start => "시작",
+            Self::Plan => "계획",
+            Self::Parallel => "병렬",
+            Self::Execute => "실행",
+            Self::Review => "검토",
+            Self::Merge => "병합",
         }
     }
 }
@@ -523,99 +548,24 @@ fn render_smart_workline_status_bar(
                         .min_w_0()
                         .gap_1()
                         .child(
-                            Label::new("AI Workline")
-                                .size(LabelSize::Small)
+                            Label::new("AI 워크라인")
+                                .size(LabelSize::Default)
                                 .color(Color::Default),
                         )
                         .child(
                             Label::new(snapshot.status)
-                                .size(LabelSize::XSmall)
+                                .size(LabelSize::Small)
                                 .color(snapshot.tone.color()),
                         ),
                 )
                 .child(
                     Label::new(detail)
-                        .size(LabelSize::XSmall)
+                        .size(LabelSize::Small)
                         .color(Color::Muted)
                         .truncate(),
                 ),
         )
         .into_any_element()
-}
-
-fn render_smart_workline_card(
-    snapshot: SmartWorklineSnapshot,
-    cx: &mut App,
-) -> impl IntoElement {
-    let (border_color, background_color) = match snapshot.tone {
-        ActivityTone::Done => (
-            cx.theme().status().success_border,
-            cx.theme().status().success_background,
-        ),
-        ActivityTone::Failed => (
-            cx.theme().status().error_border,
-            cx.theme().status().error_background,
-        ),
-        _ => (
-            cx.theme().status().warning_border,
-            cx.theme().status().warning_background,
-        ),
-    };
-
-    v_flex()
-        .id("stcode-smart-workline-card")
-        .mt_1()
-        .gap_2()
-        .rounded_sm()
-        .border_1()
-        .border_color(border_color)
-        .bg(background_color)
-        .p_2()
-        .child(
-            h_flex()
-                .w_full()
-                .gap_2()
-                .items_start()
-                .child(
-                    Icon::new(snapshot.icon)
-                        .size(IconSize::Small)
-                        .color(snapshot.tone.color()),
-                )
-                .child(
-                    v_flex()
-                        .min_w_0()
-                        .flex_1()
-                        .gap_0p5()
-                        .child(
-                            h_flex()
-                                .w_full()
-                                .justify_between()
-                                .gap_2()
-                                .child(
-                                    Label::new("AI Smart Workline")
-                                        .size(LabelSize::Default)
-                                        .color(Color::Default),
-                                )
-                                .child(
-                                    Label::new(snapshot.status)
-                                        .size(LabelSize::XSmall)
-                                        .color(snapshot.tone.color()),
-                                ),
-                        )
-                        .child(
-                            Label::new(snapshot.detail)
-                                .size(LabelSize::Small)
-                                .color(Color::Muted)
-                                .truncate(),
-                        ),
-                ),
-        )
-        .child(
-            v_flex()
-                .w_full()
-                .gap_1()
-                .children(snapshot.stages.into_iter().map(render_smart_workline_stage)),
-        )
 }
 
 fn render_smart_workline_stage(stage: SmartWorklineStage) -> impl IntoElement {
@@ -761,8 +711,8 @@ fn smart_workline_start_stage(
 
     smart_workline_stage(
         SmartWorklineStageKind::Start,
-        "Ready",
-        "Workspace handoff is clean.",
+        "준비",
+        "작업 공간이 깨끗합니다.",
         IconName::Check,
         ActivityTone::Done,
         active_stage,
@@ -787,14 +737,14 @@ fn smart_workline_plan_stage(
 
     let (status, detail, tone) = if has_thread_entries {
         (
-            "Ready",
-            "No live todo plan is blocking the workline.",
+            "준비",
+            "워크라인을 막는 할 일이 없습니다.",
             ActivityTone::Done,
         )
     } else {
         (
-            "Waiting",
-            "Start a task to create the first plan.",
+            "대기",
+            "작업을 시작하면 계획이 생성됩니다.",
             ActivityTone::Idle,
         )
     };
@@ -816,8 +766,8 @@ fn smart_workline_parallel_stage(
     let Some(snapshot) = smart_parallel else {
         return smart_workline_stage(
             SmartWorklineStageKind::Parallel,
-            "Waiting",
-            "No repository lane information is available yet.",
+            "대기",
+            "아직 레인 정보가 없습니다.",
             IconName::GitWorktree,
             ActivityTone::Idle,
             active_stage,
@@ -853,8 +803,8 @@ fn smart_workline_execute_stage(
         )
     } else {
         (
-            "Waiting",
-            "No agent execution has started yet.",
+            "대기",
+            "아직 에이전트가 시작되지 않았습니다.",
             IconName::ZedAgent,
             ActivityTone::Idle,
         )
@@ -878,8 +828,8 @@ fn smart_workline_review_stage(
     let Some(snapshot) = smart_panel else {
         return smart_workline_stage(
             SmartWorklineStageKind::Review,
-            "Waiting",
-            "No workspace review state is available yet.",
+            "대기",
+            "아직 검토 정보가 없습니다.",
             IconName::ListTodo,
             ActivityTone::Idle,
             active_stage,
@@ -887,13 +837,13 @@ fn smart_workline_review_stage(
     };
 
     let (status, tone) = if snapshot.counts.conflicted_count > 0 {
-        ("Blocked", ActivityTone::Failed)
+        ("차단됨", ActivityTone::Failed)
     } else if snapshot.counts.changed_count > 0 {
-        ("Review", ActivityTone::Waiting)
+        ("검토", ActivityTone::Waiting)
     } else if has_thread_entries {
-        ("Clean", ActivityTone::Done)
+        ("깔끔함", ActivityTone::Done)
     } else {
-        ("Waiting", ActivityTone::Idle)
+        ("대기", ActivityTone::Idle)
     };
 
     smart_workline_stage(
@@ -914,8 +864,8 @@ fn smart_workline_merge_stage(
     let Some(snapshot) = smart_merge else {
         return smart_workline_stage(
             SmartWorklineStageKind::Merge,
-            "Waiting",
-            "No merge readiness is available yet.",
+            "대기",
+            "아직 병합 정보가 없습니다.",
             IconName::PullRequest,
             ActivityTone::Idle,
             active_stage,
@@ -923,11 +873,11 @@ fn smart_workline_merge_stage(
     };
 
     let (status, tone) = if snapshot.can_create_pull_request {
-        ("Ready", ActivityTone::Waiting)
+        ("준비", ActivityTone::Waiting)
     } else if has_thread_entries && snapshot.tone.needs_attention() {
         (snapshot.status, snapshot.tone)
     } else {
-        ("Waiting", ActivityTone::Idle)
+        ("대기", ActivityTone::Idle)
     };
 
     smart_workline_stage(
@@ -1077,10 +1027,10 @@ enum SmartStartState {
 impl SmartStartState {
     fn status(self) -> &'static str {
         match self {
-            Self::Conflicts => "Blocked",
-            Self::LeftoverChanges => "Handoff needed",
-            Self::BranchShared => "Branch overlap",
-            Self::NeedsLane => "Split recommended",
+            Self::Conflicts => "차단됨",
+            Self::LeftoverChanges => "인계 필요",
+            Self::BranchShared => "브랜치 겹침",
+            Self::NeedsLane => "분할 권장",
         }
     }
 
@@ -1140,13 +1090,13 @@ fn smart_start_detail(
         SmartStartState::Conflicts => {
             let file_label = if changed_count == 1 { "file" } else { "files" };
             format!(
-                "{changed_count} changed {file_label} remain on {branch}, including {conflicted_count} conflict(s). Resolve or isolate them before starting the next session."
+                "{changed_count} changed {file_label} remain on {branch}, {conflicted_count}개 충돌 포함. 다음 세션 전에 해결하거나 격리하세요."
             )
         }
         SmartStartState::LeftoverChanges => {
             let file_label = if changed_count == 1 { "file" } else { "files" };
             format!(
-                "{changed_count} changed {file_label} remain on {branch}: {staged_count} staged, {unstaged_count} unstaged. Preserve or stash them before starting clean."
+                "{changed_count}개 변경 파일이 있습니다: {branch}: {staged_count}개 스테이징, {unstaged_count}개 미스테이징. Preserve or stash them before starting clean."
             )
         }
         SmartStartState::BranchShared => {
@@ -1156,13 +1106,13 @@ fn smart_start_detail(
                 "lanes"
             };
             format!(
-                "{branch} is already used by {shared_branch_lane_count} linked {lane_label}. Start the next session in a fresh lane before another agent edits it."
+                "{branch}은(는) 이미 {shared_branch_lane_count}개 연결된 레인에서 사용 중입니다. 다른 에이전트가 편집하기 전에 새 레인에서 다음 세션을 시작하세요."
             )
         }
         SmartStartState::NeedsLane => {
             if linked_worktree_count == 0 {
                 format!(
-                    "{branch} is still on the main checkout. Create an isolated lane before autonomous work starts."
+                    "{branch}은(는) 아직 메인 체크아웃에 있음. Create an isolated lane before autonomous work starts."
                 )
             } else {
                 let lane_label = if linked_worktree_count == 1 {
@@ -1171,7 +1121,7 @@ fn smart_start_detail(
                     "lanes exist"
                 };
                 format!(
-                    "{branch} is still on the main checkout while {linked_worktree_count} linked {lane_label}. Move this session into its own lane before starting."
+                    "{branch}은(는) 아직 메인 체크아웃에 있음 while {linked_worktree_count} linked {lane_label}. Move this session into its own lane before starting."
                 )
             }
         }
@@ -1333,9 +1283,9 @@ enum SmartPanelState {
 impl SmartPanelState {
     fn status(self) -> &'static str {
         match self {
-            SmartPanelState::Clean => "Clean",
-            SmartPanelState::InProgress => "In progress",
-            SmartPanelState::Blocked => "Blocked",
+            SmartPanelState::Clean => "깨끗함",
+            SmartPanelState::InProgress => "진행 중",
+            SmartPanelState::Blocked => "차단됨",
         }
     }
 
@@ -1478,28 +1428,28 @@ fn smart_panel_detail(
 
 fn smart_panel_file_status(status: FileStatus) -> (&'static str, IconName, ActivityTone) {
     if status.is_conflicted() {
-        return ("Conflict", IconName::GitMergeConflict, ActivityTone::Failed);
+        return ("충돌", IconName::GitMergeConflict, ActivityTone::Failed);
     }
 
     if status.is_untracked() {
-        return ("New", IconName::File, ActivityTone::Waiting);
+        return ("새 파일", IconName::File, ActivityTone::Waiting);
     }
 
     let staging = status.staging();
     if staging.has_staged() && staging.has_unstaged() {
-        ("Partial", IconName::Diff, ActivityTone::Waiting)
+        ("일부", IconName::Diff, ActivityTone::Waiting)
     } else if staging.has_staged() {
-        ("Staged", IconName::Check, ActivityTone::Done)
+        ("스테이징", IconName::Check, ActivityTone::Done)
     } else {
-        ("Changed", IconName::Diff, ActivityTone::Waiting)
+        ("변경됨", IconName::Diff, ActivityTone::Waiting)
     }
 }
 
 fn smart_panel_thread_summary(thread: Option<&AcpThread>, cx: &App) -> ThreadSummary {
     let Some(thread) = thread else {
         return ThreadSummary {
-            status: "Ready",
-            detail: "No workspace activity yet",
+            status: "준비",
+            detail: "아직 활동 없음",
             icon: IconName::Circle,
             tone: ActivityTone::Idle,
         };
@@ -1544,11 +1494,11 @@ fn smart_panel_goal_item(
 ) -> SmartPanelWorkItem {
     let detail = thread
         .and_then(|thread| smart_panel_goal_from_thread(thread, cx))
-        .unwrap_or_else(|| "No active goal yet".to_string());
+        .unwrap_or_else(|| "아직 목표가 없습니다".to_string());
 
     SmartPanelWorkItem {
         id: "goal",
-        label: "Current goal",
+        label: "현재 목표",
         detail,
         status: thread_summary.status,
         icon: IconName::UserCheck,
@@ -1582,12 +1532,12 @@ fn smart_panel_lane_item(
         };
         return SmartPanelWorkItem {
             id: "lane",
-            label: "Lane",
+            label: "레인",
             detail: format!(
-                "{branch} overlaps {} linked {lane_label}",
+                "{branch}과(와) {} linked {lane_label}",
                 counts.shared_branch_lane_count
             ),
-            status: "Overlap",
+            status: "격침",
             icon: IconName::GitMergeConflict,
             tone: ActivityTone::Failed,
         };
@@ -1596,18 +1546,18 @@ fn smart_panel_lane_item(
     if counts.is_linked_worktree {
         SmartPanelWorkItem {
             id: "lane",
-            label: "Lane",
-            detail: format!("{branch} is isolated for this session"),
-            status: "Isolated",
+            label: "레인",
+            detail: format!("{branch}은(는) 이 세션에서 격리됨"),
+            status: "격리됨",
             icon: IconName::GitWorktree,
             tone: ActivityTone::Done,
         }
     } else {
         SmartPanelWorkItem {
             id: "lane",
-            label: "Lane",
-            detail: format!("{branch} is still on the main checkout"),
-            status: "Split",
+            label: "레인",
+            detail: format!("{branch}은(는) 아직 메인 체크아웃에 있음"),
+            status: "분할",
             icon: IconName::GitBranchPlus,
             tone: ActivityTone::Waiting,
         }
@@ -1618,9 +1568,9 @@ fn smart_panel_check_item(thread: Option<&AcpThread>, cx: &App) -> SmartPanelWor
     let Some(check) = latest_execute_tool_snapshot(thread, cx) else {
         return SmartPanelWorkItem {
             id: "check",
-            label: "Last check",
-            detail: "No command check has run in this thread yet".to_string(),
-            status: "Waiting",
+            label: "최근 확인",
+            detail: "아직 실행된 명령이 없습니다".to_string(),
+            status: "대기",
             icon: IconName::ToolTerminal,
             tone: ActivityTone::Idle,
         };
@@ -1628,7 +1578,7 @@ fn smart_panel_check_item(thread: Option<&AcpThread>, cx: &App) -> SmartPanelWor
 
     SmartPanelWorkItem {
         id: "check",
-        label: "Last check",
+        label: "최근 확인",
         detail: check.label,
         status: check.status,
         icon: check.icon,
@@ -1644,7 +1594,7 @@ fn smart_panel_merge_item(
 ) -> SmartPanelWorkItem {
     SmartPanelWorkItem {
         id: "merge",
-        label: "Merge readiness",
+        label: "병합 준비",
         detail: smart_merge_detail(
             merge_state,
             branch_name,
@@ -1820,12 +1770,12 @@ enum SmartTodoState {
 impl SmartTodoState {
     fn status(self) -> &'static str {
         match self {
-            SmartTodoState::Empty => "No todo",
-            SmartTodoState::Planned => "Ready",
-            SmartTodoState::Working => "Working",
-            SmartTodoState::AutonomyBlocked => "Autonomy blocked",
-            SmartTodoState::Blocked => "Blocked",
-            SmartTodoState::Complete => "Complete",
+            SmartTodoState::Empty => "할 일 없음",
+            SmartTodoState::Planned => "준비",
+            SmartTodoState::Working => "작업 중",
+            SmartTodoState::AutonomyBlocked => "자율 차단",
+            SmartTodoState::Blocked => "차단됨",
+            SmartTodoState::Complete => "완료",
         }
     }
 
@@ -1894,43 +1844,43 @@ fn smart_todo_detail(
 ) -> String {
     match state {
         SmartTodoState::Empty => {
-            "No live todo plan yet. Ask the agent to break the task into tracked steps.".to_string()
+            "아직 계획이 없습니다. 에이전트에게 작업을 나누달라고 요청하세요.".to_string()
         }
         SmartTodoState::Planned => {
-            let current = current_label.unwrap_or("next planned step");
-            format!("{pending} todo step(s) remain. Next: {current}.")
+            let current = current_label.unwrap_or("다음 계획 단계");
+            format!("{pending}개 할 일이 남았습니다. 다음: {current}.")
         }
         SmartTodoState::Working => {
             let current = current_label
                 .or(latest_tool_label)
-                .unwrap_or("workspace work is running");
-            format!("Agent is working now: {current}.")
+                .unwrap_or("작업 실행 중");
+            format!("에이전트 작업 중: {current}.")
         }
         SmartTodoState::AutonomyBlocked => {
-            let tool = latest_tool_label.unwrap_or("a workspace tool");
-            format!("Autonomy blocker: {tool} is waiting on tool permission.")
+            let tool = latest_tool_label.unwrap_or("작업 도구");
+            format!("자율 차단: {tool}가(이) 도구 권한을 기다리고 있습니다.")
         }
         SmartTodoState::Blocked => {
             let tool = latest_tool_label.unwrap_or("the latest workspace step");
-            format!("Blocked by {tool}. Review the failure before starting more work.")
+            format!("최근 작업 단계에서 차단됨. 추가 작업 전에 실패를 확인하세요.")
         }
-        SmartTodoState::Complete => format!("{completed}/{total} todo step(s) complete."),
+        SmartTodoState::Complete => format!("{completed}/{total}개 할 일 완료."),
     }
 }
 
 fn smart_todo_progress_label(completed: u32, total: u32) -> String {
     if total == 0 {
-        "no plan".to_string()
+        "계획 없음".to_string()
     } else {
-        format!("{completed}/{total} done")
+        format!("{completed}/{total} 완료")
     }
 }
 
 fn smart_todo_left_label(pending: u32) -> String {
     if pending == 1 {
-        "1 left".to_string()
+        "1 남음".to_string()
     } else {
-        format!("{pending} left")
+        format!("{pending} 남음")
     }
 }
 
@@ -1941,11 +1891,11 @@ fn plan_entry_label(entry: &acp_thread::PlanEntry, cx: &App) -> String {
 fn plan_entry_status(status: acp::PlanEntryStatus) -> (&'static str, IconName, ActivityTone) {
     match status {
         acp::PlanEntryStatus::InProgress => {
-            ("Doing", IconName::TodoProgress, ActivityTone::Running)
+            ("진행 중", IconName::TodoProgress, ActivityTone::Running)
         }
-        acp::PlanEntryStatus::Completed => ("Done", IconName::TodoComplete, ActivityTone::Done),
+        acp::PlanEntryStatus::Completed => ("완료", IconName::TodoComplete, ActivityTone::Done),
         acp::PlanEntryStatus::Pending | _ => {
-            ("Queued", IconName::TodoPending, ActivityTone::Waiting)
+            ("대기 중", IconName::TodoPending, ActivityTone::Waiting)
         }
     }
 }
@@ -2044,9 +1994,9 @@ enum SmartParallelState {
 impl SmartParallelState {
     fn status(self) -> &'static str {
         match self {
-            SmartParallelState::Isolated => "Isolated",
-            SmartParallelState::NeedsLane => "Split recommended",
-            SmartParallelState::BranchShared => "Branch overlap",
+            SmartParallelState::Isolated => "격리됨",
+            SmartParallelState::NeedsLane => "분할 권장",
+            SmartParallelState::BranchShared => "브랜치 겹침",
         }
     }
 
@@ -2094,7 +2044,7 @@ fn smart_parallel_detail(
     match state {
         SmartParallelState::Isolated => {
             if linked_worktree_count == 0 {
-                format!("{branch} is already running in an isolated lane for this session.")
+                format!("{branch}은(는) 이 세션에서 격리된 레인에서 실행 중입니다.")
             } else {
                 let lane_label = if linked_worktree_count == 1 {
                     "other lane"
@@ -2102,14 +2052,14 @@ fn smart_parallel_detail(
                     "other lanes"
                 };
                 format!(
-                    "{branch} is isolated from {linked_worktree_count} {lane_label}; parallel agents can work without sharing this checkout."
+                    "{branch}은(는) {linked_worktree_count} {lane_label}; parallel agents can work without sharing this checkout."
                 )
             }
         }
         SmartParallelState::NeedsLane => {
             if linked_worktree_count == 0 {
                 format!(
-                    "{branch} is still on the main checkout. Create a lane before starting parallel agent work."
+                    "{branch}은(는) 아직 메인 체크아웃에 있음. Create a lane before starting parallel agent work."
                 )
             } else {
                 let lane_label = if linked_worktree_count == 1 {
@@ -2141,7 +2091,7 @@ fn smart_parallel_detail(
                 format!(": {overlap_labels}")
             };
             format!(
-                "{branch} also appears in {duplicate_branch_count} {lane_label}{overlap_detail}. Switch lanes or create a fresh lane before more agents edit it."
+                "{branch}도 여기에 있습니다: {duplicate_branch_count} {lane_label}{overlap_detail}. 레인을 전환하거나 새 레인을 만드세요."
             )
         }
     }
@@ -2265,13 +2215,13 @@ enum SmartMergeState {
 impl SmartMergeState {
     fn status(self) -> &'static str {
         match self {
-            SmartMergeState::Ready => "Ready",
-            SmartMergeState::NeedsPublish => "Publish needed",
-            SmartMergeState::NeedsSync => "Sync needed",
-            SmartMergeState::NeedsCheckpoint => "Checkpoint needed",
-            SmartMergeState::HasConflicts => "Blocked",
-            SmartMergeState::ProtectedBranch => "Base branch",
-            SmartMergeState::Detached => "No branch",
+            SmartMergeState::Ready => "준비",
+            SmartMergeState::NeedsPublish => "게시 필요",
+            SmartMergeState::NeedsSync => "동기화 필요",
+            SmartMergeState::NeedsCheckpoint => "체크포인트 필요",
+            SmartMergeState::HasConflicts => "차단됨",
+            SmartMergeState::ProtectedBranch => "베이스 브랜치",
+            SmartMergeState::Detached => "브랜치 없음",
         }
     }
 
@@ -2357,38 +2307,38 @@ fn smart_merge_detail(
 
     match state {
         SmartMergeState::Ready => format!(
-            "{branch} is clean, published, and ready for AI Smart Merge to watch checks and merge."
+            "{branch}은(는) 깔끔하고 게시되어 AI 스마트 병합이 가능합니다."
         ),
         SmartMergeState::NeedsPublish => {
             let ahead = ahead_count
-                .map(|count| format!(" {count} local commit(s) are ahead of upstream."))
+                .map(|count| format!(" {count}개 커밋이 업스트림보다 앞서 있습니다."))
                 .unwrap_or_default();
             format!(
-                "{branch} is clean locally but still needs publishing.{ahead} AI Smart Merge can push, create the PR, watch checks, and merge."
+                "{branch}은(는) 로컬은 깔끔하지만 게시가 필요합니다.{ahead} AI 스마트 병합이 프리시, PR 생성 후 병합합니다."
             )
         }
         SmartMergeState::NeedsSync => {
             let behind = behind_count
-                .map(|count| format!(" {count} upstream commit(s) are ahead."))
+                .map(|count| format!(" {count}개 업스트림 커밋이 앞서 있습니다."))
                 .unwrap_or_default();
             format!(
-                "{branch} needs a base sync before merge.{behind} AI Smart Merge should rebase or pull, then continue through PR and CI."
+                "{branch}은(는) 병합 전에 베이스 동기화가 필요합니다.{behind} AI 스마트 병합이 리베이스 또는 풀 후 계속합니다."
             )
         }
         SmartMergeState::NeedsCheckpoint => {
             let file_label = if changed_count == 1 { "file" } else { "files" };
             format!(
-                "{changed_count} changed {file_label} remain on {branch}. AI Smart Merge should review, commit, test, push, open the PR, and continue to merge."
+                "{changed_count}개 변경 파일이 있습니다: {branch}. AI 스마트 병합이 검토, 커밋, 테스트, 푸시, PR 생성 후 병합합니다."
             )
         }
         SmartMergeState::HasConflicts => format!(
-            "{conflicted_count} conflict(s) remain on {branch}. AI Smart Merge should resolve them before continuing to checks, PR, and merge."
+            "{conflicted_count}개 충돌이 있습니다: {branch}. AI 스마트 병합이 계속하기 전에 해결합니다."
         ),
         SmartMergeState::ProtectedBranch => format!(
-            "{branch} is the base branch. AI Smart Merge should split work into a task branch before preparing the PR."
+            "{branch}은(는) 베이스 브랜치입니다. 작업 브랜치로 분할해야 합니다."
         ),
         SmartMergeState::Detached => {
-            "This workspace is detached. Create a task branch before Smart Merge can prepare a PR."
+            "detached HEAD 상태입니다. PR 준비 전에 브랜치를 만드세요."
                 .to_string()
         }
     }
@@ -2411,8 +2361,8 @@ struct ActivitySnapshot {
 impl ActivitySnapshot {
     fn empty() -> Self {
         Self {
-            status: "Ready",
-            detail: "No workspace activity yet",
+            status: "준비",
+            detail: "아직 활동 없음",
             icon: IconName::Circle,
             tone: ActivityTone::Idle,
             entries: Vec::new(),
@@ -2471,16 +2421,16 @@ impl ActivityEntry {
         match entry {
             AgentThreadEntry::UserMessage(_) => Some(Self {
                 id: entry_index,
-                label: "Request received".to_string(),
-                status: "Queued",
+                label: "요청 수신".to_string(),
+                status: "대기",
                 icon: IconName::UserCheck,
                 tone: ActivityTone::Idle,
                 is_tool: false,
             }),
             AgentThreadEntry::AssistantMessage(_) => Some(Self {
                 id: entry_index,
-                label: "Agent response updated".to_string(),
-                status: "Updated",
+                label: "에이전트 응답 갱신".to_string(),
+                status: "갱신",
                 icon: IconName::ZedAgent,
                 tone: ActivityTone::Idle,
                 is_tool: false,
@@ -2498,8 +2448,8 @@ impl ActivityEntry {
             }
             AgentThreadEntry::CompletedPlan(_) => Some(Self {
                 id: entry_index,
-                label: "Plan completed".to_string(),
-                status: "Done",
+                label: "계획 완료".to_string(),
+                status: "완료",
                 icon: IconName::TodoComplete,
                 tone: ActivityTone::Done,
                 is_tool: false,
@@ -2526,8 +2476,8 @@ fn summarize_thread_state(
 ) -> ThreadSummary {
     if !has_entries {
         return ThreadSummary {
-            status: "Ready",
-            detail: "No workspace activity yet",
+            status: "준비",
+            detail: "아직 활동 없음",
             icon: IconName::Circle,
             tone: ActivityTone::Idle,
         };
@@ -2535,8 +2485,8 @@ fn summarize_thread_state(
 
     if is_waiting_for_confirmation {
         return ThreadSummary {
-            status: "Autonomy blocked",
-            detail: "Tool permission is blocking",
+            status: "자율 차단",
+            detail: "도구 권한 대기 중",
             icon: IconName::Warning,
             tone: ActivityTone::Waiting,
         };
@@ -2544,11 +2494,11 @@ fn summarize_thread_state(
 
     if is_generating {
         return ThreadSummary {
-            status: "Working",
+            status: "작업 중",
             detail: if has_in_progress_tool_calls {
-                "Running workspace tools"
+                "도구 실행 중"
             } else {
-                "Planning the next step"
+                "계획 중"
             },
             icon: IconName::LoadCircle,
             tone: ActivityTone::Running,
@@ -2557,16 +2507,16 @@ fn summarize_thread_state(
 
     if had_error || last_tool_tone.is_some_and(ActivityTone::needs_attention) {
         return ThreadSummary {
-            status: "Needs attention",
-            detail: "The latest work did not complete",
+            status: "주의 필요",
+            detail: "최근 작업이 완료되지 않음",
             icon: IconName::XCircle,
             tone: ActivityTone::Failed,
         };
     }
 
     ThreadSummary {
-        status: "Ready",
-        detail: "Latest work is complete",
+        status: "준비",
+        detail: "최근 작업 완료",
         icon: IconName::Check,
         tone: ActivityTone::Done,
     }
@@ -2574,15 +2524,15 @@ fn summarize_thread_state(
 
 fn tool_status_label(status: &ToolCallStatus) -> (&'static str, ActivityTone) {
     match status {
-        ToolCallStatus::Pending => ("Queued", ActivityTone::Running),
+        ToolCallStatus::Pending => ("대기", ActivityTone::Running),
         ToolCallStatus::WaitingForConfirmation { .. } => {
-            ("Permission blocked", ActivityTone::Waiting)
+            ("권한 차단", ActivityTone::Waiting)
         }
-        ToolCallStatus::InProgress => ("Running", ActivityTone::Running),
-        ToolCallStatus::Completed => ("Done", ActivityTone::Done),
-        ToolCallStatus::Failed => ("Failed", ActivityTone::Failed),
-        ToolCallStatus::Rejected => ("Rejected", ActivityTone::Failed),
-        ToolCallStatus::Canceled => ("Canceled", ActivityTone::Failed),
+        ToolCallStatus::InProgress => ("실행 중", ActivityTone::Running),
+        ToolCallStatus::Completed => ("완료", ActivityTone::Done),
+        ToolCallStatus::Failed => ("실패", ActivityTone::Failed),
+        ToolCallStatus::Rejected => ("거부", ActivityTone::Failed),
+        ToolCallStatus::Canceled => ("취소", ActivityTone::Failed),
     }
 }
 
@@ -2667,7 +2617,7 @@ mod tests {
         let summary =
             summarize_thread_state(true, true, true, true, true, Some(ActivityTone::Failed));
 
-        assert_eq!(summary.status, "Autonomy blocked");
+        assert_eq!(summary.status, "자율 차단");
         assert_eq!(summary.detail, "Tool permission is blocking");
         assert_eq!(summary.tone, ActivityTone::Waiting);
     }
@@ -2686,7 +2636,7 @@ mod tests {
         let summary =
             summarize_thread_state(true, false, false, false, false, Some(ActivityTone::Failed));
 
-        assert_eq!(summary.status, "Needs attention");
+        assert_eq!(summary.status, "주의 필요");
         assert_eq!(summary.tone, ActivityTone::Failed);
     }
 
@@ -2694,19 +2644,19 @@ mod tests {
     fn tool_status_labels_are_user_facing() {
         assert_eq!(
             tool_status_label(&ToolCallStatus::Pending),
-            ("Queued", ActivityTone::Running)
+            ("대기 중", ActivityTone::Running)
         );
         assert_eq!(
             tool_status_label(&ToolCallStatus::InProgress),
-            ("Running", ActivityTone::Running)
+            ("실행 중", ActivityTone::Running)
         );
         assert_eq!(
             tool_status_label(&ToolCallStatus::Completed),
-            ("Done", ActivityTone::Done)
+            ("완료", ActivityTone::Done)
         );
         assert_eq!(
             tool_status_label(&ToolCallStatus::Failed),
-            ("Failed", ActivityTone::Failed)
+            ("실패", ActivityTone::Failed)
         );
     }
 
@@ -2723,9 +2673,9 @@ mod tests {
             0,
         );
 
-        assert!(detail.contains("3 changed files remain on feature"));
-        assert!(detail.contains("1 staged"));
-        assert!(detail.contains("2 unstaged"));
+        assert!(detail.contains("3개 변경"));
+        assert!(detail.contains("1개 스테이징"));
+        assert!(detail.contains("2개 미스테이징"));
     }
 
     #[test]
@@ -2741,8 +2691,8 @@ mod tests {
             0,
         );
 
-        assert!(detail.contains("including 1 conflict"));
-        assert!(detail.contains("Resolve or isolate them"));
+        assert!(detail.contains("1개 충돌"));
+        assert!(detail.contains("해결하거나 격리"));
     }
 
     #[test]
@@ -2781,8 +2731,8 @@ mod tests {
             1,
         );
 
-        assert!(split.contains("main checkout while 2 linked lanes exist"));
-        assert!(overlap.contains("feature is already used by 1 linked lane"));
+        assert!(split.contains("메인 체크아웃"));
+        assert!(overlap.contains("이미"));
     }
 
     #[test]
@@ -2846,8 +2796,8 @@ mod tests {
         );
 
         assert!(detail.contains("feature: 3 changed files"));
-        assert!(detail.contains("1 staged"));
-        assert!(detail.contains("2 unstaged"));
+        assert!(detail.contains("1개 스테이징"));
+        assert!(detail.contains("2개 미스테이징"));
         assert!(detail.contains("1 new"));
         assert!(detail.contains("+12 -4"));
     }
@@ -2893,8 +2843,8 @@ mod tests {
             },
         );
 
-        assert_eq!(item.status, "Overlap");
-        assert!(item.detail.contains("feature overlaps 1 linked lane"));
+        assert_eq!(item.status, "격침");
+        assert!(item.detail.contains("격칩니다"));
         assert_eq!(item.tone, ActivityTone::Failed);
     }
 
@@ -2902,8 +2852,8 @@ mod tests {
     fn smart_panel_merge_item_reuses_merge_readiness() {
         let item = smart_panel_merge_item(Some("feature"), 0, 0, SmartMergeState::Ready);
 
-        assert_eq!(item.status, "Ready");
-        assert!(item.detail.contains("feature is clean, published"));
+        assert_eq!(item.status, "준비");
+        assert!(item.detail.contains("깔끔하고 게시되어"));
         assert_eq!(item.tone, ActivityTone::Done);
     }
 
@@ -2919,13 +2869,13 @@ mod tests {
     fn smart_panel_file_status_is_review_facing() {
         assert_eq!(
             smart_panel_file_status(git::status::FileStatus::Untracked),
-            ("New", IconName::File, ActivityTone::Waiting)
+            ("새 파일", IconName::File, ActivityTone::Waiting)
         );
         assert_eq!(
             smart_panel_file_status(git::status::FileStatus::index(
                 git::status::StatusCode::Modified,
             )),
-            ("Staged", IconName::Check, ActivityTone::Done)
+            ("스테이징", IconName::Check, ActivityTone::Done)
         );
         assert_eq!(
             smart_panel_file_status(git::status::FileStatus::Unmerged(
@@ -2934,7 +2884,7 @@ mod tests {
                     second_head: git::status::UnmergedStatusCode::Updated,
                 },
             )),
-            ("Conflict", IconName::GitMergeConflict, ActivityTone::Failed)
+            ("충돌", IconName::GitMergeConflict, ActivityTone::Failed)
         );
     }
 
@@ -2981,8 +2931,8 @@ mod tests {
             4,
         );
 
-        assert!(detail.contains("3 todo step(s) remain"));
-        assert!(detail.contains("Next: Run validation"));
+        assert!(detail.contains("3 할 일"));
+        assert!(detail.contains("다음: Run validation"));
     }
 
     #[test]
@@ -2997,32 +2947,32 @@ mod tests {
         );
         let blocked = smart_todo_detail(SmartTodoState::Blocked, None, Some("Run tests"), 1, 0, 1);
 
-        assert!(autonomy_blocker.contains("Autonomy blocker: Run command"));
-        assert!(autonomy_blocker.contains("tool permission"));
-        assert!(blocked.contains("Blocked by Run tests"));
+        assert!(autonomy_blocker.contains("자율 차단"));
+        assert!(autonomy_blocker.contains("도구 권한"));
+        assert!(blocked.contains("차단됨"));
     }
 
     #[test]
     fn smart_todo_labels_are_compact() {
-        assert_eq!(smart_todo_progress_label(2, 5), "2/5 done");
-        assert_eq!(smart_todo_progress_label(0, 0), "no plan");
-        assert_eq!(smart_todo_left_label(1), "1 left");
-        assert_eq!(smart_todo_left_label(3), "3 left");
+        assert_eq!(smart_todo_progress_label(2, 5), "2/5 완료");
+        assert_eq!(smart_todo_progress_label(0, 0), "계획 없음");
+        assert_eq!(smart_todo_left_label(1), "1 남음");
+        assert_eq!(smart_todo_left_label(3), "3 남음");
     }
 
     #[test]
     fn plan_entry_status_is_review_facing() {
         assert_eq!(
             plan_entry_status(acp::PlanEntryStatus::InProgress),
-            ("Doing", IconName::TodoProgress, ActivityTone::Running)
+            ("진행 중", IconName::TodoProgress, ActivityTone::Running)
         );
         assert_eq!(
             plan_entry_status(acp::PlanEntryStatus::Completed),
-            ("Done", IconName::TodoComplete, ActivityTone::Done)
+            ("완료", IconName::TodoComplete, ActivityTone::Done)
         );
         assert_eq!(
             plan_entry_status(acp::PlanEntryStatus::Pending),
-            ("Queued", IconName::TodoPending, ActivityTone::Waiting)
+            ("대기 중", IconName::TodoPending, ActivityTone::Waiting)
         );
     }
 
@@ -3177,8 +3127,8 @@ mod tests {
     fn smart_parallel_detail_explains_main_checkout_risk() {
         let detail = smart_parallel_detail(SmartParallelState::NeedsLane, Some("main"), 2, 0, &[]);
 
-        assert!(detail.contains("main is the main checkout"));
-        assert!(detail.contains("2 linked lanes exist"));
+        assert!(detail.contains("메인 체크아웃"));
+        assert!(detail.contains("레인"));
         assert!(detail.contains("its own lane"));
     }
 
@@ -3187,7 +3137,7 @@ mod tests {
         let detail =
             smart_parallel_detail(SmartParallelState::Isolated, Some("feature"), 1, 0, &[]);
 
-        assert!(detail.contains("feature is isolated"));
+        assert!(detail.contains("격리됨"));
         assert!(detail.contains("1 other lane"));
     }
 
@@ -3214,8 +3164,8 @@ mod tests {
             ],
         );
 
-        assert!(detail.contains("feature also appears"));
-        assert!(detail.contains("2 linked lanes"));
+        assert!(detail.contains("여기에 있습니다"));
+        assert!(detail.contains("레인"));
         assert!(detail.contains("lane-a, lane-b"));
     }
 
@@ -3317,8 +3267,8 @@ mod tests {
             None,
         );
 
-        assert!(detail.contains("3 changed files remain on feature"));
-        assert!(detail.contains("review, commit, test"));
+        assert!(detail.contains("3개 변경"));
+        assert!(detail.contains("검토, 커밋"));
     }
 
     fn status_entry(status: git::status::FileStatus) -> StatusEntry {
