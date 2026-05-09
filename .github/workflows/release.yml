@@ -3,31 +3,18 @@ name: Release Stcode
 on:
   workflow_dispatch:
     inputs:
-      version:
-        description: "Semver release version without the leading v"
+      tag:
+        description: "Existing release tag (vX.Y.Z) to (re)build artifacts for"
         required: true
         type: string
-      draft:
-        description: "Create the GitHub Release as a draft"
-        required: true
-        default: true
-        type: boolean
-      prerelease:
-        description: "Mark the GitHub Release as a prerelease"
-        required: true
-        default: false
-        type: boolean
-  pull_request:
-    types: [closed]
-    branches:
-      - main
-      - codex/stcode-trim-test-fixtures
+  release:
+    types: [published]
 
 permissions:
   contents: write
 
 concurrency:
-  group: release-stcode
+  group: release-stcode-${{ github.event.release.tag_name || inputs.tag }}
   cancel-in-progress: false
 
 env:
@@ -35,98 +22,8 @@ env:
   RELEASE_CHANNEL: stable
 
 jobs:
-  resolve-release:
-    name: Resolve release
-    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.merged == true }}
-    runs-on: ubuntu-latest
-    outputs:
-      version: ${{ steps.release.outputs.version }}
-      tag: ${{ steps.release.outputs.tag }}
-      commit_sha: ${{ steps.release.outputs.commit_sha }}
-      draft: ${{ steps.release.outputs.draft }}
-      prerelease: ${{ steps.release.outputs.prerelease }}
-      release_notes: ${{ steps.release.outputs.release_notes }}
-
-    steps:
-      - name: Checkout tags
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Resolve release version
-        id: release
-        shell: bash
-        env:
-          EVENT_NAME: ${{ github.event_name }}
-          INPUT_VERSION: ${{ inputs.version }}
-          INPUT_DRAFT: ${{ inputs.draft }}
-          INPUT_PRERELEASE: ${{ inputs.prerelease }}
-          PR_MERGED: ${{ github.event.pull_request.merged }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-          PR_TITLE: ${{ github.event.pull_request.title }}
-          MERGE_COMMIT_SHA: ${{ github.event.pull_request.merge_commit_sha }}
-          WORKFLOW_SHA: ${{ github.sha }}
-        run: |
-          case "$EVENT_NAME" in
-            workflow_dispatch)
-              version="$INPUT_VERSION"
-              commit_sha="$WORKFLOW_SHA"
-              draft="$INPUT_DRAFT"
-              prerelease="$INPUT_PRERELEASE"
-              release_notes="Manual Stcode release $version."
-              ;;
-            pull_request)
-              if [[ "$PR_MERGED" != "true" ]]; then
-                echo "Pull request was closed without merge; no release will be created."
-                exit 0
-              fi
-
-              git fetch --tags --force
-              latest_tag="$(git tag -l 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -n 1 || true)"
-              if [[ -z "$latest_tag" ]]; then
-                version="1.0.0"
-              else
-                latest_version="${latest_tag#v}"
-                IFS=. read -r major minor patch <<< "$latest_version"
-                version="$major.$minor.$((patch + 1))"
-              fi
-
-              commit_sha="$MERGE_COMMIT_SHA"
-              draft="false"
-              prerelease="false"
-              release_notes="Automated Stcode release $version from merged PR #$PR_NUMBER: $PR_TITLE."
-              ;;
-            *)
-              echo "Unsupported release event: $EVENT_NAME" >&2
-              exit 64
-              ;;
-          esac
-
-          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.-]+)?$ ]]; then
-            echo "Invalid release version: $version" >&2
-            exit 64
-          fi
-
-          if [[ -z "$commit_sha" ]]; then
-            echo "Could not resolve release commit SHA" >&2
-            exit 1
-          fi
-
-          {
-            echo "version=$version"
-            echo "tag=v$version"
-            echo "commit_sha=$commit_sha"
-            echo "draft=$draft"
-            echo "prerelease=$prerelease"
-            echo "release_notes<<EOF"
-            echo "$release_notes"
-            echo "EOF"
-          } >> "$GITHUB_OUTPUT"
-
   build-macos:
     name: Build macOS ${{ matrix.arch }} DMG
-    needs: resolve-release
-    if: ${{ needs.resolve-release.outputs.version != '' }}
     runs-on: macos-14
     strategy:
       fail-fast: false
@@ -138,15 +35,36 @@ jobs:
             arch: x86_64
 
     steps:
+      - name: Resolve release info
+        id: release
+        shell: bash
+        env:
+          EVENT_TAG: ${{ github.event.release.tag_name }}
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          tag="${EVENT_TAG:-$INPUT_TAG}"
+          if [[ ! "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Invalid release tag: '$tag'. Expected vX.Y.Z." >&2
+            exit 64
+          fi
+          version="${tag#v}"
+          {
+            echo "tag=$tag"
+            echo "version=$version"
+          } >> "$GITHUB_OUTPUT"
+
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          ref: ${{ needs.resolve-release.outputs.commit_sha }}
+          ref: ${{ steps.release.outputs.tag }}
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
+
+      - name: Install sccache
+        run: brew install sccache
 
       - name: Cache Cargo
         uses: actions/cache@v4
@@ -198,91 +116,33 @@ jobs:
       - name: Build DMG
         shell: bash
         env:
-          ZED_APP_VERSION: ${{ needs.resolve-release.outputs.version }}
-          ZED_COMMIT_SHA: ${{ needs.resolve-release.outputs.commit_sha }}
+          ZED_APP_VERSION: ${{ steps.release.outputs.version }}
+          ZED_COMMIT_SHA: ${{ github.sha }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
-        run: script/stcode-release-macos "${{ needs.resolve-release.outputs.version }}" "${{ matrix.target }}"
+        run: script/stcode-release-macos "${{ steps.release.outputs.version }}" "${{ matrix.target }}"
 
-      - name: Upload DMG artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: stcode-macos-${{ matrix.arch }}
-          path: |
-            target/stcode-release/Stcode-${{ needs.resolve-release.outputs.version }}-${{ matrix.arch }}.dmg
-            target/stcode-release/Stcode-${{ needs.resolve-release.outputs.version }}-${{ matrix.arch }}.dmg.sha256
-          if-no-files-found: error
-
-  publish-release:
-    name: Publish GitHub Release
-    runs-on: ubuntu-latest
-    needs:
-      - resolve-release
-      - build-macos
-    if: ${{ needs.resolve-release.outputs.version != '' }}
-
-    steps:
-      - name: Download DMG artifacts
-        uses: actions/download-artifact@v4
-        with:
-          path: dist
-          merge-multiple: true
-
-      - name: Create or update GitHub Release
+      - name: Upload DMG to release
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-          RELEASE_VERSION: ${{ needs.resolve-release.outputs.version }}
-          RELEASE_TAG: ${{ needs.resolve-release.outputs.tag }}
-          RELEASE_COMMIT_SHA: ${{ needs.resolve-release.outputs.commit_sha }}
-          RELEASE_DRAFT: ${{ needs.resolve-release.outputs.draft }}
-          RELEASE_PRERELEASE: ${{ needs.resolve-release.outputs.prerelease }}
-          RELEASE_NOTES: ${{ needs.resolve-release.outputs.release_notes }}
+          VERSION: ${{ steps.release.outputs.version }}
+          TAG: ${{ steps.release.outputs.tag }}
+          ARCH: ${{ matrix.arch }}
         run: |
-          version="$RELEASE_VERSION"
-          tag="$RELEASE_TAG"
-          shopt -s nullglob
-          assets=(dist/*)
-
-          if (( ${#assets[@]} == 0 )); then
-            echo "No release assets were downloaded" >&2
+          dmg="target/stcode-release/Stcode-${VERSION}-${ARCH}.dmg"
+          sha="$dmg.sha256"
+          if [[ ! -f "$dmg" ]]; then
+            echo "Missing release asset: $dmg" >&2
             exit 1
           fi
-
-          for arch in aarch64 x86_64; do
-            dmg="dist/Stcode-$version-$arch.dmg"
-            latest_dmg="dist/Stcode-latest-$arch.dmg"
-
-            if [[ ! -f "$dmg" ]]; then
-              echo "Missing release asset: $dmg" >&2
-              exit 1
-            fi
-
-            cp "$dmg" "$latest_dmg"
-            sha256sum "$latest_dmg" > "$latest_dmg.sha256"
-          done
-
-          assets=(dist/*)
-
-          if gh release view "$tag" >/dev/null 2>&1; then
-            gh release upload "$tag" "${assets[@]}" --clobber
-            exit 0
-          fi
-
-          create_args=(
-            --title "Stcode $version"
-            --notes "$RELEASE_NOTES"
-            --target "$RELEASE_COMMIT_SHA"
-          )
-
-          if [[ "$RELEASE_DRAFT" == "true" ]]; then
-            create_args+=(--draft)
-          fi
-
-          if [[ "$RELEASE_PRERELEASE" == "true" ]]; then
-            create_args+=(--prerelease)
-          fi
-
-          gh release create "$tag" "${assets[@]}" "${create_args[@]}"
+          mkdir -p dist
+          latest_dmg="dist/Stcode-latest-${ARCH}.dmg"
+          cp "$dmg" "$latest_dmg"
+          sha256sum "$latest_dmg" > "$latest_dmg.sha256"
+          gh release upload "$TAG" \
+            "$dmg" "$sha" \
+            "$latest_dmg" "$latest_dmg.sha256" \
+            --clobber

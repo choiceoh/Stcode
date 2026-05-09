@@ -139,13 +139,20 @@ Other entities can then register a callback to handle these events by doing `cx.
 
 # Pull request hygiene
 
+The repository uses [release-please](https://github.com/googleapis/release-please) (see `release-please-config.json` and `.github/workflows/release-please.yml`). The PR title becomes the squash commit message, and release-please reads conventional commit prefixes from those messages to bump versions and generate `CHANGELOG.md`. PR titles therefore need to follow Conventional Commits.
+
 When an agent opens or updates a pull request, it must:
 
-- Use a clear, correctly capitalized, imperative PR title (for example, `Fix crash in project panel`).
-- Avoid conventional commit prefixes in PR titles (`fix:`, `feat:`, `docs:`, etc.).
+- Start the PR title with a Conventional Commit prefix:
+  - `feat: ...` — new user-facing feature (minor bump)
+  - `fix: ...` — bug fix (patch bump)
+  - `perf: ...` — performance improvement (patch bump)
+  - `refactor: ...`, `docs: ...`, `test: ...`, `chore: ...`, `build: ...`, `ci: ...` — no version bump (hidden from changelog)
+  - Append `!` (e.g. `feat!:`) or include `BREAKING CHANGE:` in the body for a breaking change (major bump)
+- Optionally include a scope when one crate or area is the clear focus, for example `feat(git_ui): add history view` or `fix(agent_panel): stop infinite retry`.
+- After the prefix, write a clear, lower-case-first imperative summary (the prefix already provides capitalization).
 - Avoid trailing punctuation in PR titles.
-- Optionally prefix the title with a crate name when one crate is the clear scope (for example, `git_ui: Add history view`).
-- Include a `Release Notes:` section as the final section in the PR body.
+- Include a `Release Notes:` section as the final section in the PR body. release-please uses commit messages for the changelog; the `Release Notes:` block is what end users see in install/update notes.
 - Use one bullet under `Release Notes:`:
   - `- Added ...`, `- Fixed ...`, or `- Improved ...` for user-facing changes, or
   - `- N/A` for docs-only and other non-user-facing changes.
@@ -156,6 +163,16 @@ Release Notes:
 
 - N/A
 ```
+
+## Release flow
+
+1. PRs land on `main` with Conventional Commit titles (and squash merge).
+2. The `Release Please` workflow opens or updates a single rolling "release PR" that bumps `crates/stcode/Cargo.toml`, regenerates `CHANGELOG.md`, and updates `.release-please-manifest.json`.
+3. Merging that release PR creates the `vX.Y.Z` git tag and a published GitHub Release.
+4. The `Release Stcode` workflow fires on the `release: published` event, builds signed macOS DMGs for both architectures, and uploads them (plus `Stcode-latest-*.dmg` aliases) to the release.
+5. End users still pull artifacts via `script/stcode-install-macos`.
+
+Do not hand-edit `.release-please-manifest.json` or `CHANGELOG.md`; let the action manage them.
 
 # Crash Investigation
 
