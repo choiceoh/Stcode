@@ -2301,9 +2301,6 @@
     "google": {
       "api_url": "https://generativelanguage.googleapis.com",
     },
-    "ollama": {
-      "api_url": "http://localhost:11434",
-    },
     "openai": {
       "api_url": "https://api.openai.com/v1",
     },
@@ -2311,20 +2308,8 @@
     "opencode": {
       "api_url": "https://opencode.ai/zen",
     },
-    "open_router": {
-      "api_url": "https://openrouter.ai/api/v1",
-    },
-    "lmstudio": {
-      "api_url": "http://localhost:1234/api/v0",
-    },
     "deepseek": {
       "api_url": "https://api.deepseek.com/v1",
-    },
-    "mistral": {
-      "api_url": "https://api.mistral.ai/v1",
-    },
-    "vercel": {
-      "api_url": "https://api.v0.dev/v1",
     },
     "vercel_ai_gateway": {
       "api_url": "https://ai-gateway.vercel.sh/v1",
