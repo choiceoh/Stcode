@@ -1808,6 +1808,22 @@ impl AgentPanel {
                 panel
             })?;
 
+            let should_auto_start = panel
+                .read_with(cx, |panel, cx| {
+                    AppLaunchMode::is_stcode(cx)
+                        && panel.stcode_smart_run.is_none()
+                        && panel.active_agent_thread(cx).is_none()
+                });
+            if should_auto_start {
+                workspace.update_in(cx, |workspace, window, cx| {
+                    if let Some(panel) = workspace.panel::<AgentPanel>(cx) {
+                        panel.update(cx, |panel, cx| {
+                            panel.start_stcode_smart_panel(&StcodeSmartPanel, window, cx);
+                        });
+                    }
+                });
+            }
+
             Ok(panel)
         })
     }
@@ -3333,7 +3349,7 @@ impl AgentPanel {
             )
         });
 
-        cx.observe(&conversation_view, |this, server_view, cx| {
+        cx.observe_in(&conversation_view, window, |this, server_view, window, cx| {
             let is_active = this
                 .active_conversation_view()
                 .is_some_and(|active| active.entity_id() == server_view.entity_id());
@@ -3343,6 +3359,67 @@ impl AgentPanel {
             } else {
                 cx.emit(AgentPanelEvent::RetainedThreadChanged);
             }
+
+            let smart_run = this.stcode_smart_run.clone();
+            let is_smart_run_session = smart_run.as_ref().is_some_and(|run| {
+                server_view.read(cx).root_session_id.as_ref()
+                    .map(|sid| sid.0.to_string())
+                    .is_some_and(|session_id| run.session_id.as_ref() == Some(&session_id))
+            });
+            if is_smart_run_session {
+                let thread = this.active_agent_thread(cx);
+                let thread_status = thread.map(|thread| {
+                    StcodeSmartRunThreadStatus {
+                        has_entries: !thread.read(cx).entries().is_empty(),
+                        is_waiting_for_confirmation: thread.read(cx).is_waiting_for_confirmation(),
+                        is_generating: thread.read(cx).status() == ThreadStatus::Generating,
+                        has_in_progress_tool_calls: thread.read(cx).has_in_progress_tool_calls(),
+                        had_error: thread.read(cx).had_error(),
+                    }
+                });
+                let phase = stcode_smart_run_phase(thread_status);
+                if phase == StcodeSmartRunPhase::Complete {
+                    let run_kind = smart_run.as_ref().map(|run| run.kind);
+                    let should_chain = run_kind.is_some_and(|kind| {
+                        matches!(kind, StcodeSmartRunKind::Start | StcodeSmartRunKind::Panel)
+                    });
+                    if should_chain {
+                        this.stcode_smart_run = None;
+                        let context = StcodeSmartPromptContext::from_project(&this.project, cx);
+                        let context_summary = stcode_smart_run_context_summary(context.as_ref());
+                        let blocks = build_stcode_smart_panel_prompt(context.as_ref());
+                        if !blocks.is_empty() {
+                            let thread = this.create_agent_thread(
+                                this.selected_agent(cx),
+                                None,
+                                None,
+                                Some(StcodeSmartRunKind::Panel.title().into()),
+                                Some(AgentInitialContent::ContentBlock {
+                                    blocks,
+                                    auto_submit: true,
+                                }),
+                                StcodeSmartRunKind::Panel.source(),
+                                window,
+                                cx,
+                            );
+                            let session_id = thread
+                                .conversation_view
+                                .read(cx)
+                                .root_session_id
+                                .as_ref()
+                                .map(|session_id| session_id.0.to_string());
+                            this.stcode_smart_run = Some(StcodeSmartRunState {
+                                kind: StcodeSmartRunKind::Panel,
+                                session_id,
+                                context_summary,
+                            });
+                            this.set_base_view(thread.into(), true, window, cx);
+                            this.serialize(cx);
+                        }
+                    }
+                }
+            }
+
             cx.notify();
         })
         .detach();
