@@ -24,6 +24,7 @@ pub use crate::agent_profile::*;
 pub const SUMMARIZE_THREAD_PROMPT: &str = include_str!("prompts/summarize_thread_prompt.txt");
 pub const SUMMARIZE_THREAD_DETAILED_PROMPT: &str =
     include_str!("prompts/summarize_thread_detailed_prompt.txt");
+pub const AUTO_COMPACT_PROMPT: &str = include_str!("prompts/auto_compact_prompt.txt");
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct PanelLayout {

@@ -1,0 +1,9 @@
+You are condensing the older portion of a conversation between a user and an AI agent so that the conversation can continue without exceeding the context window. Read the messages above and produce a compact summary that preserves:
+
+- The user's goals, requests, and any constraints they stated
+- Key decisions made and the rationale behind them
+- Files, functions, and identifiers that were discussed, read, or modified
+- Errors encountered and how they were resolved
+- Any pending questions, follow-ups, or unfinished work
+
+Write the summary as a third-person narrative under 1000 words. Do not include greetings, sign-offs, headings, or meta-commentary about the summarization itself. Output only the summary text.
