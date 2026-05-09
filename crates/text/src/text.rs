@@ -3299,13 +3299,11 @@ impl ToOffset for Point {
 impl ToOffset for usize {
     #[track_caller]
     fn to_offset(&self, snapshot: &BufferSnapshot) -> usize {
-        if !snapshot
-            .as_rope()
-            .assert_char_boundary::<{ cfg!(debug_assertions) }>(*self)
-        {
-            snapshot.as_rope().floor_char_boundary(*self)
-        } else {
+        // IME / platform input handlers may pass byte offsets inside a multi-byte char; clip silently rather than panic.
+        if snapshot.as_rope().is_char_boundary(*self) {
             *self
+        } else {
+            snapshot.as_rope().floor_char_boundary(*self)
         }
     }
 }
@@ -3703,5 +3701,28 @@ pub mod debug {
                 .map(|range| range.start.to_offset(snapshot)..range.end.to_offset(snapshot))
                 .collect()
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_anchor_at_non_char_boundary_in_korean_text() {
+        // "aㅣb": 'ㅣ' spans bytes 1..4, so offsets 2 and 3 land inside it. Pre-fix this panicked.
+        let buffer = Buffer::new(ReplicaId::LOCAL, BufferId::new(1).unwrap(), "aㅣb");
+        let snapshot = buffer.snapshot();
+
+        let left_inside = snapshot.anchor_at(2_usize, Bias::Left);
+        let right_inside = snapshot.anchor_at(2_usize, Bias::Right);
+        assert_eq!(left_inside.to_offset(snapshot), 1);
+        assert_eq!(right_inside.to_offset(snapshot), 1);
+
+        let deeper_inside = snapshot.anchor_at(3_usize, Bias::Left);
+        assert_eq!(deeper_inside.to_offset(snapshot), 1);
+
+        let on_boundary = snapshot.anchor_at(4_usize, Bias::Left);
+        assert_eq!(on_boundary.to_offset(snapshot), 4);
     }
 }
