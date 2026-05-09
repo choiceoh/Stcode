@@ -12,7 +12,7 @@ use feature_flags::AcpBetaFeatureFlag;
 
 use crate::message_editor::SharedSessionCapabilities;
 
-use gpui::List;
+use gpui::{Animation, AnimationExt, List, ease_out_quint};
 use heapless::Vec as ArrayVec;
 use language_model::{LanguageModelEffortLevel, Speed};
 use settings::{SidebarSide, update_settings_file};
@@ -4615,28 +4615,41 @@ impl Render for TokenUsageTooltip {
 impl ThreadView {
     fn render_entries(&mut self, cx: &mut Context<Self>) -> List {
         let max_content_width = AgentSettings::get_global(cx).max_content_width;
-        let centered_container = move |content: AnyElement| {
-            h_flex().w_full().justify_center().child(
-                div()
-                    .when_some(max_content_width, |this, max_w| this.max_w(max_w))
-                    .w_full()
-                    .child(content),
-            )
+        let centered_container = move |content: AnyElement, index: usize, is_recent: bool| {
+            h_flex()
+                .id(("entry-wrapper", index))
+                .w_full()
+                .justify_center()
+                .child(
+                    div()
+                        .when_some(max_content_width, |this, max_w| this.max_w(max_w))
+                        .w_full()
+                        .child(content),
+                )
+                .when(is_recent, |this| {
+                    this.with_animation(
+                        ("entry-fade", index),
+                        Animation::new(std::time::Duration::from_millis(300))
+                            .with_easing(ease_out_quint()),
+                        |this, delta| this.opacity(delta),
+                    )
+                })
         };
 
         list(
             self.list_state.clone(),
             cx.processor(move |this, index: usize, window, cx| {
                 let entries = this.thread.read(cx).entries();
+                let is_recent = index >= entries.len().saturating_sub(3);
                 if let Some(entry) = entries.get(index) {
                     let rendered = this.render_entry(index, entries.len(), entry, window, cx);
-                    centered_container(rendered.into_any_element()).into_any_element()
+                    centered_container(rendered.into_any_element(), index, is_recent).into_any_element()
                 } else if this.generating_indicator_in_list {
                     let confirmation = entries
                         .last()
                         .is_some_and(|entry| Self::is_waiting_for_confirmation(entry));
                     let rendered = this.render_generating(confirmation, cx);
-                    centered_container(rendered.into_any_element()).into_any_element()
+                    centered_container(rendered.into_any_element(), index, is_recent).into_any_element()
                 } else {
                     Empty.into_any()
                 }
