@@ -249,9 +249,21 @@ pub(crate) struct Conversation {
     permission_requests: IndexMap<acp::SessionId, Vec<acp::ToolCallId>>,
     subscriptions: Vec<Subscription>,
     updated_at: Option<Instant>,
+    auto_approve_tools: bool,
 }
 
 impl Conversation {
+    pub(crate) fn new(auto_approve_tools: bool) -> Self {
+        Self {
+            auto_approve_tools,
+            ..Default::default()
+        }
+    }
+
+    pub(crate) fn auto_approve_tools(&self) -> bool {
+        self.auto_approve_tools
+    }
+
     pub fn register_thread(&mut self, thread: Entity<AcpThread>, cx: &mut Context<Self>) {
         let session_id = thread.read(cx).session_id().clone();
         let subscription = cx.subscribe(&thread, {
@@ -479,6 +491,31 @@ impl ConversationView {
                 .pending_tool_call(&root_session_id, cx)
                 .is_some()
         })
+    }
+
+    fn auto_approve_pending_tool_call(
+        &mut self,
+        session_id: &acp::SessionId,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(connected) = self.as_connected() else {
+            return;
+        };
+        let conversation = connected.conversation.clone();
+        conversation.update(cx, |conversation, cx| {
+            conversation.authorize_pending_tool_call(
+                session_id,
+                acp::PermissionOptionKind::AllowAlways,
+                cx,
+            );
+            if conversation.pending_tool_call(session_id, cx).is_some() {
+                conversation.authorize_pending_tool_call(
+                    session_id,
+                    acp::PermissionOptionKind::AllowOnce,
+                    cx,
+                );
+            }
+        });
     }
 
     pub(crate) fn root_thread(&self, cx: &App) -> Option<Entity<AcpThread>> {
@@ -887,8 +924,9 @@ impl ConversationView {
                     Ok(thread) => {
                         let root_session_id = thread.read(cx).session_id().clone();
 
+                        let is_smart_run = source.starts_with("stcode_smart_");
                         let conversation = cx.new(|cx| {
-                            let mut conversation = Conversation::default();
+                            let mut conversation = Conversation::new(is_smart_run);
                             conversation.register_thread(thread.clone(), cx);
                             conversation
                         });
@@ -1410,7 +1448,16 @@ impl ConversationView {
                 self.load_subagent_session(subagent_session_id.clone(), session_id, window, cx)
             }
             AcpThreadEvent::ToolAuthorizationRequested(_) => {
-                self.notify_with_sound("Waiting for tool confirmation", IconName::Info, window, cx);
+                let should_auto_approve = self
+                    .as_connected()
+                    .is_some_and(|connected| {
+                        connected.conversation.read(cx).auto_approve_tools()
+                    });
+                if should_auto_approve {
+                    self.auto_approve_pending_tool_call(&session_id, cx);
+                } else {
+                    self.notify_with_sound("Waiting for tool confirmation", IconName::Info, window, cx);
+                }
             }
             AcpThreadEvent::ToolAuthorizationReceived(_) => {}
             AcpThreadEvent::Retry(retry) => {
