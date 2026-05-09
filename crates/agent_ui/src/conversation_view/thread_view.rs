@@ -6057,7 +6057,7 @@ impl ThreadView {
     ) -> Div {
         v_flex()
             .group(group.clone())
-            .p_1p5()
+            .p_1()
             .bg(self.tool_card_header_bg(cx))
             .when(is_preview, |this| {
                 this.pt_1().child(
@@ -6079,7 +6079,7 @@ impl ThreadView {
                     line.to_string().into()
                 };
 
-                Label::new(text).buffer_font(cx).size(LabelSize::Small)
+                Label::new(text).buffer_font(cx).size(LabelSize::XSmall)
             }))
             .child(
                 div().absolute().top_1().right_1().child(
@@ -6170,9 +6170,9 @@ impl ThreadView {
 
         let header = h_flex()
             .id(header_id)
-            .pt_1()
-            .pl_1p5()
-            .pr_1()
+            .pt_0p5()
+            .pl_1()
+            .pr_0p5()
             .flex_none()
             .gap_1()
             .justify_between()
@@ -6200,7 +6200,6 @@ impl ThreadView {
                 )
                 .opened_icon(IconName::ChevronUp)
                 .closed_icon(IconName::ChevronDown)
-                .visible_on_hover(&header_group)
                 .on_click(cx.listener({
                     let id = tool_call.id.clone();
                     move |this, _event, _window, cx| {
@@ -6320,7 +6319,7 @@ impl ThreadView {
 
         v_flex()
             .when(!is_subagent, |this| {
-                this.my_1p5()
+                this.my_1()
                     .mx_5()
                     .border_1()
                     .when(tool_failed || command_failed, |card| card.border_dashed())
@@ -6334,7 +6333,7 @@ impl ThreadView {
                     .bg(header_bg)
                     .text_xs()
                     .child(header)
-                    .child(command_element),
+                    .when(is_expanded, |this| this.child(command_element)),
             )
             .when(is_expanded && terminal_view.is_some(), |this| {
                 this.child(
