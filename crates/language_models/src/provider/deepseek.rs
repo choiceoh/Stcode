@@ -155,7 +155,7 @@ impl LanguageModelProvider for DeepSeekLanguageModelProvider {
     fn provided_models(&self, cx: &App) -> Vec<Arc<dyn LanguageModel>> {
         let mut models = BTreeMap::default();
 
-        for model in [deepseek::Model::Chat, deepseek::Model::Reasoner] {
+        for model in [deepseek::Model::V4Flash, deepseek::Model::V4Pro] {
             models.insert(model.id().to_string(), model);
         }
 
