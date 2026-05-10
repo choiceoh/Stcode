@@ -227,6 +227,10 @@ fn stcode_app_menu(app_name: &'static str) -> Menu {
         items: vec![
             MenuItem::action(format!("About {app_name}"), zed_actions::About),
             MenuItem::action("Check for Updates", auto_update::Check),
+            MenuItem::action(
+                "Build & Install Local Stcode…",
+                auto_update::local_build::RebuildAndRestart,
+            ),
             MenuItem::separator(),
             MenuItem::submenu(Menu::new("Settings").items([
                 MenuItem::action("Open Settings", zed_actions::OpenSettings),

@@ -1,3 +1,5 @@
+pub mod local_build;
+
 use anyhow::{Context as _, Result};
 use client::Client;
 use db::kvp::KeyValueStore;
