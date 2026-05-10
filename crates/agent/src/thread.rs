@@ -1804,12 +1804,12 @@ impl Thread {
         if boundary > self.messages.len() {
             return;
         }
-        let drained: Vec<Message> = self.messages.drain(..boundary).collect();
-        for message in drained {
-            if let Message::User(user_message) = message {
-                self.request_token_usage.remove(&user_message.id);
-            }
-        }
+        self.messages.drain(..boundary);
+        // Every recorded usage entry was measured against the pre-compaction
+        // context and no longer reflects what the next request will consume.
+        // Clear them all so the UI falls back to "unknown" until the next turn
+        // populates fresh numbers.
+        self.request_token_usage.clear();
         // Defang any close tag the model may have echoed in the summary so it
         // cannot terminate our wrapper early.
         let safe_summary = summary.replace("</thread-summary>", "<\\/thread-summary>");
@@ -1821,6 +1821,7 @@ impl Thread {
         };
         self.messages.insert(0, Message::User(summary_message));
         cx.emit(ThreadAutoCompacted);
+        cx.emit(TokenUsageUpdated(self.latest_token_usage()));
         cx.notify();
     }
 
@@ -4706,6 +4707,54 @@ mod tests {
     }
 
     #[gpui::test]
+    async fn test_apply_compaction_summary_clears_stale_token_usage(cx: &mut TestAppContext) {
+        let (thread, _event_stream) = setup_thread_for_test(cx).await;
+
+        let model: Arc<dyn LanguageModel> = Arc::new(FakeLanguageModel::with_id_and_thinking(
+            "fake", "main", "Main", false,
+        ));
+
+        cx.update(|cx| {
+            thread.update(cx, |thread, cx| {
+                thread.set_model(model.clone(), cx);
+                for i in 0..7 {
+                    push_user_turn(thread, &format!("u{i}"));
+                }
+                // Stamp every user turn with a high pre-compaction usage so we can
+                // confirm none of these stale entries survive.
+                let high_usage = TokenUsage {
+                    input_tokens: model.max_token_count(),
+                    ..Default::default()
+                };
+                let user_ids: Vec<UserMessageId> = thread
+                    .messages
+                    .iter()
+                    .filter_map(|m| match m {
+                        Message::User(u) => Some(u.id.clone()),
+                        _ => None,
+                    })
+                    .collect();
+                for id in &user_ids {
+                    thread.request_token_usage.insert(id.clone(), high_usage);
+                }
+                let boundary = thread.auto_compaction_boundary(5).unwrap();
+                thread.apply_compaction_summary(boundary, "summary".into(), cx);
+
+                assert!(
+                    thread.latest_token_usage().is_none(),
+                    "post-compaction usage display must be cleared until next turn refreshes it"
+                );
+                for id in &user_ids {
+                    assert!(
+                        !thread.request_token_usage.contains_key(id),
+                        "no pre-compaction usage entry may survive"
+                    );
+                }
+            });
+        });
+    }
+
+    #[gpui::test]
     async fn test_maybe_trigger_auto_compaction_no_op_without_summary_model(
         cx: &mut TestAppContext,
     ) {
@@ -4729,6 +4778,119 @@ mod tests {
                 );
             });
         });
+    }
+
+    #[gpui::test]
+    async fn test_maybe_trigger_auto_compaction_fires_when_threshold_exceeded(
+        cx: &mut TestAppContext,
+    ) {
+        let (thread, _event_stream) = setup_thread_for_test(cx).await;
+
+        let model: Arc<dyn LanguageModel> = Arc::new(FakeLanguageModel::with_id_and_thinking(
+            "fake", "main", "Main", false,
+        ));
+        let summary_model: Arc<dyn LanguageModel> =
+            Arc::new(FakeLanguageModel::with_id_and_thinking(
+                "fake", "summary", "Summary", false,
+            ));
+
+        cx.update(|cx| {
+            thread.update(cx, |thread, cx| {
+                thread.set_model(model.clone(), cx);
+                thread.set_summarization_model(Some(summary_model), cx);
+                for i in 0..7 {
+                    push_user_turn(thread, &format!("u{i}"));
+                }
+                let last_id = last_user_message_id(thread).expect("last user message");
+                let used = (model.max_token_count() as f32 * 0.85) as u64;
+                thread.request_token_usage.insert(
+                    last_id,
+                    TokenUsage {
+                        input_tokens: used,
+                        ..Default::default()
+                    },
+                );
+                thread.maybe_trigger_auto_compaction(cx);
+                assert!(
+                    thread.pending_auto_compaction.is_some(),
+                    "compaction must fire when usage > threshold and all preconditions hold"
+                );
+            });
+        });
+    }
+
+    #[gpui::test]
+    async fn test_maybe_trigger_auto_compaction_skips_below_threshold(cx: &mut TestAppContext) {
+        let (thread, _event_stream) = setup_thread_for_test(cx).await;
+
+        let model: Arc<dyn LanguageModel> = Arc::new(FakeLanguageModel::with_id_and_thinking(
+            "fake", "main", "Main", false,
+        ));
+        let summary_model: Arc<dyn LanguageModel> =
+            Arc::new(FakeLanguageModel::with_id_and_thinking(
+                "fake", "summary", "Summary", false,
+            ));
+
+        cx.update(|cx| {
+            thread.update(cx, |thread, cx| {
+                thread.set_model(model.clone(), cx);
+                thread.set_summarization_model(Some(summary_model), cx);
+                for i in 0..7 {
+                    push_user_turn(thread, &format!("u{i}"));
+                }
+                let last_id = last_user_message_id(thread).expect("last user message");
+                let used = (model.max_token_count() as f32 * 0.50) as u64;
+                thread.request_token_usage.insert(
+                    last_id,
+                    TokenUsage {
+                        input_tokens: used,
+                        ..Default::default()
+                    },
+                );
+                thread.maybe_trigger_auto_compaction(cx);
+                assert!(
+                    thread.pending_auto_compaction.is_none(),
+                    "compaction must not fire below the auto-compact threshold"
+                );
+            });
+        });
+    }
+
+    #[gpui::test]
+    async fn test_maybe_trigger_auto_compaction_skips_without_token_usage(
+        cx: &mut TestAppContext,
+    ) {
+        let (thread, _event_stream) = setup_thread_for_test(cx).await;
+
+        let model: Arc<dyn LanguageModel> = Arc::new(FakeLanguageModel::with_id_and_thinking(
+            "fake", "main", "Main", false,
+        ));
+        let summary_model: Arc<dyn LanguageModel> =
+            Arc::new(FakeLanguageModel::with_id_and_thinking(
+                "fake", "summary", "Summary", false,
+            ));
+
+        cx.update(|cx| {
+            thread.update(cx, |thread, cx| {
+                thread.set_model(model, cx);
+                thread.set_summarization_model(Some(summary_model), cx);
+                for i in 0..7 {
+                    push_user_turn(thread, &format!("u{i}"));
+                }
+                thread.maybe_trigger_auto_compaction(cx);
+                assert!(
+                    thread.pending_auto_compaction.is_none(),
+                    "compaction must not fire when no usage event has been recorded yet"
+                );
+            });
+        });
+    }
+
+    fn last_user_message_id(thread: &Thread) -> Option<UserMessageId> {
+        thread.messages.iter().rev().find_map(|m| match m {
+            Message::User(u) => Some(u.id.clone()),
+            _ => None,
+        })
     }
 
     fn push_user_turn(thread: &mut Thread, text: &str) {
