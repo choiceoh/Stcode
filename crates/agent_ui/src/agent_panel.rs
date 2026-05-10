@@ -4956,8 +4956,7 @@ impl Render for AgentPanel {
                                 div()
                                     .id("agent-configuration-overlay")
                                     .size_full()
-                                    .children(configuration.cloned())
-                                    .animate_in_from_right(true),
+                                    .children(configuration.cloned()),
                             )
                         }
                     })
