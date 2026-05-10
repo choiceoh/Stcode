@@ -4626,13 +4626,18 @@ impl ThreadView {
                         .w_full()
                         .child(content),
                 )
-                .when(is_recent, |this| {
-                    this.with_animation(
-                        ("entry-fade", index),
-                        Animation::new(std::time::Duration::from_millis(300))
-                            .with_easing(ease_out_quint()),
-                        |this, delta| this.opacity(delta),
-                    )
+                .map(|this| {
+                    if is_recent {
+                        this.with_animation(
+                            ("entry-fade", index),
+                            Animation::new(std::time::Duration::from_millis(300))
+                                .with_easing(ease_out_quint()),
+                            |this, delta| this.opacity(delta),
+                        )
+                        .into_any_element()
+                    } else {
+                        this.into_any_element()
+                    }
                 })
         };
 

@@ -4738,21 +4738,6 @@ impl AgentPanel {
         )
     }
 
-    fn render_stcode_activity_side_panel(&self, cx: &Context<Self>) -> Option<AnyElement> {
-        if !AppLaunchMode::is_stcode(cx) {
-            return None;
-        }
-
-        Some(
-            StcodeActivityTimeline::side_panel(
-                self.active_agent_thread(cx),
-                self.project.clone(),
-                self.stcode_smart_run_snapshot(cx),
-            )
-            .into_any_element(),
-        )
-    }
-
     pub(crate) fn stcode_smart_run_snapshot(&self, cx: &App) -> Option<StcodeSmartRunSnapshot> {
         let run = self.stcode_smart_run.as_ref()?;
         Some(run.snapshot(self.stcode_smart_run_thread_status(run, cx)))
@@ -4977,8 +4962,7 @@ impl Render for AgentPanel {
                         }
                     })
                     .children(self.render_trial_end_upsell(window, cx)),
-            )
-            .children(self.render_stcode_activity_side_panel(cx));
+            );
 
         match self.visible_font_size() {
             WhichFontSize::AgentFont => {
