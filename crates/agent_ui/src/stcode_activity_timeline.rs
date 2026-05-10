@@ -12,8 +12,12 @@ use project::{
     Project,
     git_store::{Repository, StatusEntry},
 };
+use std::path::{Path, PathBuf};
 use ui::{Icon, IconName, Label, LabelSize, prelude::*};
-use util::{paths::PathStyle, truncate_and_trailoff};
+use util::{
+    paths::{PathStyle, home_dir},
+    truncate_and_trailoff,
+};
 use workspace::{ItemHandle, StatusItemView, Workspace};
 use zed_actions::{
     agent::ReviewBranchDiff,
@@ -54,6 +58,7 @@ struct ActivityTimelineSnapshots {
     has_thread_entries: bool,
     activity: ActivitySnapshot,
     smart_run: Option<StcodeSmartRunSnapshot>,
+    smart_housekeeping: Option<SmartHousekeepingSnapshot>,
     smart_start: Option<SmartStartSnapshot>,
     smart_panel: Option<SmartPanelSnapshot>,
     smart_todo: Option<SmartTodoSnapshot>,
@@ -78,6 +83,7 @@ impl ActivityTimelineSnapshots {
             has_thread_entries,
             activity,
             smart_run,
+            smart_housekeeping: SmartHousekeepingSnapshot::from_project(project, cx),
             smart_start: (!has_thread_entries)
                 .then(|| SmartStartSnapshot::from_project(project, cx))
                 .flatten(),
@@ -93,6 +99,7 @@ impl ActivityTimelineSnapshots {
             self.has_thread_entries,
             &self.activity,
             self.smart_run.as_ref(),
+            self.smart_housekeeping.as_ref(),
             self.smart_start.as_ref(),
             self.smart_panel.as_ref(),
             self.smart_todo.as_ref(),
@@ -323,6 +330,7 @@ impl SmartWorklineSnapshot {
         has_thread_entries: bool,
         activity: &ActivitySnapshot,
         smart_run: Option<&StcodeSmartRunSnapshot>,
+        smart_housekeeping: Option<&SmartHousekeepingSnapshot>,
         smart_start: Option<&SmartStartSnapshot>,
         smart_panel: Option<&SmartPanelSnapshot>,
         smart_todo: Option<&SmartTodoSnapshot>,
@@ -333,6 +341,7 @@ impl SmartWorklineSnapshot {
             has_thread_entries,
             activity,
             smart_run,
+            smart_housekeeping,
             smart_start,
             smart_panel,
             smart_todo,
@@ -340,6 +349,7 @@ impl SmartWorklineSnapshot {
             smart_merge,
         );
         let stages = [
+            smart_workline_housekeeping_stage(smart_housekeeping, active_stage),
             smart_workline_start_stage(smart_start, active_stage),
             smart_workline_plan_stage(smart_todo, has_thread_entries, active_stage),
             smart_workline_parallel_stage(smart_parallel, active_stage),
@@ -375,6 +385,7 @@ struct SmartWorklineStage {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum SmartWorklineStageKind {
+    Housekeeping,
     Start,
     Plan,
     Parallel,
@@ -386,6 +397,7 @@ enum SmartWorklineStageKind {
 impl SmartWorklineStageKind {
     fn label(self) -> &'static str {
         match self {
+            Self::Housekeeping => "환경 점검",
             Self::Start => "시작",
             Self::Plan => "계획",
             Self::Parallel => "병렬",
@@ -481,12 +493,17 @@ fn smart_workline_active_stage(
     has_thread_entries: bool,
     activity: &ActivitySnapshot,
     smart_run: Option<&StcodeSmartRunSnapshot>,
+    smart_housekeeping: Option<&SmartHousekeepingSnapshot>,
     smart_start: Option<&SmartStartSnapshot>,
     smart_panel: Option<&SmartPanelSnapshot>,
     smart_todo: Option<&SmartTodoSnapshot>,
     smart_parallel: Option<&SmartParallelSnapshot>,
     smart_merge: Option<&SmartMergeSnapshot>,
 ) -> Option<SmartWorklineStageKind> {
+    if smart_housekeeping.is_some_and(|snapshot| !snapshot.violations.is_empty()) {
+        return Some(SmartWorklineStageKind::Housekeeping);
+    }
+
     if smart_start.is_some() {
         return Some(SmartWorklineStageKind::Start);
     }
@@ -534,6 +551,31 @@ fn smart_workline_stage_from_run(snapshot: &StcodeSmartRunSnapshot) -> SmartWork
     } else {
         SmartWorklineStageKind::Execute
     }
+}
+
+fn smart_workline_housekeeping_stage(
+    smart_housekeeping: Option<&SmartHousekeepingSnapshot>,
+    active_stage: Option<SmartWorklineStageKind>,
+) -> SmartWorklineStage {
+    if let Some(snapshot) = smart_housekeeping {
+        return smart_workline_stage(
+            SmartWorklineStageKind::Housekeeping,
+            "위반",
+            &snapshot.detail,
+            snapshot.icon,
+            snapshot.tone,
+            active_stage,
+        );
+    }
+
+    smart_workline_stage(
+        SmartWorklineStageKind::Housekeeping,
+        "준비",
+        "환경이 깨끗합니다.",
+        IconName::Check,
+        ActivityTone::Done,
+        active_stage,
+    )
 }
 
 fn smart_workline_start_stage(
@@ -747,6 +789,152 @@ fn stcode_smart_run_phase_tone(phase: StcodeSmartRunPhase) -> ActivityTone {
         StcodeSmartRunPhase::Active => ActivityTone::Running,
         StcodeSmartRunPhase::Complete => ActivityTone::Done,
         StcodeSmartRunPhase::Blocked => ActivityTone::Failed,
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct SmartHousekeepingSnapshot {
+    violations: Vec<HookViolation>,
+    detail: String,
+    icon: IconName,
+    tone: ActivityTone,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct HookViolation {
+    source: HookSettingsSource,
+    kind: HookViolationKind,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum HookSettingsSource {
+    User,
+    Project,
+    ProjectLocal,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum HookViolationKind {
+    PostCommitPullOrRebase,
+    PreCommitAgentEdit,
+}
+
+impl HookViolationKind {
+    fn short_label(self) -> &'static str {
+        match self {
+            Self::PostCommitPullOrRebase => "post-commit pull/rebase",
+            Self::PreCommitAgentEdit => "pre-commit agent edit",
+        }
+    }
+}
+
+impl SmartHousekeepingSnapshot {
+    fn from_project(project: &Entity<Project>, cx: &App) -> Option<Self> {
+        let mut violations = Vec::new();
+
+        let user_settings = home_dir().join(".claude").join("settings.json");
+        violations.extend(scan_settings_file(&user_settings, HookSettingsSource::User));
+
+        for worktree_root in project_worktree_roots(project, cx) {
+            violations.extend(scan_settings_file(
+                &worktree_root.join(".claude").join("settings.json"),
+                HookSettingsSource::Project,
+            ));
+            violations.extend(scan_settings_file(
+                &worktree_root.join(".claude").join("settings.local.json"),
+                HookSettingsSource::ProjectLocal,
+            ));
+        }
+
+        if violations.is_empty() {
+            return None;
+        }
+
+        Some(Self {
+            detail: housekeeping_detail(&violations),
+            icon: IconName::Warning,
+            tone: ActivityTone::Failed,
+            violations,
+        })
+    }
+}
+
+fn project_worktree_roots(project: &Entity<Project>, cx: &App) -> Vec<PathBuf> {
+    project
+        .read(cx)
+        .visible_worktrees(cx)
+        .map(|worktree| worktree.read(cx).abs_path().to_path_buf())
+        .collect()
+}
+
+fn housekeeping_detail(violations: &[HookViolation]) -> String {
+    if violations.len() == 1 {
+        format!("{}가 격리를 깨뜨림", violations[0].kind.short_label())
+    } else {
+        format!("{}개 hook이 격리를 깨뜨림", violations.len())
+    }
+}
+
+fn scan_settings_file(path: &Path, source: HookSettingsSource) -> Vec<HookViolation> {
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return Vec::new();
+    };
+    let Ok(value) = serde_json_lenient::from_str::<serde_json::Value>(&text) else {
+        return Vec::new();
+    };
+    detect_hook_violations(&value, source)
+}
+
+fn detect_hook_violations(
+    settings: &serde_json::Value,
+    source: HookSettingsSource,
+) -> Vec<HookViolation> {
+    let mut out = Vec::new();
+    let Some(hooks) = settings.get("hooks").and_then(|v| v.as_object()) else {
+        return out;
+    };
+    for (event_name, event_value) in hooks {
+        let Some(matchers) = event_value.as_array() else {
+            continue;
+        };
+        for matcher in matchers {
+            let Some(inner) = matcher.get("hooks").and_then(|v| v.as_array()) else {
+                continue;
+            };
+            for hook in inner {
+                if let Some(kind) = classify_hook(event_name, hook) {
+                    out.push(HookViolation { source, kind });
+                }
+            }
+        }
+    }
+    out
+}
+
+fn classify_hook(event_name: &str, hook: &serde_json::Value) -> Option<HookViolationKind> {
+    let if_clause = hook.get("if").and_then(|v| v.as_str()).unwrap_or("");
+    if !if_clause.contains("git commit") {
+        return None;
+    }
+
+    match event_name {
+        "PostToolUse" => {
+            let command = hook.get("command").and_then(|v| v.as_str()).unwrap_or("");
+            if command.contains("git pull") || command.contains("git rebase") {
+                Some(HookViolationKind::PostCommitPullOrRebase)
+            } else {
+                None
+            }
+        }
+        "PreToolUse" => {
+            let hook_type = hook.get("type").and_then(|v| v.as_str()).unwrap_or("");
+            if hook_type == "agent" {
+                Some(HookViolationKind::PreCommitAgentEdit)
+            } else {
+                None
+            }
+        }
+        _ => None,
     }
 }
 
@@ -2918,5 +3106,132 @@ mod tests {
             status,
             diff_stat: Some(git::status::DiffStat { added, deleted }),
         }
+    }
+
+    fn parse_settings(text: &str) -> serde_json::Value {
+        serde_json_lenient::from_str(text).expect("settings fixture should parse")
+    }
+
+    #[test]
+    fn detect_post_commit_pull_or_rebase_violation() {
+        let settings = parse_settings(
+            r#"{
+              "hooks": {
+                "PostToolUse": [
+                  {
+                    "matcher": "Bash",
+                    "hooks": [
+                      {
+                        "type": "command",
+                        "if": "Bash(git commit*)",
+                        "command": "git pull --rebase 2>&1 || true"
+                      }
+                    ]
+                  }
+                ]
+              }
+            }"#,
+        );
+
+        let violations = detect_hook_violations(&settings, HookSettingsSource::User);
+
+        assert_eq!(violations.len(), 1);
+        assert_eq!(violations[0].kind, HookViolationKind::PostCommitPullOrRebase);
+        assert_eq!(violations[0].source, HookSettingsSource::User);
+    }
+
+    #[test]
+    fn detect_pre_commit_agent_edit_violation() {
+        let settings = parse_settings(
+            r#"{
+              "hooks": {
+                "PreToolUse": [
+                  {
+                    "matcher": "Bash",
+                    "hooks": [
+                      {
+                        "type": "agent",
+                        "if": "Bash(git commit*)",
+                        "prompt": "Review staged changes and edit files."
+                      }
+                    ]
+                  }
+                ]
+              }
+            }"#,
+        );
+
+        let violations = detect_hook_violations(&settings, HookSettingsSource::Project);
+
+        assert_eq!(violations.len(), 1);
+        assert_eq!(violations[0].kind, HookViolationKind::PreCommitAgentEdit);
+        assert_eq!(violations[0].source, HookSettingsSource::Project);
+    }
+
+    #[test]
+    fn ignore_hooks_unrelated_to_git_commit() {
+        let settings = parse_settings(
+            r#"{
+              "hooks": {
+                "PostToolUse": [
+                  {
+                    "matcher": "Bash",
+                    "hooks": [
+                      {
+                        "type": "command",
+                        "command": "echo hello"
+                      }
+                    ]
+                  }
+                ],
+                "PreToolUse": [
+                  {
+                    "matcher": "Glob|Grep",
+                    "hooks": [
+                      { "type": "command", "command": "true" }
+                    ]
+                  }
+                ]
+              }
+            }"#,
+        );
+
+        let violations = detect_hook_violations(&settings, HookSettingsSource::User);
+
+        assert!(violations.is_empty());
+    }
+
+    #[test]
+    fn detail_singular_uses_violation_label() {
+        let violations = vec![HookViolation {
+            source: HookSettingsSource::User,
+            kind: HookViolationKind::PostCommitPullOrRebase,
+        }];
+        assert_eq!(
+            housekeeping_detail(&violations),
+            "post-commit pull/rebase가 격리를 깨뜨림"
+        );
+    }
+
+    #[test]
+    fn detail_plural_uses_count() {
+        let violations = vec![
+            HookViolation {
+                source: HookSettingsSource::User,
+                kind: HookViolationKind::PostCommitPullOrRebase,
+            },
+            HookViolation {
+                source: HookSettingsSource::Project,
+                kind: HookViolationKind::PreCommitAgentEdit,
+            },
+        ];
+        assert_eq!(housekeeping_detail(&violations), "2개 hook이 격리를 깨뜨림");
+    }
+
+    #[test]
+    fn malformed_settings_yields_no_violations() {
+        let settings = parse_settings(r#"{ "hooks": "not an object" }"#);
+        let violations = detect_hook_violations(&settings, HookSettingsSource::User);
+        assert!(violations.is_empty());
     }
 }
