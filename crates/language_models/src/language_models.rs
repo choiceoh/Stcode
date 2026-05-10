@@ -18,6 +18,7 @@ pub use crate::extension::init_proxy as init_extension_proxy;
 use crate::provider::cloud::CloudLanguageModelProvider;
 use crate::provider::copilot_chat::CopilotChatLanguageModelProvider;
 use crate::provider::deepseek::DeepSeekLanguageModelProvider;
+use crate::provider::kimi::KimiLanguageModelProvider;
 use crate::provider::open_ai_compatible::OpenAiCompatibleLanguageModelProvider;
 pub use crate::settings::*;
 
@@ -224,6 +225,14 @@ fn register_language_model_providers(
     );
     registry.register_provider(
         Arc::new(DeepSeekLanguageModelProvider::new(
+            client.http_client(),
+            credentials_provider.clone(),
+            cx,
+        )),
+        cx,
+    );
+    registry.register_provider(
+        Arc::new(KimiLanguageModelProvider::new(
             client.http_client(),
             credentials_provider,
             cx,

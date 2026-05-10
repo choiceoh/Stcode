@@ -10,6 +10,7 @@ use std::sync::Arc;
 #[derive(Default, Clone, Debug, Serialize, Deserialize, PartialEq, JsonSchema, MergeFrom)]
 pub struct AllLanguageModelSettingsContent {
     pub deepseek: Option<DeepSeekSettingsContent>,
+    pub kimi: Option<KimiSettingsContent>,
     pub openai_compatible: Option<HashMap<Arc<str>, OpenAiCompatibleSettingsContent>>,
     #[serde(rename = "zed.dev")]
     pub zed_dot_dev: Option<ZedDotDevSettingsContent>,
@@ -79,6 +80,22 @@ pub struct DeepSeekSettingsContent {
 #[with_fallible_options]
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema, MergeFrom)]
 pub struct DeepSeekAvailableModel {
+    pub name: String,
+    pub display_name: Option<String>,
+    pub max_tokens: u64,
+    pub max_output_tokens: Option<u64>,
+}
+
+#[with_fallible_options]
+#[derive(Default, Clone, Debug, Serialize, Deserialize, PartialEq, JsonSchema, MergeFrom)]
+pub struct KimiSettingsContent {
+    pub api_url: Option<String>,
+    pub available_models: Option<Vec<KimiAvailableModel>>,
+}
+
+#[with_fallible_options]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema, MergeFrom)]
+pub struct KimiAvailableModel {
     pub name: String,
     pub display_name: Option<String>,
     pub max_tokens: u64,
