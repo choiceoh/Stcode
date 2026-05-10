@@ -20,11 +20,11 @@ impl settings::Settings for AllLanguageModelSettings {
     const PRESERVED_KEYS: Option<&'static [&'static str]> = Some(&["version"]);
 
     fn from_settings(content: &settings::SettingsContent) -> Self {
-        let language_models = content.language_models.clone().unwrap();
-        let deepseek = language_models.deepseek.unwrap();
-        let kimi = language_models.kimi.unwrap();
-        let openai_compatible = language_models.openai_compatible.unwrap();
-        let zed_dot_dev = language_models.zed_dot_dev.unwrap();
+        let language_models = content.language_models.clone().unwrap_or_default();
+        let deepseek = language_models.deepseek.unwrap_or_default();
+        let kimi = language_models.kimi.unwrap_or_default();
+        let openai_compatible = language_models.openai_compatible.unwrap_or_default();
+        let zed_dot_dev = language_models.zed_dot_dev.unwrap_or_default();
         Self {
             deepseek: DeepSeekSettings {
                 api_url: deepseek.api_url.unwrap_or_default(),

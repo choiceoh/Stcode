@@ -2287,6 +2287,7 @@
     "deepseek": {
       "api_url": "https://api.deepseek.com/v1",
     },
+    "kimi": {},
     "zed.dev": {},
   },
   "session": {
