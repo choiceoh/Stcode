@@ -19,7 +19,6 @@ use zed_actions::{
     agent::ReviewBranchDiff,
 };
 
-const MAX_TIMELINE_ENTRIES: usize = 2;
 const MAX_ENTRY_LABEL_CHARS: usize = 48;
 const MAX_SMART_PANEL_GOAL_CHARS: usize = 64;
 const MAX_SMART_PANEL_FILES: usize = 2;
@@ -28,15 +27,12 @@ const MAX_SMART_PARALLEL_LANES: usize = 4;
 const MAX_TODO_LABEL_CHARS: usize = 56;
 const MAX_WORKLINE_DETAIL_CHARS: usize = 72;
 const MAX_STATUS_WORKLINE_DETAIL_CHARS: usize = 64;
-const STCODE_ACTIVITY_SIDE_PANEL_WIDTH: Pixels = px(420.);
-const STCODE_ACTIVITY_SIDE_PANEL_MIN_WIDTH: Pixels = px(360.);
 
 #[derive(IntoElement)]
 pub(crate) struct StcodeActivityTimeline {
     thread: Option<Entity<AcpThread>>,
     project: Entity<Project>,
     smart_run: Option<StcodeSmartRunSnapshot>,
-    layout: StcodeActivityLayout,
 }
 
 impl StcodeActivityTimeline {
@@ -49,28 +45,8 @@ impl StcodeActivityTimeline {
             thread,
             project,
             smart_run,
-            layout: StcodeActivityLayout::Summary,
         }
     }
-
-    pub(crate) fn side_panel(
-        thread: Option<Entity<AcpThread>>,
-        project: Entity<Project>,
-        smart_run: Option<StcodeSmartRunSnapshot>,
-    ) -> Self {
-        Self {
-            thread,
-            project,
-            smart_run,
-            layout: StcodeActivityLayout::SidePanel,
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum StcodeActivityLayout {
-    Summary,
-    SidePanel,
 }
 
 #[derive(Clone)]
@@ -94,7 +70,7 @@ impl ActivityTimelineSnapshots {
     ) -> Self {
         let has_thread_entries = thread.is_some_and(|thread| !thread.entries().is_empty());
         let activity = thread
-            .map(|thread| ActivitySnapshot::from_thread(thread, cx))
+            .map(ActivitySnapshot::from_thread)
             .unwrap_or_else(ActivitySnapshot::empty);
         let smart_todo = thread.and_then(|thread| SmartTodoSnapshot::from_thread(thread, cx));
 
@@ -266,10 +242,7 @@ impl RenderOnce for StcodeActivityTimeline {
             cx,
         );
 
-        match self.layout {
-            StcodeActivityLayout::Summary => render_activity_summary(snapshots, cx),
-            StcodeActivityLayout::SidePanel => render_activity_side_panel(snapshots, cx),
-        }
+        render_activity_summary(snapshots, cx)
     }
 }
 
@@ -336,112 +309,13 @@ fn render_activity_summary(snapshots: ActivityTimelineSnapshots, cx: &mut App) -
         .into_any_element()
 }
 
-fn render_activity_side_panel(
-    snapshots: ActivityTimelineSnapshots,
-    cx: &mut App,
-) -> gpui::AnyElement {
-    let workline = snapshots.workline();
-    let activity = snapshots.activity;
-
-    let active_stage = workline.stages.iter().find(|stage| stage.active);
-
-    v_flex()
-        .id("stcode-activity-side-panel")
-        .flex_none()
-        .h_full()
-        .w(STCODE_ACTIVITY_SIDE_PANEL_WIDTH)
-        .min_w(STCODE_ACTIVITY_SIDE_PANEL_MIN_WIDTH)
-        .gap_4()
-        .px_4()
-        .py_3()
-        .bg(cx.theme().colors().panel_background)
-        .border_l_1()
-        .border_color(cx.theme().colors().border)
-        .overflow_y_scroll()
-        .child(
-            v_flex()
-                .w_full()
-                .gap_1()
-                .child(
-                    h_flex()
-                        .w_full()
-                        .gap_2()
-                        .child(
-                            Icon::new(workline.icon)
-                                .size(IconSize::Medium)
-                                .color(workline.tone.color()),
-                        )
-                        .child(
-                            Label::new(workline.status)
-                                .size(LabelSize::Large)
-                                .color(workline.tone.color()),
-                        ),
-                )
-                .child(
-                    Label::new(workline.detail.clone())
-                        .size(LabelSize::Default)
-                        .color(Color::Muted)
-                        .truncate(),
-                ),
-        )
-        .when_some(active_stage, |this, stage| {
-            this.child(
-                h_flex()
-                    .id(format!("stcode-active-stage-{}", stage.kind.label()))
-                    .w_full()
-                    .gap_2()
-                    .px_2()
-                    .py_2()
-                    .rounded_md()
-                    .border_1()
-                    .border_color(cx.theme().colors().border)
-                    .bg(cx.theme().colors().editor_background)
-                    .child(
-                        Icon::new(stage.icon)
-                            .size(IconSize::Medium)
-                            .color(stage.tone.color()),
-                    )
-                    .child(
-                        v_flex()
-                            .min_w_0()
-                            .flex_1()
-                            .gap_1()
-                            .child(
-                                h_flex()
-                                    .w_full()
-                                    .justify_between()
-                                    .gap_2()
-                                    .child(
-                                        Label::new(stage.label)
-                                            .size(LabelSize::Default)
-                                            .color(Color::Default),
-                                    )
-                                    .child(
-                                        Label::new(stage.status)
-                                            .size(LabelSize::Small)
-                                            .color(stage.tone.color()),
-                                    ),
-                            )
-                            .child(
-                                Label::new(stage.detail.clone())
-                                    .size(LabelSize::Small)
-                                    .color(Color::Muted)
-                                    .truncate(),
-                            ),
-                    ),
-            )
-        })
-        .children(activity.entries.into_iter().map(render_activity_entry))
-        .into_any_element()
-}
-
 #[derive(Clone)]
 struct SmartWorklineSnapshot {
     status: &'static str,
     detail: String,
     icon: IconName,
     tone: ActivityTone,
-    stages: Vec<SmartWorklineStage>,
+    kind: SmartWorklineStageKind,
 }
 
 impl SmartWorklineSnapshot {
@@ -465,7 +339,7 @@ impl SmartWorklineSnapshot {
             smart_parallel,
             smart_merge,
         );
-        let stages = vec![
+        let stages = [
             smart_workline_start_stage(smart_start, active_stage),
             smart_workline_plan_stage(smart_todo, has_thread_entries, active_stage),
             smart_workline_parallel_stage(smart_parallel, active_stage),
@@ -484,7 +358,7 @@ impl SmartWorklineSnapshot {
             detail: display_stage.detail.clone(),
             icon: display_stage.icon,
             tone: display_stage.tone,
-            stages,
+            kind: display_stage.kind,
         }
     }
 }
@@ -492,7 +366,6 @@ impl SmartWorklineSnapshot {
 #[derive(Clone)]
 struct SmartWorklineStage {
     kind: SmartWorklineStageKind,
-    label: &'static str,
     status: &'static str,
     detail: String,
     icon: IconName,
@@ -528,6 +401,27 @@ fn render_smart_workline_status_bar(
     _cx: &mut App,
 ) -> gpui::AnyElement {
     let detail = truncate_and_trailoff(&snapshot.detail, MAX_STATUS_WORKLINE_DETAIL_CHARS);
+    let is_agent_domain = matches!(
+        snapshot.kind,
+        SmartWorklineStageKind::Plan
+            | SmartWorklineStageKind::Execute
+            | SmartWorklineStageKind::Review
+    );
+    let primary_color = if is_agent_domain {
+        Color::Muted
+    } else {
+        Color::Default
+    };
+    let accent_color = if is_agent_domain {
+        Color::Muted
+    } else {
+        snapshot.tone.color()
+    };
+    let primary_label: SharedString = if is_agent_domain {
+        format!("에이전트 {}", snapshot.kind.label()).into()
+    } else {
+        "AI 워크라인".into()
+    };
 
     h_flex()
         .id("stcode-ai-workline-control-bar")
@@ -536,84 +430,33 @@ fn render_smart_workline_status_bar(
         .overflow_hidden()
         .child(
             Icon::new(snapshot.icon)
-                .size(IconSize::Medium)
-                .color(snapshot.tone.color()),
+                .size(IconSize::Small)
+                .color(accent_color),
         )
         .child(
-            v_flex()
-                .min_w_0()
-                .gap_0p5()
-                .child(
-                    h_flex()
-                        .min_w_0()
-                        .gap_1()
-                        .child(
-                            Label::new("AI 워크라인")
-                                .size(LabelSize::Default)
-                                .color(Color::Default),
-                        )
-                        .child(
-                            Label::new(snapshot.status)
-                                .size(LabelSize::Small)
-                                .color(snapshot.tone.color()),
-                        ),
-                )
-                .child(
-                    Label::new(detail)
-                        .size(LabelSize::Small)
-                        .color(Color::Muted)
-                        .truncate(),
-                ),
+            Label::new(primary_label)
+                .size(LabelSize::Default)
+                .color(primary_color),
         )
+        .child(
+            Label::new(snapshot.status)
+                .size(LabelSize::Small)
+                .color(accent_color),
+        )
+        .when(!detail.is_empty(), |this| {
+            this.child(
+                Label::new("·")
+                    .size(LabelSize::Small)
+                    .color(Color::Muted),
+            )
+            .child(
+                Label::new(detail)
+                    .size(LabelSize::Small)
+                    .color(Color::Muted)
+                    .truncate(),
+            )
+        })
         .into_any_element()
-}
-
-fn render_smart_workline_stage(stage: SmartWorklineStage) -> impl IntoElement {
-    h_flex()
-        .id(format!(
-            "stcode-smart-workline-stage-{}",
-            stage.kind.label()
-        ))
-        .w_full()
-        .min_w_0()
-        .gap_2()
-        .px_1p5()
-        .py_1()
-        .rounded_sm()
-        .when(stage.active, |this| this.border_1())
-        .child(
-            Icon::new(stage.icon)
-                .size(IconSize::XSmall)
-                .color(stage.tone.color()),
-        )
-        .child(
-            v_flex()
-                .min_w_0()
-                .flex_1()
-                .gap_0p5()
-                .child(
-                    h_flex()
-                        .w_full()
-                        .justify_between()
-                        .gap_2()
-                        .child(
-                            Label::new(stage.label)
-                                .size(LabelSize::XSmall)
-                                .color(Color::Default),
-                        )
-                        .child(
-                            Label::new(stage.status)
-                                .size(LabelSize::XSmall)
-                                .color(stage.tone.color()),
-                        ),
-                )
-                .child(
-                    Label::new(stage.detail)
-                        .size(LabelSize::XSmall)
-                        .color(Color::Muted)
-                        .truncate(),
-                ),
-        )
 }
 
 fn smart_workline_stage(
@@ -626,7 +469,6 @@ fn smart_workline_stage(
 ) -> SmartWorklineStage {
     SmartWorklineStage {
         kind,
-        label: kind.label(),
         status,
         detail: smart_panel_compact_label(detail, MAX_WORKLINE_DETAIL_CHARS),
         icon,
@@ -906,37 +748,6 @@ fn stcode_smart_run_phase_tone(phase: StcodeSmartRunPhase) -> ActivityTone {
         StcodeSmartRunPhase::Complete => ActivityTone::Done,
         StcodeSmartRunPhase::Blocked => ActivityTone::Failed,
     }
-}
-
-fn render_activity_entry(entry: ActivityEntry) -> impl IntoElement {
-    h_flex()
-        .id(("stcode-activity-entry", entry.id))
-        .w_full()
-        .min_w_0()
-        .gap_2()
-        .pl_1()
-        .child(
-            Icon::new(entry.icon)
-                .size(IconSize::XSmall)
-                .color(entry.tone.color()),
-        )
-        .child(
-            h_flex()
-                .min_w_0()
-                .flex_1()
-                .gap_2()
-                .child(
-                    Label::new(entry.label)
-                        .size(LabelSize::XSmall)
-                        .color(Color::Default)
-                        .truncate(),
-                )
-                .child(
-                    Label::new(entry.status)
-                        .size(LabelSize::XSmall)
-                        .color(entry.tone.color()),
-                ),
-        )
 }
 
 #[derive(Clone)]
@@ -2357,7 +2168,6 @@ struct ActivitySnapshot {
     detail: &'static str,
     icon: IconName,
     tone: ActivityTone,
-    entries: Vec<ActivityEntry>,
 }
 
 impl ActivitySnapshot {
@@ -2367,27 +2177,17 @@ impl ActivitySnapshot {
             detail: "아직 활동 없음",
             icon: IconName::Circle,
             tone: ActivityTone::Idle,
-            entries: Vec::new(),
         }
     }
 
-    fn from_thread(thread: &AcpThread, cx: &App) -> Self {
-        let entries = thread
-            .entries()
-            .iter()
-            .enumerate()
-            .rev()
-            .filter_map(|(entry_index, entry)| {
-                ActivityEntry::from_thread_entry(entry_index, entry, cx)
-            })
-            .filter(|entry| entry.tone.is_live())
-            .take(MAX_TIMELINE_ENTRIES)
-            .collect::<Vec<_>>();
-
-        let last_tool_tone = entries
-            .iter()
-            .find(|entry| entry.is_tool)
-            .map(|entry| entry.tone);
+    fn from_thread(thread: &AcpThread) -> Self {
+        let last_tool_tone = thread.entries().iter().rev().find_map(|entry| {
+            let AgentThreadEntry::ToolCall(tool_call) = entry else {
+                return None;
+            };
+            let (_, tone) = tool_status_label(&tool_call.status);
+            tone.is_live().then_some(tone)
+        });
 
         let summary = summarize_thread_state(
             !thread.entries().is_empty(),
@@ -2403,59 +2203,6 @@ impl ActivitySnapshot {
             detail: summary.detail,
             icon: summary.icon,
             tone: summary.tone,
-            entries,
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct ActivityEntry {
-    id: usize,
-    label: String,
-    status: &'static str,
-    icon: IconName,
-    tone: ActivityTone,
-    is_tool: bool,
-}
-
-impl ActivityEntry {
-    fn from_thread_entry(entry_index: usize, entry: &AgentThreadEntry, cx: &App) -> Option<Self> {
-        match entry {
-            AgentThreadEntry::UserMessage(_) => Some(Self {
-                id: entry_index,
-                label: "요청 수신".to_string(),
-                status: "대기",
-                icon: IconName::UserCheck,
-                tone: ActivityTone::Idle,
-                is_tool: false,
-            }),
-            AgentThreadEntry::AssistantMessage(_) => Some(Self {
-                id: entry_index,
-                label: "에이전트 응답 갱신".to_string(),
-                status: "갱신",
-                icon: IconName::ZedAgent,
-                tone: ActivityTone::Idle,
-                is_tool: false,
-            }),
-            AgentThreadEntry::ToolCall(tool_call) => {
-                let (status, tone) = tool_status_label(&tool_call.status);
-                Some(Self {
-                    id: entry_index,
-                    label: tool_call_label(tool_call, cx),
-                    status,
-                    icon: tool_kind_icon(tool_call.kind),
-                    tone,
-                    is_tool: true,
-                })
-            }
-            AgentThreadEntry::CompletedPlan(_) => Some(Self {
-                id: entry_index,
-                label: "계획 완료".to_string(),
-                status: "완료",
-                icon: IconName::TodoComplete,
-                tone: ActivityTone::Done,
-                is_tool: false,
-            }),
         }
     }
 }
