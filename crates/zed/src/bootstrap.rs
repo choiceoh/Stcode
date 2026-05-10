@@ -649,6 +649,7 @@ pub fn run(launch_mode: LaunchMode) {
         LaunchMode::set_global(launch_mode, cx);
 
         auto_update::init(client.clone(), cx);
+        auto_update::local_build::init(cx);
         auto_update_ui::init(cx);
         reliability::init(client.clone(), cx);
         extension_host::init(
