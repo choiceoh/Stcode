@@ -330,7 +330,10 @@ impl LanguageModel for DeepSeekLanguageModel {
             false,
             self.max_output_tokens(),
             None,
-            false,
+            // DeepSeek's thinking mode requires `reasoning_content` from prior assistant
+            // turns to be echoed back in subsequent requests; otherwise the API rejects
+            // the call with `invalid_request_error`.
+            true,
         );
         let completions = self.stream_completion(request, cx);
         async move {
