@@ -354,7 +354,13 @@ impl LanguageModel for OpenAiCompatibleLanguageModel {
     }
 
     fn max_token_count(&self) -> u64 {
-        self.model.max_tokens
+        // Report the *input* budget so the agent's auto-compaction threshold and
+        // token-usage display stay consistent with the strict
+        // `input + max_completion_tokens <= context` enforcement that
+        // OpenAI-compatible servers (e.g. vLLM) apply.
+        self.model
+            .max_tokens
+            .saturating_sub(self.model.max_output_tokens.unwrap_or(0))
     }
 
     fn max_output_tokens(&self) -> Option<u64> {

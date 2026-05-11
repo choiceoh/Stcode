@@ -303,7 +303,11 @@ impl LanguageModel for DeepSeekLanguageModel {
     }
 
     fn max_token_count(&self) -> u64 {
-        self.model.max_token_count()
+        // Report the input budget (context - reserved output) so the agent's
+        // compaction threshold and usage display match what the server enforces.
+        self.model
+            .max_token_count()
+            .saturating_sub(self.model.max_output_tokens().unwrap_or(0))
     }
 
     fn max_output_tokens(&self) -> Option<u64> {
