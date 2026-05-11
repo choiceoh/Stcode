@@ -239,6 +239,7 @@ impl DeepSeekLanguageModel {
                 &api_url,
                 &api_key,
                 request,
+                None,
             );
             let response = request.await?;
             Ok(response)

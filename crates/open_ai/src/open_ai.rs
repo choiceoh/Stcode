@@ -608,13 +608,17 @@ pub async fn stream_completion(
     api_url: &str,
     api_key: &str,
     request: Request,
+    user_agent: Option<&str>,
 ) -> Result<BoxStream<'static, Result<ResponseStreamEvent>>, RequestError> {
     let uri = format!("{api_url}/chat/completions");
-    let request_builder = HttpRequest::builder()
+    let mut request_builder = HttpRequest::builder()
         .method(Method::POST)
         .uri(uri)
         .header("Content-Type", "application/json")
         .header("Authorization", format!("Bearer {}", api_key.trim()));
+    if let Some(user_agent) = user_agent {
+        request_builder = request_builder.header("User-Agent", user_agent);
+    }
 
     let request = request_builder
         .body(AsyncBody::from(
