@@ -59,7 +59,7 @@ export ZED_APP_VERSION="${ZED_APP_VERSION:-$version}"
 export ZED_BUNDLE="${ZED_BUNDLE:-true}"
 export ZED_COMMIT_SHA="${ZED_COMMIT_SHA:-$(git rev-parse HEAD)}"
 
-cargo bundle --release --package zed --bin stcode --target "$target"
+cargo bundle --release --package stcode --target "$target"
 
 bundle_dir="$repo_root/target/$target/release/bundle/osx"
 app_path="$bundle_dir/Stcode.app"
