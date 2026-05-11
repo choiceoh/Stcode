@@ -51,6 +51,9 @@ pub struct LanguageModelRegistry {
     inline_assistant_model: Option<ConfiguredModel>,
     commit_message_model: Option<ConfiguredModel>,
     thread_summary_model: Option<ConfiguredModel>,
+    /// User's configured default model for subagents. Reused as a fallback for
+    /// thread summarization so users only need to pick one fast/cheap model.
+    subagent_default_model: Option<ConfiguredModel>,
     providers: BTreeMap<LanguageModelProviderId, Arc<dyn LanguageModelProvider>>,
     inline_alternatives: Vec<Arc<dyn LanguageModel>>,
     /// Set of installed extension IDs that provide language models.
@@ -324,6 +327,15 @@ impl LanguageModelRegistry {
         self.set_thread_summary_model(configured_model, cx);
     }
 
+    pub fn select_subagent_default_model(
+        &mut self,
+        model: Option<&SelectedModel>,
+        cx: &mut Context<Self>,
+    ) {
+        let configured_model = model.and_then(|model| self.select_model(model, cx));
+        self.subagent_default_model = configured_model;
+    }
+
     /// Selects and sets the inline alternatives for language models based on
     /// provider name and id.
     pub fn select_inline_alternative_models(
@@ -466,8 +478,16 @@ impl LanguageModelRegistry {
             return None;
         }
 
+        // Prefer an explicit thread_summary_model; otherwise reuse the user's
+        // subagent default (same "fast/cheap" intent) before falling back to
+        // the provider's fast variant or the headline default model. This
+        // matters for openai-compatible providers (vLLM, z.ai, etc.) whose
+        // `default_fast_model` is None — without this layer the headline
+        // model ends up doing summarization, which is slow and may exceed
+        // its own context window.
         self.thread_summary_model
             .clone()
+            .or_else(|| self.subagent_default_model.clone())
             .or_else(|| self.default_fast_model(cx))
             .or_else(|| self.default_model())
     }

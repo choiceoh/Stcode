@@ -849,6 +849,10 @@ fn update_active_language_model_from_settings(cx: &mut App) {
         .thread_summary_model
         .as_ref()
         .map(to_selected_model);
+    let subagent_default = settings
+        .subagent_default_model
+        .as_ref()
+        .map(to_selected_model);
     let inline_alternatives = settings
         .inline_alternatives
         .iter()
@@ -860,6 +864,7 @@ fn update_active_language_model_from_settings(cx: &mut App) {
         registry.select_inline_assistant_model(inline_assistant.as_ref(), cx);
         registry.select_commit_message_model(commit_message.as_ref(), cx);
         registry.select_thread_summary_model(thread_summary.as_ref(), cx);
+        registry.select_subagent_default_model(subagent_default.as_ref(), cx);
         registry.select_inline_alternative_models(inline_alternatives, cx);
     });
 }
