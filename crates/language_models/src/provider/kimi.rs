@@ -33,6 +33,11 @@ const DEFAULT_MAX_OUTPUT_TOKENS: u64 = 16_384;
 const API_KEY_ENV_VAR_NAME: &str = "KIMI_API_KEY";
 static API_KEY_ENV_VAR: LazyLock<EnvVar> = env_var!(API_KEY_ENV_VAR_NAME);
 
+// Moonshot gates Kimi For Coding to a whitelist of coding-agent clients
+// identified by User-Agent. Mirror the value sent by the official Kimi VS
+// Code extension so subscription quota is accepted.
+const USER_AGENT: &str = "kimi-vscode";
+
 #[derive(Default, Clone, Debug, PartialEq)]
 pub struct KimiSettings {
     pub api_url: String,
@@ -272,6 +277,7 @@ impl KimiLanguageModel {
                 &api_url,
                 &api_key,
                 request,
+                Some(USER_AGENT),
             );
             let response = request.await?;
             Ok(response)
